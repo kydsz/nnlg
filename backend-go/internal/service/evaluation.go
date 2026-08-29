@@ -505,15 +505,15 @@ func keysOf(m map[int]bool) []int {
 	return out
 }
 
-// Delete 删除评教记录（软删除：标记 is_deleted，数据保留可恢复；本人或管理角色）
+// Delete 删除评教记录（软删除：标记 is_deleted，数据保留可恢复）
+// 删除会影响接收人（被评教师）侧的列表/统计/汇总，故仅系统管理员或被分配 evaluation:delete 权限的角色可操作
 func (s *Evaluation) Delete(db *gorm.DB, viewer *model.User, id int) error {
 	var rec model.EvaluationRecord
 	if err := db.Where("id = ? AND is_deleted = 0", id).First(&rec).Error; err != nil {
 		return errors.New("评教记录不存在")
 	}
-	if (rec.EvaluatorID == nil || *rec.EvaluatorID != viewer.ID) &&
-		!viewer.HasAnyRole(model.RoleSystemAdmin, model.RoleCollegeAdmin, model.RoleSchoolAdmin) {
-		return errors.New("无权删除此评教记录")
+	if !CanDeleteEvaluation(db, viewer) {
+		return errors.New("无权删除评教记录")
 	}
 	return db.Model(&model.EvaluationRecord{}).Where("id = ?", id).Update("is_deleted", true).Error
 }

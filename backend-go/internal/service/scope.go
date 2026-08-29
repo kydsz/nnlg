@@ -97,3 +97,17 @@ func CanViewOthersEvaluation(db *gorm.DB, u *model.User) bool {
 	}
 	return false
 }
+
+// CanDeleteEvaluation 是否可删除评教记录
+// 系统管理员恒可；其他角色需被分配 evaluation:delete 权限（评教人本人不再默认可删，避免抹掉已提交评教影响接收人数据）
+func CanDeleteEvaluation(db *gorm.DB, u *model.User) bool {
+	if u.HasRole(model.RoleSystemAdmin) {
+		return true
+	}
+	for _, p := range u.Permissions(db) {
+		if p == "evaluation:delete" {
+			return true
+		}
+	}
+	return false
+}

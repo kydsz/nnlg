@@ -49,6 +49,7 @@ function RecordList({ type, userId }: { type: EvalType; userId: number }) {
   const qc = useQueryClient()
   const [page, setPage] = useState(1)
   const [detail, setDetail] = useState<EvaluationRecord | null>(null)
+  const hasPermission = useAuthStore((s) => s.hasPermission)
 
   const { data, isLoading } = useQuery({
     queryKey: ['evaluations', type, userId],
@@ -172,7 +173,7 @@ function RecordList({ type, userId }: { type: EvalType; userId: number }) {
 
             <EvalDetailBody detail={detail} />
 
-            {type === 'sent' && (
+            {type === 'sent' && hasPermission('evaluation:delete') && (
               <Button
                 block
                 color="danger"
