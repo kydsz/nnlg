@@ -164,8 +164,8 @@ function UnteachedTab() {
       columns={[
         { title: '工号', dataIndex: 'user_no', width: 110 },
         { title: '姓名', dataIndex: 'username', width: 120 },
-        { title: '学院', dataIndex: 'college_name' },
-        { title: '教研室', dataIndex: 'research_room_name' },
+        { title: '学院', dataIndex: 'college_name', width: 200, ellipsis: true },
+        { title: '教研室', dataIndex: 'research_room_name', width: 300, ellipsis: true },
       ]}
     />
   )
