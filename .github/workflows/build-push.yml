@@ -35,7 +35,51 @@ permissions:
   contents: read
 
 jobs:
+  # ====================== 单元测试 ======================
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend-go
+          - name: frontend-react
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        if: matrix.name == 'backend-go'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend-go/go.mod
+          cache-dependency-path: backend-go/go.sum
+
+      - name: Backend unit tests (go test / vet)
+        if: matrix.name == 'backend-go'
+        working-directory: backend-go
+        run: |
+          go test -mod=vendor ./...
+          go vet -mod=vendor ./...
+
+      - name: Setup Node (22 LTS)
+        if: matrix.name == 'frontend-react'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend-react/package-lock.json
+
+      - name: Frontend unit tests (vitest)
+        if: matrix.name == 'frontend-react'
+        working-directory: frontend-react
+        run: |
+          npm ci
+          npm test
+
+  # ====================== 构建 + 推送镜像 ======================
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

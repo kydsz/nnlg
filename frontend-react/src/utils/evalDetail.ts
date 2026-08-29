@@ -33,7 +33,9 @@ function escapeHtml(s: string): string {
 const IMAGE_EXT_RE = /\.(jpe?g|png|gif|webp|bmp|svg)(\?.*)?$/i
 
 export function isImageUrl(v: string): boolean {
-  return v.startsWith('data:image/') || IMAGE_EXT_RE.test(v) || v.includes('/files/')
+  // 后端 /files/ 是统一文件服务（图片与 pdf/docx 同前缀），
+  // 必须按扩展名判定，否则 /files/report.pdf 会被误判为图片
+  return v.startsWith('data:image/') || IMAGE_EXT_RE.test(v)
 }
 
 /** 判断字符串数组是否为图片 URL 数组 */

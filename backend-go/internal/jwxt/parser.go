@@ -109,7 +109,8 @@ func ParseScheduleHTML(content string) ([]TeacherSchedule, ParseStats, error) {
 // parseCell 解析单元格（可能含多门课程，用 <br><br> 分隔）
 func parseCell(cellHTML string, weekDay int, section string) []CourseInfo {
 	htmlContent := regexp.MustCompile(`(?i)</?td[^>]*>`).ReplaceAllString(cellHTML, "")
-	blocks := regexp.MustCompile(`(?i)<br>\s*<br>|<br>\s*\n\s*<br>`).Split(htmlContent, -1)
+	// html.Render 会把 <br> 规范化为 <br/>，需同时兼容两种写法
+	blocks := regexp.MustCompile(`(?i)<br\s*/?>\s*<br\s*/?>`).Split(htmlContent, -1)
 
 	var courses []CourseInfo
 	for _, block := range blocks {
