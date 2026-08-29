@@ -109,9 +109,35 @@ export default function Schedule() {
   const [selectedWeek, setSelectedWeek] = useState<number | null>(null)
   const week = selectedWeek ?? currentWeek
 
-  // 建任务防重复
+  // 建任务防重复：本地刚添加的记录 + 服务器已存在任务回显
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set())
   const [detailCell, setDetailCell] = useState<{ weekDay: number; slotIdx: number } | null>(null)
+
+  // 该教师已有的待评任务（status=1），用于刷新后仍能回显"已添加"
+  const addedTeacherId = targetTeacherId ?? userId
+  const { data: addedTasksData } = useQuery({
+    queryKey: ['mobile-tasks', 'schedule-added', addedTeacherId],
+    queryFn: () =>
+      taskApi.list({ page: 1, page_size: 100, status: 1, teacher_id: addedTeacherId }),
+    enabled: !!addedTeacherId,
+  })
+
+  // 单元格"已添加"集合：本地 + 服务器任务（按 课程名+日期 匹配，不同周日期不同）
+  const addedSet = useMemo(() => {
+    const s = new Set<string>(addedIds)
+    for (const t of addedTasksData?.list || []) {
+      if (!t.class_time) continue
+      s.add(`${t.course_name}|${dayjs(t.class_time).format('YYYY-MM-DD')}`)
+    }
+    return s
+  }, [addedIds, addedTasksData])
+
+  // 课程任务键：包含具体上课日期，周次不同键即不同
+  const courseTaskKey = (course: CourseItem, weekNum: number): string => {
+    if (!startDate) return `${course.course_name}|w${weekNum}-d${course.week_day}`
+    const date = getDateForWeekAndDay(startDate, weekNum, Number(course.week_day))
+    return `${course.course_name}|${date.format('YYYY-MM-DD')}`
+  }
 
   const details: CourseItem[] = scheduleData?.details || []
 
@@ -133,8 +159,8 @@ export default function Schedule() {
   const todayWeekDay = new Date().getDay() === 0 ? 7 : new Date().getDay()
 
   const addToTasks = async (course: CourseItem) => {
-    const key = `${course.course_name}-${course.week_day}-${course.section}`
-    if (addedIds.has(key)) return
+    const key = courseTaskKey(course, week)
+    if (addedSet.has(key)) return
     let teacherId: number | undefined
     if (selectedTeacher) teacherId = selectedTeacher.id
     else if (!canViewUsers && userId != null) teacherId = userId
@@ -352,8 +378,8 @@ export default function Schedule() {
               )}
             </div>
             {cellCourses(detailCell.weekDay, detailCell.slotIdx).map((c) => {
-              const key = `${c.course_name}-${c.week_day}-${c.section}`
-              const added = addedIds.has(key)
+              const key = courseTaskKey(c, week)
+              const added = addedSet.has(key)
               return (
                 <div key={key} className="course-detail-card">
                   <div style={{ fontWeight: 600, marginBottom: 6 }}>{c.course_name}</div>

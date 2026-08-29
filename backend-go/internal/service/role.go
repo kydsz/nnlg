@@ -279,6 +279,9 @@ func (s *Role) Delete(db *gorm.DB, id int) error {
 	if err := db.First(&role, id).Error; err != nil {
 		return errors.New("角色不存在")
 	}
+	if role.Code == model.RoleSystemAdmin {
+		return errors.New("系统管理员角色不可删除")
+	}
 	if role.IsSystem {
 		return errors.New("内置角色不可删除")
 	}

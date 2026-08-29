@@ -109,7 +109,7 @@ export default function Roles() {
               编辑
             </Button>
           )}
-          {record.is_system !== 1 && (
+          {!record.is_system && record.code !== 'system_admin' && (
             <Popconfirm title="确认删除？" onConfirm={() => delMut.mutate(record.id)}>
               <Button size="small" danger>
                 删除
