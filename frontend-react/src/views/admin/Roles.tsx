@@ -97,16 +97,18 @@ export default function Roles() {
       width: 130,
       render: (_, record) => (
         <Space>
-          <Button
-            size="small"
-            onClick={() => {
-              setEditing(record)
-              form.setFieldsValue(record)
-              setModalOpen(true)
-            }}
-          >
-            编辑
-          </Button>
+          {record.code !== 'system_admin' && (
+            <Button
+              size="small"
+              onClick={() => {
+                setEditing(record)
+                form.setFieldsValue(record)
+                setModalOpen(true)
+              }}
+            >
+              编辑
+            </Button>
+          )}
           {record.is_system !== 1 && (
             <Popconfirm title="确认删除？" onConfirm={() => delMut.mutate(record.id)}>
               <Button size="small" danger>

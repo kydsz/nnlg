@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"log"
+	"time"
 
 	"backend-go/internal/model"
 
@@ -18,15 +19,21 @@ func LogRecord(db *gorm.DB, userID *int, userName, opType, module string, target
 			raw = b
 		}
 	}
+	// CreateTime/UpdateTime 显式写入，否则 GORM 会向列写 NULL（绕过 MySQL server_default）
+	now := model.LocalTimePtr(time.Now())
 	if err := db.Create(&model.OperationLog{
-		UserID:        userID,
-		UserName:      userName,
-		OperationType: opType,
-		Module:        module,
-		TargetID:      targetID,
-		TargetType:    targetType,
-		Content:       raw,
-	}).Error; err != nil {
+			UserID:        userID,
+			UserName:      userName,
+			OperationType: opType,
+			Module:        module,
+			TargetID:      targetID,
+			TargetType:    targetType,
+			Content:       raw,
+			Model: model.Model{
+				CreateTime: now,
+				UpdateTime: now,
+			},
+		}).Error; err != nil {
 		log.Printf("写操作日志失败: %v", err)
 	}
 }

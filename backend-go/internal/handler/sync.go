@@ -140,7 +140,6 @@ func (h *Sync) doSync(c *gin.Context, module string, run func(*jwxt.BaseSync) (m
 	}
 	h.svc.RecordEnd(h.db, logID, "success", "同步成功", result)
 	h.svc.SetProgress(module, map[string]interface{}{"status": "success"})
-	service.LogRecord(h.db, &u.ID, u.Username, "sync", module, nil, "jwxt", result)
 	response.OKMsg(c, "同步成功", result)
 }
 
@@ -172,6 +171,10 @@ func (h *Sync) SyncAll(c *gin.Context) {
 		Semester string `json:"semester"`
 	}
 	_ = c.ShouldBindJSON(&p)
+	// 兼容旧端 FastAPI：semester 走 query 参数
+	if p.Semester == "" {
+		p.Semester = c.Query("semester")
+	}
 	h.doSync(c, "sync_all", func(sp *jwxt.BaseSync) (map[string]interface{}, error) {
 		unitRes, err := sp.SyncUnits(h.db)
 		if err != nil {
@@ -195,6 +198,10 @@ func (h *Sync) SyncCourseSchedule(c *gin.Context) {
 		Semester string `json:"semester"`
 	}
 	_ = c.ShouldBindJSON(&p)
+	// 兼容旧端 FastAPI：semester 走 query 参数
+	if p.Semester == "" {
+		p.Semester = c.Query("semester")
+	}
 	h.doSync(c, "course_schedule", func(sp *jwxt.BaseSync) (map[string]interface{}, error) {
 		return sp.SyncCourses(h.db, jwxt.SyncOptions{Semester: p.Semester})
 	})

@@ -19,16 +19,21 @@ export default function Profile() {
   const [pwdOpen, setPwdOpen] = useState(false)
   const [oldPwd, setOldPwd] = useState('')
   const [newPwd, setNewPwd] = useState('')
+  const [confirmPwd, setConfirmPwd] = useState('')
   const [saving, setSaving] = useState(false)
 
   const [roomOpen, setRoomOpen] = useState(false)
   const [roomSelected, setRoomSelected] = useState<string[] | null>(null)
 
-  // 本学院启用教研室列表
+  // 本学院启用教研室列表（无主学院时返回全部，对齐旧端行为）
   const { data: rooms } = useQuery({
     queryKey: ['research-rooms', 'my-college', user?.college_id],
-    queryFn: () => orgApi.roomList({ college_id: user!.college_id!, status: 1 }),
-    enabled: roomOpen && user?.college_id != null,
+    queryFn: () =>
+      orgApi.roomList({
+        ...(user?.college_id != null ? { college_id: user.college_id } : {}),
+        status: 1,
+      }),
+    enabled: roomOpen,
   })
   const roomColumns = [
     [
@@ -67,9 +72,19 @@ export default function Profile() {
     })
   }
 
+  const clearPwd = () => {
+    setOldPwd('')
+    setNewPwd('')
+    setConfirmPwd('')
+  }
+
   const changePwd = async () => {
-    if (!oldPwd || !newPwd) {
+    if (!oldPwd || !newPwd || !confirmPwd) {
       Toast.show({ content: '请填写完整', icon: 'fail' })
+      return
+    }
+    if (newPwd !== confirmPwd) {
+      Toast.show({ content: '两次输入的密码不一致', icon: 'fail' })
       return
     }
     setSaving(true)
@@ -77,8 +92,7 @@ export default function Profile() {
       await authApi.changePassword({ old_password: oldPwd, new_password: newPwd })
       Toast.show({ content: '密码修改成功', icon: 'success' })
       setPwdOpen(false)
-      setOldPwd('')
-      setNewPwd('')
+      clearPwd()
     } catch (e) {
       Toast.show({ content: e instanceof Error ? e.message : '修改失败', icon: 'fail' })
     } finally {
@@ -142,6 +156,7 @@ export default function Profile() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 8 }}>
             <Input type="password" placeholder="旧密码" value={oldPwd} onChange={setOldPwd} />
             <Input type="password" placeholder="新密码" value={newPwd} onChange={setNewPwd} />
+            <Input type="password" placeholder="确认新密码" value={confirmPwd} onChange={setConfirmPwd} />
           </div>
         }
         actions={[
@@ -150,7 +165,10 @@ export default function Profile() {
             { key: 'ok', text: saving ? '保存中...' : '保存', bold: true, onClick: changePwd },
           ],
         ]}
-        onClose={() => setPwdOpen(false)}
+        onClose={() => {
+          setPwdOpen(false)
+          clearPwd()
+        }}
       />
 
       <Popup visible={roomOpen} onMaskClick={() => setRoomOpen(false)} destroyOnClose>

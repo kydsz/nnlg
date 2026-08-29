@@ -1,5 +1,6 @@
 # ============ 构建阶段 ============
-FROM node:20-alpine AS builder
+# 需与本地/CI 的 npm 大版本一致（npm 11），否则 lock 文件会被 npm ci 判定不同步
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 

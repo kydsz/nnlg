@@ -99,7 +99,8 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 	rooms := api.Group("/research-rooms", authMW)
 	{
-		rooms.GET("", middleware.RequirePermission(db, "org:view"), orgH.RoomList)
+		// 列表接口不限权限（对齐旧端），教师移动端自助设置教研室需要
+		rooms.GET("", orgH.RoomList)
 		rooms.POST("", middleware.RequirePermission(db, "research_room:manage"), orgH.RoomCreate)
 		rooms.GET("/:id", middleware.RequirePermission(db, "org:view"), orgH.RoomGet)
 		rooms.PUT("/:id", middleware.RequirePermission(db, "research_room:manage"), orgH.RoomUpdate)

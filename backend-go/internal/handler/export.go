@@ -11,6 +11,7 @@ import (
 
 	"backend-go/internal/middleware"
 	"backend-go/internal/model"
+	"backend-go/internal/pdfgen"
 	"backend-go/internal/service"
 	"backend-go/pkg/response"
 
@@ -69,6 +70,26 @@ func cellValue(v interface{}) interface{} {
 	default:
 		return fmt.Sprint(n)
 	}
+}
+
+// generateExport 按格式分发导出（对齐旧端：xlsx 走 openpyxl 样式、pdf 走 reportlab 表格）
+func generateExport(c *gin.Context, format, filename, title string, cols []xlsxCol, rows []map[string]interface{}) {
+	if format == "pdf" {
+		tcols := make([]pdfgen.TableCol, 0, len(cols))
+		for _, col := range cols {
+			tcols = append(tcols, pdfgen.TableCol{Key: col.Key, Label: col.Label})
+		}
+		pdfBytes, err := pdfgen.RenderTablePDF(title, tcols, rows)
+		if err != nil {
+			serverErr(c, "PDF 生成失败: "+err.Error())
+			return
+		}
+		c.Header("Content-Disposition",
+			"attachment; filename*=UTF-8''"+url.PathEscape(filename+".pdf"))
+		c.Data(http.StatusOK, "application/pdf", pdfBytes)
+		return
+	}
+	generateXLSX(c, filename, title, cols, rows)
 }
 
 // generateXLSX 生成 xlsx 下载（对齐旧端 generate_xlsx：Sheet1、可选标题行、表头样式、自适应列宽、冻结表头）
@@ -183,14 +204,14 @@ func dateRange(c *gin.Context) (*time.Time, *time.Time, bool) {
 	return start, end, true
 }
 
-// exportFormat 校验 format 参数（对齐旧端：仅 xlsx/pdf；pdf 暂同 xlsx 输出，前端仅使用 xlsx）
-func exportFormat(c *gin.Context) bool {
+// exportFormat 校验并返回 format 参数（对齐旧端：仅 xlsx/pdf）
+func exportFormat(c *gin.Context) (string, bool) {
 	format := c.DefaultQuery("format", "xlsx")
 	if format != "xlsx" && format != "pdf" {
 		badReq(c, "format 参数必须是 xlsx 或 pdf")
-		return false
+		return "", false
 	}
-	return true
+	return format, true
 }
 
 // exportFields 按 fields 参数过滤列；空或全不匹配回退全列（对齐旧端 GET 导出）
@@ -391,11 +412,11 @@ func (h *Task) Export(c *gin.Context) {
 		rows = append(rows, map[string]interface{}{
 			"task_id": t.ID, "teacher_name": t.TeacherName, "course_name": t.CourseName,
 			"class_time": classTime, "classroom": t.Classroom,
-			"college_name": collegeNames[t.TeacherID],
-			"status_name":  model.TaskStatusNames[t.Status],
-			"evaluation_count": t.EvaluationCount,
+			"college_name":        collegeNames[t.TeacherID],
+			"status_name":         model.TaskStatusNames[t.Status],
+			"evaluation_count":    t.EvaluationCount,
 			"has_supervisor_eval": map[bool]string{true: "是", false: "否"}[t.HasSupervisorEval],
-			"create_time": createTime,
+			"create_time":         createTime,
 		})
 	}
 
@@ -412,7 +433,8 @@ func (h *Task) Export(c *gin.Context) {
 // ---------- GET /stats/export/teachers ----------
 
 func (h *Stats) ExportTeachers(c *gin.Context) {
-	if !exportFormat(c) {
+	format, ok := exportFormat(c)
+	if !ok {
 		return
 	}
 	f := service.TeacherStatsFilters{
@@ -451,13 +473,14 @@ func (h *Stats) ExportTeachers(c *gin.Context) {
 		{"total_evaluations", "被评教次数"}, {"average_score", "平均分"}, {"evaluation_rate", "评教完成率(%)"},
 	})
 	sq, eq := c.Query("start_date"), c.Query("end_date")
-	generateXLSX(c, "教师统计"+exportDateSuffix(sq, eq), exportTitle("教师评教统计报表", exportDateLabel(sq, eq)), cols, rows)
+	generateExport(c, format, "教师统计"+exportDateSuffix(sq, eq), exportTitle("教师评教统计报表", exportDateLabel(sq, eq)), cols, rows)
 }
 
 // ---------- GET /stats/export/colleges ----------
 
 func (h *Stats) ExportColleges(c *gin.Context) {
-	if !exportFormat(c) {
+	format, ok := exportFormat(c)
+	if !ok {
 		return
 	}
 	f := service.CollegeStatsFilters{
@@ -504,13 +527,14 @@ func (h *Stats) ExportColleges(c *gin.Context) {
 		semesterLabel = "未知学期"
 	}
 	title := "学院评教统计报表  |  时间段: " + semesterLabel + "  |  导出日期: " + time.Now().Format("2006-01-02")
-	generateXLSX(c, filename, title, cols, list)
+	generateExport(c, format, filename, title, cols, list)
 }
 
 // ---------- GET /stats/export/supervisors ----------
 
 func (h *Stats) ExportSupervisors(c *gin.Context) {
-	if !exportFormat(c) {
+	format, ok := exportFormat(c)
+	if !ok {
 		return
 	}
 	f := service.PersonStatsFilters{
@@ -535,7 +559,7 @@ func (h *Stats) ExportSupervisors(c *gin.Context) {
 		{"evaluated_teacher_count", "评教教师数"}, {"last_evaluation_time", "最近评教时间"},
 	})
 	sq, eq := c.Query("start_date"), c.Query("end_date")
-	generateXLSX(c, "督导评教统计"+exportDateSuffix(sq, eq), exportTitle("督导评教统计报表", exportDateLabel(sq, eq)), cols, list)
+	generateExport(c, format, "督导评教统计"+exportDateSuffix(sq, eq), exportTitle("督导评教统计报表", exportDateLabel(sq, eq)), cols, list)
 }
 
 // ---------- POST /stats/evaluation-records/export ----------
@@ -609,7 +633,8 @@ func (h *Stats) ExportEvaluationRecords(c *gin.Context) {
 // ---------- GET /stats/export/teacher-evaluation-summary ----------
 
 func (h *Stats) ExportTeacherSummary(c *gin.Context) {
-	if !exportFormat(c) {
+	format, ok := exportFormat(c)
+	if !ok {
 		return
 	}
 	f := service.SummaryFilters{
@@ -621,6 +646,13 @@ func (h *Stats) ExportTeacherSummary(c *gin.Context) {
 		Page: 1, PageSize: 10000,
 	}
 	f.EvaluatorRoles = splitRoles(c.Query("evaluator_roles"))
+	if v := c.Query("has_courses"); v == "true" || v == "1" {
+		b := true
+		f.HasCourses = &b
+	} else if v == "false" || v == "0" {
+		b := false
+		f.HasCourses = &b
+	}
 	start, end, ok := dateRange(c)
 	if !ok {
 		return
@@ -651,5 +683,5 @@ func (h *Stats) ExportTeacherSummary(c *gin.Context) {
 		{"pending_tasks", "待评任务数"}, {"evaluation_rate", "评教完成率(%)"},
 	})
 	sq, eq := c.Query("start_date"), c.Query("end_date")
-	generateXLSX(c, "教师评教汇总"+exportDateSuffix(sq, eq), exportTitle("教师评教汇总报表", exportDateLabel(sq, eq)), cols, rows)
+	generateExport(c, format, "教师评教汇总"+exportDateSuffix(sq, eq), exportTitle("教师评教汇总报表", exportDateLabel(sq, eq)), cols, rows)
 }

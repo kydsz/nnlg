@@ -2,9 +2,16 @@ import { request } from '../http'
 import type { Dimension, DimensionGroup } from '../types'
 
 export interface GroupPayload {
+  code: string
   name: string
   sort_order?: number
   status?: number
+}
+
+/** 排序条目（后端 /dimensions/groups/sort 与 /dimensions/sort 均接收 [{id, sort_order}] 数组） */
+export interface SortItem {
+  id: number
+  sort_order: number
 }
 
 export interface DimPayload {
@@ -30,8 +37,8 @@ export const dimensionApi = {
     request<DimensionGroup>({ url: '/dimensions/groups', method: 'POST', data }),
   groupUpdate: (id: number, data: Partial<GroupPayload>) =>
     request<DimensionGroup>({ url: `/dimensions/groups/${id}`, method: 'PUT', data }),
-  groupSort: (ids: number[]) =>
-    request<null>({ url: '/dimensions/groups/sort', method: 'PUT', data: { ids } }),
+  groupSort: (items: SortItem[]) =>
+    request<null>({ url: '/dimensions/groups/sort', method: 'PUT', data: items }),
   groupDelete: (id: number) =>
     request<null>({ url: `/dimensions/groups/${id}`, method: 'DELETE' }),
 
@@ -57,7 +64,8 @@ export const dimensionApi = {
   update: (id: number, data: Partial<DimPayload>) =>
     request<Dimension>({ url: `/dimensions/${id}`, method: 'PUT', data }),
 
-  sort: (ids: number[]) => request<null>({ url: '/dimensions/sort', method: 'PUT', data: { ids } }),
+  sort: (items: SortItem[]) =>
+    request<null>({ url: '/dimensions/sort', method: 'PUT', data: items }),
 
   remove: (id: number) => request<null>({ url: `/dimensions/${id}`, method: 'DELETE' }),
 }

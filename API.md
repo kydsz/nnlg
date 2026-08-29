@@ -761,10 +761,11 @@ GET /evaluations/{record_id}
 ### 导出单条记录
 
 ```http
-GET /evaluations/{record_id}/export
+GET /evaluations/{record_id}/export?format=pdf
 ```
 
-返回可打印 HTML（浏览器可直接另存/打印为 PDF），`Content-Disposition: attachment`。
+- `format=pdf`：返回 PDF 附件（`application/pdf`，文件名 `evaluation_{id}_{课程名}.pdf`，布局对齐旧端紧凑模板）。
+- 不传 `format`：返回可打印 HTML（浏览器可直接另存/打印）。
 
 ### 删除评教记录
 
@@ -1011,7 +1012,7 @@ GET  /stats/export/teacher-evaluation-summary?format=xlsx|pdf&college_ids=&campu
 POST /stats/evaluation-records/export     # 评教记录导出
 ```
 
-- GET 系列 `format` 仅支持 `xlsx` / `pdf`（pdf 当前与 xlsx 输出一致，前端仅使用 xlsx），默认 xlsx；`fields` 重复传参控制导出列，如 `?fields=teacher_name&fields=course_name`。
+- GET 系列 `format` 仅支持 `xlsx` / `pdf`（pdf 为表格类 PDF 附件，对齐旧端 reportlab 模板；依赖容器内中文字体），默认 xlsx；`fields` 重复传参控制导出列，如 `?fields=teacher_name&fields=course_name`。
 - `POST /stats/evaluation-records/export` 请求体：
 
 ```json

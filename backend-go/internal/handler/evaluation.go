@@ -6,6 +6,7 @@ import (
 	"html"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"backend-go/internal/config"
 	"backend-go/internal/middleware"
 	"backend-go/internal/model"
+	"backend-go/internal/pdfgen"
 	"backend-go/internal/service"
 	"backend-go/pkg/response"
 
@@ -24,8 +26,8 @@ import (
 
 // Evaluation 评教记录接口
 type Evaluation struct {
-	db       *gorm.DB
-	svc      *service.Evaluation
+	db        *gorm.DB
+	svc       *service.Evaluation
 	uploadDir string
 }
 
@@ -208,7 +210,7 @@ func (h *Evaluation) Delete(c *gin.Context) {
 	response.OKMsg(c, "删除成功", nil)
 }
 
-// Export 单条记录导出（可打印 HTML，浏览器可直接另存/打印为 PDF）
+// Export 单条记录导出：format=pdf 返回 PDF 文件；默认返回可打印 HTML
 func (h *Evaluation) Export(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -221,9 +223,76 @@ func (h *Evaluation) Export(c *gin.Context) {
 		response.Fail(c, 403, err.Error())
 		return
 	}
+
+	// format=pdf 生成真 PDF（对齐旧端 Playwright HTML→PDF 导出）；
+	// 不传 format 返回可打印 HTML（移动端打印窗口链路）
+	if c.Query("format") == "pdf" {
+		pdfBytes, err := renderEvaluationPDF(data, h.uploadDir)
+		if err != nil {
+			serverErr(c, "PDF 生成失败: "+err.Error())
+			return
+		}
+		filename := fmt.Sprintf("evaluation_%v_%v.pdf", data["id"], data["course_name"])
+		c.Header("Content-Disposition",
+			"attachment; filename*=UTF-8''"+url.PathEscape(filename))
+		c.Data(http.StatusOK, "application/pdf", pdfBytes)
+		return
+	}
+
 	c.Header("Content-Disposition",
 		fmt.Sprintf(`attachment; filename="evaluation_%d.html"`, id))
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(renderEvaluationHTML(data)))
+}
+
+// renderEvaluationPDF 组装评教详情 PDF（布局对齐旧端 generate_evaluation_html 模板）
+func renderEvaluationPDF(data map[string]interface{}, uploadDir string) ([]byte, error) {
+	groups, _ := data["dimension_groups"].([]service.ExportGroup)
+	detail := pdfgen.EvalDetail{
+		CourseName:    strOrEmpty(data["course_name"]),
+		TeacherName:   strOrEmpty(data["teacher_name"]),
+		CollegeName:   strOrEmpty(data["college_name"]),
+		EvaluatorName: strOrEmpty(data["evaluator_name"]),
+		EvaluatorRole: strOrEmpty(data["evaluator_role_name"]),
+		Submit:        strOrEmpty(data["submit_time"]),
+		TotalScore:    toFloat64Val(data["total_score"]),
+		MaxTotalScore: toFloat64Val(data["max_total_score"]),
+	}
+	if v, ok := data["is_anonymous"].(bool); ok {
+		detail.IsAnonymous = v
+	}
+	for _, g := range groups {
+		og := pdfgen.EvalDetailGroup{Name: g.Name, Score: g.Score, MaxScore: g.MaxScore}
+		for _, dim := range g.Dimensions {
+			og.Dimensions = append(og.Dimensions, pdfgen.EvalDetailDim{
+				Name: dim.Name, FieldType: dim.FieldType,
+				Value: dim.Value, Display: fmt.Sprint(dim.DisplayValue),
+				Score: dim.Score, MaxScore: dim.MaxScore,
+			})
+		}
+		detail.Groups = append(detail.Groups, og)
+	}
+	return pdfgen.RenderEvaluationPDF(detail, uploadDir)
+}
+
+func strOrEmpty(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprint(v)
+}
+
+func toFloat64Val(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	}
+	return 0
 }
 
 // renderEvaluationHTML 生成可打印的评教记录 HTML

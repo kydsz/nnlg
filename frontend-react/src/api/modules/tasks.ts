@@ -19,6 +19,14 @@ export interface TaskPayload {
   class_time?: string
 }
 
+/** /tasks/batch 响应（对齐后端：created 为任务对象数组，created_count 为成功数） */
+export interface BatchCreateResult {
+  created: unknown[]
+  skipped: { teacher_id?: number; course_name?: string; reason?: string }[]
+  created_count: number
+  skipped_count: number
+}
+
 export const taskApi = {
   list: (params: TaskListParams) =>
     request<PageData<Task>>({ url: '/tasks', method: 'GET', params }),
@@ -28,7 +36,7 @@ export const taskApi = {
   create: (data: TaskPayload) => request<Task>({ url: '/tasks', method: 'POST', data }),
 
   batchCreate: (data: TaskPayload[]) =>
-    request<{ created: number; failed: number }>({ url: '/tasks/batch', method: 'POST', data }),
+    request<BatchCreateResult>({ url: '/tasks/batch', method: 'POST', data: { tasks: data } }),
 
   update: (id: number, data: Partial<TaskPayload>) =>
     request<Task>({ url: `/tasks/${id}`, method: 'PUT', data }),

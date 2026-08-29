@@ -64,8 +64,12 @@ func (s *Sync) GetProgress(module string) map[string]interface{} {
 // RecordStart 记录同步开始（写 operation_log，content.status=running）
 func (s *Sync) RecordStart(db *gorm.DB, userID *int, username, module string) (int, error) {
 	content, _ := json.Marshal(map[string]interface{}{"status": "running", "started_at": time.Now().Format("2006-01-02 15:04:05")})
+	// CreateTime/UpdateTime 必须显式写入：nil 时 GORM 会向列写 NULL，绕过
+	// MySQL server_default=CURRENT_TIMESTAMP，导致 LastStatus 的 last_sync 为 null
+	now := model.LocalTimePtr(time.Now())
 	logRow := model.OperationLog{
 		UserID: userID, UserName: username, OperationType: "sync", Module: module, Content: content,
+		Model: model.Model{CreateTime: now, UpdateTime: now},
 	}
 	if err := db.Create(&logRow).Error; err != nil {
 		return 0, err
@@ -90,7 +94,7 @@ func (s *Sync) RecordEnd(db *gorm.DB, logID int, status, message string, result 
 func (s *Sync) LastStatus(db *gorm.DB, module string) map[string]interface{} {
 	var logRow model.OperationLog
 	err := db.Where("module = ? AND operation_type = ?", module, "sync").
-		Order("create_time DESC").First(&logRow).Error
+		Order("create_time DESC, id DESC").First(&logRow).Error
 
 	status := "idle"
 	var lastSync interface{}

@@ -17,7 +17,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -ldflags="-s -w" -o /app/serve
 FROM alpine:3.20
 
 # 时区对齐旧端（python:slim 默认 UTC）：DB 时间按 UTC 原样读写
-RUN apk add --no-cache tzdata ca-certificates \
+# font-wqy-zenhei：PDF 导出中文字体（community 仓库，装到 /usr/share/fonts/wqy-zenhei/）
+RUN echo 'https://dl-cdn.alpinelinux.org/alpine/v3.20/community' >> /etc/apk/repositories \
+    && apk add --no-cache tzdata ca-certificates font-wqy-zenhei \
     && cp /usr/share/zoneinfo/UTC /etc/localtime \
     && echo "UTC" > /etc/timezone
 

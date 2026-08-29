@@ -105,6 +105,7 @@ export interface PermissionGroup {
 // ===== 评教维度 =====
 export interface DimensionGroup {
   id: number
+  code: string
   name: string
   sort_order: number
   status: number

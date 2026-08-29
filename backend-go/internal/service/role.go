@@ -66,12 +66,21 @@ var PermissionCatalog = []PermissionGroup{
 // validPermissionCodes 全部合法权限码集合
 func validPermissionCodes() map[string]bool {
 	m := map[string]bool{}
-	for _, g := range PermissionCatalog {
-		for _, p := range g.Permissions {
-			m[p.Code] = true
-		}
+	for _, c := range AllPermissionCodes() {
+		m[c] = true
 	}
 	return m
+}
+
+// AllPermissionCodes 系统管理员常量拥有的全部权限码
+func AllPermissionCodes() []string {
+	var codes []string
+	for _, g := range PermissionCatalog {
+		for _, p := range g.Permissions {
+			codes = append(codes, p.Code)
+		}
+	}
+	return codes
 }
 
 var validDataScopes = map[string]bool{"all": true, "college": true, "self": true}
@@ -115,6 +124,10 @@ func (s *Role) List(db *gorm.DB, onlyEnabled bool) ([]RoleWithCount, error) {
 
 	out := make([]RoleWithCount, 0, len(roles))
 	for _, r := range roles {
+		// 系统管理员恒拥有全部权限（展示层回填，不受 DB 历史数据影响）
+		if r.Code == model.RoleSystemAdmin {
+			r.Permissions = toRawJSON(AllPermissionCodes())
+		}
 		out = append(out, RoleWithCount{Role: r, UserCount: counts[r.Code]})
 	}
 	return out, nil
@@ -128,6 +141,10 @@ func (s *Role) Get(db *gorm.DB, id int) (*RoleWithCount, error) {
 	}
 	var cnt int64
 	db.Model(&model.UserRole{}).Where("role = ?", role.Code).Count(&cnt)
+	// 系统管理员恒拥有全部权限（不受 DB 历史数据影响）
+	if role.Code == model.RoleSystemAdmin {
+		role.Permissions = toRawJSON(AllPermissionCodes())
+	}
 	return &RoleWithCount{Role: role, UserCount: int(cnt)}, nil
 }
 
@@ -196,6 +213,9 @@ func (s *Role) Create(db *gorm.DB, p RoleParams) (*RoleWithCount, error) {
 	if err != nil {
 		return nil, err
 	}
+	if updates["code"] == model.RoleSystemAdmin {
+		return nil, errors.New("系统管理员角色不可创建")
+	}
 	var cnt int64
 	db.Model(&model.Role{}).Where("code = ?", updates["code"]).Count(&cnt)
 	if cnt > 0 {
@@ -226,6 +246,10 @@ func (s *Role) Update(db *gorm.DB, id int, p RoleParams) (*RoleWithCount, error)
 	var role model.Role
 	if err := db.First(&role, id).Error; err != nil {
 		return nil, errors.New("角色不存在")
+	}
+	// 系统管理员角色不可编辑（恒拥有最高权限）
+	if role.Code == model.RoleSystemAdmin {
+		return nil, errors.New("系统管理员角色不可编辑")
 	}
 	updates, err := s.validateParams(p, false)
 	if err != nil {

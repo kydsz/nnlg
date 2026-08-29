@@ -156,6 +156,12 @@ github.com/pelletier/go-toml/v2/internal/characters
 github.com/pelletier/go-toml/v2/internal/danger
 github.com/pelletier/go-toml/v2/internal/tracker
 github.com/pelletier/go-toml/v2/unstable
+# github.com/phpdave11/gofpdi v1.0.14-0.20211212211723-1f10f9844311
+## explicit; go 1.12
+github.com/phpdave11/gofpdi
+# github.com/pkg/errors v0.8.1
+## explicit
+github.com/pkg/errors
 # github.com/quic-go/qpack v0.6.0
 ## explicit; go 1.24
 github.com/quic-go/qpack
@@ -192,6 +198,10 @@ github.com/shakinm/xlsReader/helpers
 github.com/shakinm/xlsReader/xls
 github.com/shakinm/xlsReader/xls/record
 github.com/shakinm/xlsReader/xls/structure
+# github.com/signintech/gopdf v0.38.0
+## explicit; go 1.13
+github.com/signintech/gopdf
+github.com/signintech/gopdf/fontmaker/core
 # github.com/tiendc/go-deepcopy v1.7.2
 ## explicit; go 1.18
 github.com/tiendc/go-deepcopy

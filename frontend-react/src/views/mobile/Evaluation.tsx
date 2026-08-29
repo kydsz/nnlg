@@ -97,7 +97,7 @@ export default function Evaluation() {
     })
   }, [dims, matchedCourse])
 
-  // 出勤率自动计算：实到人数 ÷ 应到人数 × 100（用户手动修改后不再覆盖）
+  // 出勤率自动计算：实到人数 ÷ 应到人数 × 100，保留一位小数（用户手动修改后不再覆盖）
   const lastAutoRate = useRef<number | null>(null)
   useEffect(() => {
     const dimsArr = dims || []
@@ -109,7 +109,7 @@ export default function Evaluation() {
     const cfg = rateDim.field_config || {}
     const min = typeof cfg.min === 'number' ? cfg.min : 0
     const max = typeof cfg.max === 'number' ? cfg.max : 100
-    const rate = Math.min(max, Math.max(min, Math.round((act / exp) * 100)))
+    const rate = Math.min(max, Math.max(min, Math.round((act / exp) * 1000) / 10))
     const cur = values[rateDim.code]
     if (cur === undefined || cur === null || cur === '' || cur === lastAutoRate.current) {
       lastAutoRate.current = rate
@@ -387,7 +387,7 @@ function DimensionInput({
         const min = typeof cfg.min === 'number' ? cfg.min : null
         const max = typeof cfg.max === 'number' ? cfg.max : null
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <Input
               type="number"
               placeholder={String(cfg.placeholder || '请输入')}
@@ -492,7 +492,11 @@ function DimensionUpload({
       setUploadingCount((c) => c + 1)
       try {
         const res = await uploadApi.uploadEvaluationFile(taskId, dimCode, f)
-        const url = res.url || `/files/evaluation/${taskId}/${dimCode}/${res.filename}`
+        const url = res.files?.[0]?.url
+        if (!url) {
+          Toast.show({ content: `${f.name} 上传失败（无返回地址）`, icon: 'fail' })
+          continue
+        }
         onChange([...urls, url])
         urls = [...urls, url]
         Toast.show({ content: `${f.name} 上传成功`, icon: 'success' })

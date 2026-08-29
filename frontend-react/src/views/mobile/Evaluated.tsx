@@ -17,9 +17,9 @@ import { evaluationApi } from '@/api/modules/evaluations'
 import { useAuthStore } from '@/stores/auth'
 import type { EvaluationRecord } from '@/api/types'
 import { formatDate } from '@/utils/format'
+import { downloadBlob } from '@/utils/download'
 import {
   groupEvaluationDimensions,
-  printHtml,
   isImageArray,
   isFileArray,
   formatValueText,
@@ -89,10 +89,9 @@ function RecordList({ type, userId }: { type: EvalType; userId: number }) {
 
   const doExport = async (r: EvaluationRecord) => {
     try {
-      const blob = await evaluationApi.exportRecord(r.id)
-      const text = await blob.text()
-      printHtml(text)
-      Toast.show({ content: '已打开打印窗口' })
+      const blob = await evaluationApi.exportRecord(r.id, 'pdf')
+      downloadBlob(blob, `评教记录_${r.id}.pdf`)
+      Toast.show({ content: '导出成功', icon: 'success' })
     } catch (e) {
       Toast.show({ content: e instanceof Error ? e.message : '导出失败', icon: 'fail' })
     }

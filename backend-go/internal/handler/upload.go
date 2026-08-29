@@ -247,7 +247,7 @@ func (h *Upload) DeleteEvaluationFile(c *gin.Context) {
 	if !u.HasAnyRole("system_admin", "college_admin", "school_admin") {
 		var cnt int64
 		h.db.Model(&model.EvaluationRecord{}).
-			Where("task_id = ? AND evaluator_id = ?", taskID, u.ID).Count(&cnt)
+			Where("task_id = ? AND evaluator_id = ? AND is_deleted = 0", taskID, u.ID).Count(&cnt)
 		if cnt == 0 {
 			forbidden(c, "无权删除此文件")
 			return

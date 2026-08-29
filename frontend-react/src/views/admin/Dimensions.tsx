@@ -19,6 +19,62 @@ import type { ColumnsType } from 'antd/es/table'
 import { dimensionApi, type DimPayload } from '@/api/modules/dimensions'
 import type { Dimension, DimensionGroup, FieldType } from '@/api/types'
 
+interface DimOption {
+  label: string
+  value: string
+}
+
+/** 选项值归一化为 {label, value} 数组（兼容历史上被存成 JSON 字符串的情况） */
+export function toOptionList(v: unknown): DimOption[] {
+  let raw = v
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw)
+    } catch {
+      raw = null
+    }
+  }
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((o): DimOption | null => {
+      if (o && typeof o === 'object') {
+        const label = String((o as Record<string, unknown>).label ?? '')
+        return { label, value: String((o as Record<string, unknown>).value ?? label) }
+      }
+      const s = String(o).trim()
+      return s ? { label: s, value: s } : null
+    })
+    .filter((o): o is DimOption => o !== null)
+}
+
+/** 规范化选项：value 留空（含空白）时自动取 label，过滤掉空文本项 */
+export function normalizeOptions(v: unknown): DimOption[] {
+  return toOptionList(v)
+    .map((o) => ({ label: o.label.trim(), value: o.value.trim() }))
+    .filter((o) => o.label !== '')
+    .map((o) => (o.value === '' ? { ...o, value: o.label } : o))
+}
+
+/** field_config 摘要（列表页人话展示） */
+export function configSummary(v: unknown): string {
+  if (v == null || typeof v !== 'object') return v == null ? '-' : String(v)
+  const cfg = v as Record<string, unknown>
+  const parts: string[] = []
+  const opts = toOptionList(cfg.options)
+  if (opts.length > 0) parts.push(`选项：${opts.map((o) => o.label).join('、')}`)
+  if (cfg.min_score != null || cfg.max_score != null)
+    parts.push(`分值：${cfg.min_score ?? 0} ~ ${cfg.max_score ?? '-'}`)
+  if (cfg.step != null) parts.push(`步长：${cfg.step}`)
+  if (cfg.placeholder) parts.push(`提示：${cfg.placeholder}`)
+  if (cfg.min_value != null || cfg.max_value != null)
+    parts.push(`范围：${cfg.min_value ?? '-'} ~ ${cfg.max_value ?? '-'}`)
+  if (parts.length === 0) {
+    const s = JSON.stringify(cfg)
+    return s === '{}' ? '-' : s
+  }
+  return parts.join('；')
+}
+
 const FIELD_TYPES = [
   { label: '评分', value: 'score' },
   { label: '单选', value: 'single_choice' },
@@ -59,7 +115,7 @@ export default function Dimensions() {
   }
 
   const saveGroupMut = useMutation({
-    mutationFn: (values: { name: string; sort_order?: number }) =>
+    mutationFn: (values: { code: string; name: string; sort_order?: number }) =>
       editingGroup
         ? dimensionApi.groupUpdate(editingGroup.id, values)
         : dimensionApi.groupCreate(values),
@@ -92,6 +148,13 @@ export default function Dimensions() {
     onError: (e) => message.error(e.message),
   })
 
+  /** 提交前规范化：value 留空自动取 label，过滤空文本项 */
+  const onSubmitDim = (values: DimPayload) => {
+    const cfg = values.field_config
+    if (cfg && Array.isArray(cfg.options)) cfg.options = normalizeOptions(cfg.options)
+    saveDimMut.mutate(values)
+  }
+
   const delDimMut = useMutation({
     mutationFn: (id: number) => dimensionApi.remove(id),
     onSuccess: () => {
@@ -106,30 +169,38 @@ export default function Dimensions() {
   const swapGroup = (index: number, dir: -1 | 1) => {
     const target = index + dir
     if (target < 0 || target >= groupList.length) return
-    const ids = groupList.map((g) => g.id)
-    ;[ids[index], ids[target]] = [ids[target], ids[index]]
-    dimensionApi.groupSort(ids).then(
-      () => {
-        message.success('已排序')
-        invalidate()
-      },
-      (e) => message.error(e.message)
-    )
+    const items = groupList.map((g) => ({ id: g.id, sort_order: g.sort_order ?? 0 }))
+    const tmp = items[index].sort_order
+    items[index].sort_order = items[target].sort_order
+    items[target].sort_order = tmp
+    dimensionApi
+      .groupSort(items)
+      .then(
+        () => {
+          message.success('已排序')
+          invalidate()
+        },
+        (e) => message.error(e.message)
+      )
   }
 
   const dimList = dims?.list || []
   const swapDim = (index: number, dir: -1 | 1) => {
     const target = index + dir
     if (target < 0 || target >= dimList.length) return
-    const ids = dimList.map((d) => d.id)
-    ;[ids[index], ids[target]] = [ids[target], ids[index]]
-    dimensionApi.sort(ids).then(
-      () => {
-        message.success('已排序')
-        invalidate()
-      },
-      (e) => message.error(e.message)
-    )
+    const items = dimList.map((d) => ({ id: d.id, sort_order: d.sort_order ?? 0 }))
+    const tmp = items[index].sort_order
+    items[index].sort_order = items[target].sort_order
+    items[target].sort_order = tmp
+    dimensionApi
+      .sort(items)
+      .then(
+        () => {
+          message.success('已排序')
+          invalidate()
+        },
+        (e) => message.error(e.message)
+      )
   }
 
   const columns: ColumnsType<Dimension> = [
@@ -156,7 +227,7 @@ export default function Dimensions() {
       width: 70,
       render: (v: number) => (v === 1 ? '启用' : '禁用'),
     },
-    { title: '配置', dataIndex: 'field_config', ellipsis: true, render: (v: unknown) => JSON.stringify(v) },
+    { title: '配置', dataIndex: 'field_config', ellipsis: true, render: (v: unknown) => configSummary(v) },
     {
       title: '操作',
       width: 190,
@@ -178,7 +249,11 @@ export default function Dimensions() {
             size="small"
             onClick={() => {
               setEditingDim(record)
-              dimForm.setFieldsValue(record)
+              const cfg = record.field_config
+              dimForm.setFieldsValue({
+                ...record,
+                field_config: cfg ? { ...cfg, options: toOptionList(cfg.options) } : { options: [] },
+              })
               setDimModal(true)
             }}
           >
@@ -311,6 +386,9 @@ export default function Dimensions() {
           <Form.Item name="name" label="分组名称" rules={[{ required: true, message: '请输入名称' }]}>
             <Input />
           </Form.Item>
+          <Form.Item name="code" label="分组编码" rules={[{ required: true, message: '请输入编码' }]}>
+            <Input />
+          </Form.Item>
           <Form.Item name="sort_order" label="排序号">
             <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
@@ -326,7 +404,7 @@ export default function Dimensions() {
         confirmLoading={saveDimMut.isPending}
         width={560}
       >
-        <Form form={dimForm} layout="vertical" onFinish={(v) => saveDimMut.mutate(v)}>
+        <Form form={dimForm} layout="vertical" onFinish={onSubmitDim}>
           <Form.Item name="group_id" label="所属分组">
             <Select
               allowClear
@@ -391,25 +469,42 @@ function FieldTypeConfigForm({ form }: { form: ReturnType<typeof Form.useForm>[0
   }
   if (fieldType === 'single_choice' || fieldType === 'multiple_choice') {
     return (
-      <Form.Item
-        name={['field_config', 'options']}
-        label="选项（每行一个：label|value）"
-        tooltip="如：优秀|excellent"
-      >
-        <Input.TextArea
-          rows={3}
-          placeholder={'优秀|excellent\n良好|good'}
-          onBlur={(e) => {
-            // 存为 JSON 结构
-            const lines = e.target.value.split('\n').filter(Boolean)
-            const options = lines.map((l) => {
-              const [label, value] = l.split('|')
-              return { label: label.trim(), value: (value || label).trim() }
-            })
-            form.setFieldValue(['field_config', 'options'], JSON.stringify(options))
-          }}
-        />
-      </Form.Item>
+      <Form.List name={['field_config', 'options']}>
+        {(fields, { add, remove }) => (
+          <>
+            {fields.map((field, index) => (
+              <div
+                key={field.key}
+                style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}
+              >
+                <Form.Item
+                  name={[field.name, 'label']}
+                  label={index === 0 ? '选项文本' : ''}
+                  style={{ flex: 1 }}
+                  rules={[{ required: true, message: '请填写选项文本' }]}
+                >
+                  <Input placeholder="选项文本（显示给用户）" />
+                </Form.Item>
+                <Form.Item
+                  name={[field.name, 'value']}
+                  label={index === 0 ? '选项值（可留空）' : ''}
+                  style={{ flex: 1 }}
+                >
+                  <Input placeholder="留空则同选项文本" />
+                </Form.Item>
+                <Form.Item>
+                  <Button type="text" danger onClick={() => remove(field.name)}>
+                    删除
+                  </Button>
+                </Form.Item>
+              </div>
+            ))}
+            <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add()}>
+              添加选项
+            </Button>
+          </>
+        )}
+      </Form.List>
     )
   }
   if (fieldType === 'text' || fieldType === 'rich_text') {

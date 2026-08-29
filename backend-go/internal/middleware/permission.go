@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 
+	"backend-go/internal/model"
 	"backend-go/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,11 @@ func RequirePermission(db *gorm.DB, required ...string) gin.HandlerFunc {
 		user := CurrentUser(c)
 		if user == nil {
 			forbidden(c)
+			return
+		}
+		// 系统管理员恒拥有最高权限，识别到即放行
+		if user.HasRole(model.RoleSystemAdmin) {
+			c.Next()
 			return
 		}
 		perms := user.Permissions(db)
@@ -44,6 +50,11 @@ func RequireAnyPermission(db *gorm.DB, allowed ...string) gin.HandlerFunc {
 		user := CurrentUser(c)
 		if user == nil {
 			forbidden(c)
+			return
+		}
+		// 系统管理员恒拥有最高权限，识别到即放行
+		if user.HasRole(model.RoleSystemAdmin) {
+			c.Next()
 			return
 		}
 		perms := user.Permissions(db)

@@ -45,6 +45,7 @@ type EvaluationRecord struct {
 	DimensionValues json.RawMessage `gorm:"column:dimension_values;type:json" json:"dimension_values"`
 	SubmitTime      *LocalTime      `gorm:"column:submit_time" json:"submit_time"`
 	IsAnonymous     bool            `gorm:"column:is_anonymous" json:"is_anonymous"`
+	IsDeleted       bool            `gorm:"column:is_deleted" json:"-"`
 }
 
 func (EvaluationRecord) TableName() string { return "evaluation_record" }

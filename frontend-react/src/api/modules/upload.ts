@@ -1,5 +1,10 @@
 import { request } from '../http'
 
+export interface UploadResult {
+  files: { url: string; filename: string; path?: string }[]
+  count: number
+}
+
 export const uploadApi = {
   upload: (file: File) => {
     const fd = new FormData()
@@ -14,8 +19,8 @@ export const uploadApi = {
 
   uploadEvaluationFile: (taskId: number, dimCode: string, file: File) => {
     const fd = new FormData()
-    fd.append('file', file)
-    return request<{ url: string; filename: string }>({
+    fd.append('files', file)
+    return request<UploadResult>({
       url: `/upload/evaluation/${taskId}/${dimCode}`,
       method: 'POST',
       data: fd,

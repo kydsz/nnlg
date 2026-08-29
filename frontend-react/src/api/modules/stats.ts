@@ -16,6 +16,8 @@ export interface RecordQuery {
   teacher_id?: number
   evaluator_id?: number
   evaluator_role?: string
+  evaluator_roles?: string
+  has_courses?: boolean
   has_schedule?: boolean
   role?: string
   roles?: string

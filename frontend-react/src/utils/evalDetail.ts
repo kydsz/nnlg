@@ -173,8 +173,9 @@ function groupFromSchema(
 /** 组装打印/导出 HTML（信息区 + 分组明细） */
 export function buildEvalPrintHtml(detail: EvaluationRecord): string {
   const groups = groupEvaluationDimensions(detail)
-  const totalMax = groups.reduce((s, g) => s + g.max_score, 0)
+  // 总分优先取后端返回，缺省再按分组累计（兼容旧后端）
   const total = detail.total_score ?? groups.reduce((s, g) => s + g.score, 0)
+  const totalMax = detail.max_total_score ?? groups.reduce((s, g) => s + g.max_score, 0)
 
   const infoRows: [string, string][] = [
     ['教师', detail.teacher_name],
@@ -223,7 +224,7 @@ export function buildEvalPrintHtml(detail: EvaluationRecord): string {
 <style>body{font-family:"Microsoft YaHei",sans-serif;padding:24px;color:#252525}h1{font-size:20px;text-align:center}table{font-size:13px}</style>
 </head><body>
 <h1>评教详情</h1>
-<p style="text-align:center;color:#999">南理教评系统</p>
+<p style="text-align:center;color:#999">南宁理工学院</p>
 <table style="border-collapse:collapse;width:100%;margin-bottom:8px">
 ${infoRows
   .map(

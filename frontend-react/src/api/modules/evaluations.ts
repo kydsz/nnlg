@@ -24,11 +24,18 @@ export const evaluationApi = {
   submit: (data: SubmitPayload) =>
     request<EvaluationRecord>({ url: '/evaluations', method: 'POST', data }),
 
+  /** 与后端 /evaluations/with-files 约定对齐：task_id + dimension_values(JSON) +
+   *  is_anonymous 为表单字段，文件统一放 files 且文件名带 {dim_code}_ 前缀 */
   submitWithFiles: (data: SubmitPayload & { files?: Record<string, File[]> }) => {
     const fd = new FormData()
-    fd.append('payload', JSON.stringify(data))
+    fd.append('task_id', String(data.task_id))
+    fd.append(
+      'dimension_values',
+      JSON.stringify(data.dimension_values ?? Object.assign({}, data))
+    )
+    fd.append('is_anonymous', data.is_anonymous ? 'true' : 'false')
     Object.entries(data.files || {}).forEach(([dim, list]) => {
-      list.forEach((f) => fd.append(`files_${dim}`, f))
+      list.forEach((f) => fd.append('files', new File([f], `${dim}_${f.name}`, { type: f.type })))
     })
     return request<EvaluationRecord>({
       url: '/evaluations/with-files',

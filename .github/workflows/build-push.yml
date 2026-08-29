@@ -62,11 +62,11 @@ jobs:
           go test -mod=vendor ./...
           go vet -mod=vendor ./...
 
-      - name: Setup Node (22 LTS)
+      - name: Setup Node (24 LTS)
         if: matrix.name == 'frontend-react'
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: frontend-react/package-lock.json
 

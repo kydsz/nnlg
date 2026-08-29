@@ -251,12 +251,13 @@ func (s *Task) CancelTask(db *gorm.DB, caller *model.User, id int) (t *model.Eva
 		return nil, 0, errors.New("任务已取消")
 	}
 
-	// 统计并删除关联评教记录
+	// 统计并软删除关联评教记录（数据保留，可恢复）
 	var records []model.EvaluationRecord
-	db.Where("task_id = ?", id).Find(&records)
+	db.Where("task_id = ? AND is_deleted = 0", id).Find(&records)
 	cancelled = len(records)
 	return t, cancelled, db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("task_id = ?", id).Delete(&model.EvaluationRecord{}).Error; err != nil {
+		if err := tx.Model(&model.EvaluationRecord{}).Where("task_id = ? AND is_deleted = 0", id).
+			Update("is_deleted", true).Error; err != nil {
 			return err
 		}
 		return tx.Model(t).Updates(map[string]interface{}{

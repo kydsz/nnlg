@@ -61,8 +61,11 @@ type GroupParams struct {
 
 // GroupCreate 新建分组
 func (s *Dimension) GroupCreate(db *gorm.DB, p GroupParams) (*model.DimensionGroup, error) {
-	if p.Code == "" || p.Name == "" {
-		return nil, errors.New("编码与名称不能为空")
+	if p.Code == "" {
+		return nil, errors.New("分组编码不能为空")
+	}
+	if p.Name == "" {
+		return nil, errors.New("分组名称不能为空")
 	}
 	var cnt int64
 	db.Model(&model.DimensionGroup{}).Where("code = ?", p.Code).Count(&cnt)
@@ -403,6 +406,11 @@ func (s *Dimension) SchemaForEvaluation(db *gorm.DB) ([]map[string]interface{}, 
 		}
 		if d.FieldConfig == nil {
 			item["field_config"] = nil
+		}
+		if d.FieldType == model.FieldScore {
+			if max, ok := fieldConfigNum(d.FieldConfig, "max_score"); ok {
+				item["max_score"] = max
+			}
 		}
 		if d.GroupID != nil {
 			byGroup[*d.GroupID] = append(byGroup[*d.GroupID], item)

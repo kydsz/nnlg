@@ -128,13 +128,18 @@ func userPayload(db *gorm.DB, u *model.User) gin.H {
 		}
 	}
 
+	perms := u.Permissions(db)
+	if u.HasRole(model.RoleSystemAdmin) {
+		perms = service.AllPermissionCodes() // 系统管理员恒拥有全部权限
+	}
+
 	return gin.H{
 		"id":                   u.ID,
 		"user_no":              u.UserNo,
 		"username":             u.Username,
 		"role":                 u.Role,
 		"roles":                ensureList(u.RoleCodes()),
-		"permissions":          ensureList(u.Permissions(db)),
+		"permissions":          ensureList(perms),
 		"college_id":           u.CollegeID,
 		"college_name":         collegeName(u.College),
 		"research_room_id":     u.ResearchRoomID,

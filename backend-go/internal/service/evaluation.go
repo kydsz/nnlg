@@ -71,6 +71,19 @@ func totalScoreOfValues(raw json.RawMessage, scoreCodes map[string]bool) *float6
 	return &total
 }
 
+// totalMaxScoreOfSchema 启用 score 维度的满分合计（列表/详情展示"满分"用）
+func totalMaxScoreOfSchema(db *gorm.DB) float64 {
+	var dims []model.EvaluationDimension
+	db.Where("status = 1 AND field_type = ?", model.FieldScore).Find(&dims)
+	total := 0.0
+	for _, d := range dims {
+		if max, ok := fieldConfigNum(d.FieldConfig, "max_score"); ok {
+			total += max
+		}
+	}
+	return total
+}
+
 // TotalScoreOf 单条记录总分（对外用）
 func (s *Evaluation) TotalScoreOf(db *gorm.DB, rec *model.EvaluationRecord) *float64 {
 	return totalScoreOfValues(rec.DimensionValues, scoreDimCodeSet(db))
@@ -93,9 +106,9 @@ func (s *Evaluation) Submit(db *gorm.DB, viewer *model.User, p SubmitParams) (*m
 		return nil, errors.New("任务已取消，不能提交评教")
 	}
 
-	// 唯一约束：同一任务同一评教人只能一条
+	// 唯一约束：同一任务同一评教人只能一条（已软删除不再参与重复判断，允许重新提交）
 	var dup int64
-	db.Model(&model.EvaluationRecord{}).Where("task_id = ? AND evaluator_id = ?", task.ID, viewer.ID).Count(&dup)
+	db.Model(&model.EvaluationRecord{}).Where("task_id = ? AND evaluator_id = ? AND is_deleted = 0", task.ID, viewer.ID).Count(&dup)
 	if dup > 0 {
 		return nil, errors.New("您已提交过本次评教")
 	}
@@ -214,8 +227,11 @@ func canSeeIdentity(viewer *model.User, rec *model.EvaluationRecord, task *model
 
 // buildRecordQuery 构造记录查询（t = evaluation_task, r = evaluation_record）
 func (s *Evaluation) buildRecordQuery(db *gorm.DB, viewer *model.User, f EvaluationFilters) (*gorm.DB, error) {
+	// 记录可见性不随任务软删除消失（对齐旧端：列表/详情均不过滤任务 is_deleted）；
+	// 但已软删除的记录本身不展示
 	q := db.Table("evaluation_record AS r").
-		Joins("JOIN evaluation_task AS t ON t.id = r.task_id AND t.is_deleted = 0")
+		Joins("JOIN evaluation_task AS t ON t.id = r.task_id").
+		Where("r.is_deleted = 0")
 
 	// 类型与数据范围
 	isTeacherOnly := viewer.HasRole(model.RoleTeacher) && !IsAdminRole(viewer) && !IsSupervisor(viewer)
@@ -330,6 +346,7 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 		}
 	}
 	scoreCodes := scoreDimCodeSet(db)
+	maxTotal := totalMaxScoreOfSchema(db)
 	viewAll := CanViewOthersEvaluation(db, viewer)
 
 	for i := range recs {
@@ -338,7 +355,8 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 		item := map[string]interface{}{
 			"id": r.ID, "task_id": r.TaskID, "is_anonymous": r.IsAnonymous,
 			"evaluator_role": r.EvaluatorRole, "evaluator_role_name": model.RoleName(r.EvaluatorRole),
-			"total_score": totalScoreOfValues(r.DimensionValues, scoreCodes), "submit_time": r.SubmitTime,
+			"total_score": totalScoreOfValues(r.DimensionValues, scoreCodes),
+			"max_total_score": maxTotal, "submit_time": r.SubmitTime,
 		}
 		if ok {
 			item["teacher_id"] = task.TeacherID
@@ -367,7 +385,7 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 // GetDetail 详情（含维度 schema）
 func (s *Evaluation) GetDetail(db *gorm.DB, viewer *model.User, id int) (map[string]interface{}, error) {
 	var rec model.EvaluationRecord
-	if err := db.First(&rec, id).Error; err != nil {
+	if err := db.Where("id = ? AND is_deleted = 0", id).First(&rec).Error; err != nil {
 		return nil, errNotFound("评教记录不存在")
 	}
 	var task model.EvaluationTask
@@ -394,6 +412,21 @@ func (s *Evaluation) GetDetail(db *gorm.DB, viewer *model.User, id int) (map[str
 	}
 	item := items[0]
 
+	// 展示友好字段：满分合计、学院名、提交时间（空格分隔，对齐导出格式）
+	item["max_total_score"] = totalMaxScoreOfSchema(db)
+	if teacher != nil {
+		if teacher.College != nil {
+			item["college_name"] = teacher.College.Name
+		} else {
+			item["college_name"] = nil
+		}
+	}
+	if rec.SubmitTime != nil {
+		item["submit_time"] = rec.SubmitTime.ToTime().Format("2006-01-02 15:04")
+	} else {
+		item["submit_time"] = "-"
+	}
+
 	var dimSvc = NewDimension()
 	schema, _ := dimSvc.SchemaForEvaluation(db)
 	item["dimension_groups"] = schema
@@ -416,7 +449,7 @@ func (s *Evaluation) SummariesForTasks(db *gorm.DB, viewer *model.User, tasks []
 	}
 
 	var recs []model.EvaluationRecord
-	db.Where("task_id IN ?", ids).Order("submit_time ASC").Find(&recs)
+	db.Where("task_id IN ? AND is_deleted = 0", ids).Order("submit_time ASC").Find(&recs)
 
 	teacherIDs := map[int]bool{}
 	for _, t := range tasks {
@@ -472,17 +505,17 @@ func keysOf(m map[int]bool) []int {
 	return out
 }
 
-// Delete 删除评教记录（硬删除；本人或管理角色）
+// Delete 删除评教记录（软删除：标记 is_deleted，数据保留可恢复；本人或管理角色）
 func (s *Evaluation) Delete(db *gorm.DB, viewer *model.User, id int) error {
 	var rec model.EvaluationRecord
-	if err := db.First(&rec, id).Error; err != nil {
+	if err := db.Where("id = ? AND is_deleted = 0", id).First(&rec).Error; err != nil {
 		return errors.New("评教记录不存在")
 	}
 	if (rec.EvaluatorID == nil || *rec.EvaluatorID != viewer.ID) &&
 		!viewer.HasAnyRole(model.RoleSystemAdmin, model.RoleCollegeAdmin, model.RoleSchoolAdmin) {
 		return errors.New("无权删除此评教记录")
 	}
-	return db.Delete(&model.EvaluationRecord{}, id).Error
+	return db.Model(&model.EvaluationRecord{}).Where("id = ?", id).Update("is_deleted", true).Error
 }
 
 // FileDimMap 文件类维度（image/file）编码 -> 维度
@@ -532,7 +565,7 @@ type ExportGroup struct {
 // ExportData 导出单条记录的结构化数据（含脱敏、分组、选项标签映射）
 func (s *Evaluation) ExportData(db *gorm.DB, viewer *model.User, id int) (map[string]interface{}, error) {
 	var rec model.EvaluationRecord
-	if err := db.First(&rec, id).Error; err != nil {
+	if err := db.Where("id = ? AND is_deleted = 0", id).First(&rec).Error; err != nil {
 		return nil, errNotFound("评教记录不存在")
 	}
 	var task model.EvaluationTask

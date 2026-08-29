@@ -1,0 +1,90 @@
+# ============================================
+# 教学评价系统 V2 - 生产环境部署
+# 使用:docker compose -f docker-compose.prod.yml up -d
+#
+# 前置条件:
+#   1. docker volume create v2_mysql_data   (external 卷,必须先手动创建)
+#   2. 准备 ./backend-go/.env,其中:
+#      - DB_HOST=mysql            (写服务名,不要写 localhost)
+#      - MYSQL_ROOT_PASSWORD=xxx  (.env.example 里没有,必须补上,与 DB_PASSWORD 一致)
+#   3. docker login ccr.ccs.tencentyun.com
+# ============================================
+services:
+  mysql:
+    image: mysql:8.0.36
+    container_name: tev2_mysql
+    restart: unless-stopped
+    command: >
+      --sort-buffer-size=8M
+      --innodb-sort-buffer-size=8M
+      --read-buffer-size=2M
+      --read-rnd-buffer-size=2M
+    env_file:
+      - ./backend-go/.env
+    volumes:
+      - v2_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - tev2_network
+
+  # Go 后端(腾讯云镜像,不在服务器上构建)
+  backend:
+    image: ccr.ccs.tencentyun.com/nnlg/backend-go:latest
+    container_name: tev2_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend-go/.env
+    volumes:
+      - ./backend-go/uploads:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - tev2_network
+
+  # React 前端(Nginx,80 端口对外,/api 与 /uploads 反代到 backend:8000)
+  frontend:
+    image: ccr.ccs.tencentyun.com/nnlg/frontend-react:latest
+    container_name: tev2_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - tev2_network
+
+volumes:
+  v2_mysql_data:
+    external: true
+
+networks:
+  tev2_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        # 指定 192 网段,避开 Docker 默认的 172.x 地址池;
+        # 若与服务器所在内网/VPC 网段冲突,换一个未占用的 192.168.x.0/24 即可
+        - subnet: 192.168.100.0/24
+          gateway: 192.168.100.1

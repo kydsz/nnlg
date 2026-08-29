@@ -24,13 +24,21 @@ export default function Evaluations() {
   const qc = useQueryClient()
   const [params, setParams] = useState<{ page: number; page_size: number; keyword?: string; teacher_id?: number }>({ page: 1, page_size: 20 })
   const [keyword, setKeyword] = useState('')
-  const [detail, setDetail] = useState<EvaluationRecord | null>(null)
+  const [detailId, setDetailId] = useState<number | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['evaluations', params],
     queryFn: () => evaluationApi.list(params),
   })
+
+  // 详情走独立接口：含分组 schema（打印不再"未分组"）、格式化的提交时间、满分合计
+  const detailQ = useQuery({
+    queryKey: ['eval-detail', detailId],
+    queryFn: () => evaluationApi.detail(detailId!),
+    enabled: detailId != null,
+  })
+  const detail = detailQ.data ?? null
 
   const pdfMut = useMutation({
     mutationFn: (id: number) => evaluationApi.exportRecord(id, 'pdf'),
@@ -50,7 +58,7 @@ export default function Evaluations() {
     onSuccess: () => {
       message.success('删除成功')
       qc.invalidateQueries({ queryKey: ['evaluations'] })
-      setDetail(null)
+      setDetailId(null)
     },
     onError: (e) => message.error(e.message),
   })
@@ -84,7 +92,7 @@ export default function Evaluations() {
       width: 130,
       render: (_, record) => (
         <Space>
-          <Button size="small" onClick={() => setDetail(record)}>
+          <Button size="small" onClick={() => setDetailId(record.id)}>
             详情
           </Button>
           <Popconfirm title="确认删除？" onConfirm={() => delMut.mutate(record.id)}>
@@ -135,8 +143,8 @@ export default function Evaluations() {
 
       <Drawer
         title="评教详情"
-        open={!!detail}
-        onClose={() => setDetail(null)}
+        open={detailId != null}
+        onClose={() => setDetailId(null)}
         width={480}
         extra={
           detail && (

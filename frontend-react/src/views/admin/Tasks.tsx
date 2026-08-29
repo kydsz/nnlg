@@ -320,7 +320,7 @@ function BatchCreateModal({
       )
     },
     onSuccess: (res) => {
-      message.success(`批量创建完成：成功 ${res.created ?? '-'} 个`)
+      message.success(`批量创建完成：成功 ${res.created_count ?? '-'} 个`)
       onCreated()
       onClose()
     },
