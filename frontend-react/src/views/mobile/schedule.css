@@ -1,0 +1,83 @@
+/* 移动端课表网格：自适应屏幕宽度，不横向溢出 */
+.mobile-grid {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: #fff;
+}
+
+.mobile-grid th,
+.mobile-grid td {
+  border: 1px solid #eee;
+  text-align: center;
+  vertical-align: middle;
+  font-size: 11px;
+  padding: 3px 1px;
+  word-break: break-all;
+  height: 64px;
+}
+
+.mobile-grid th {
+  background: #fafafa;
+  font-weight: 500;
+  padding: 4px 1px;
+  height: auto;
+}
+
+.mobile-grid th.today {
+  color: #104186;
+  background: #e8f0fb;
+}
+
+.mobile-grid td.today {
+  background: #f4f8fe;
+}
+
+.mobile-grid td.slot-label {
+  width: 34px;
+  background: #fafafa;
+  font-size: 10px;
+}
+
+.mobile-grid .course-cell {
+  background: linear-gradient(135deg, #e8f0fb 0%, #d6e5f8 100%);
+  border-radius: 4px;
+  padding: 4px 2px;
+  min-height: 64px;
+  overflow: hidden;
+}
+
+.mobile-grid .course-name {
+  color: #104186;
+  font-size: 10px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mobile-grid .course-room {
+  font-size: 10px;
+  color: #666;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mobile-grid .course-more {
+  font-size: 9px;
+  color: #e1c46e;
+}
+
+/* 课程详情卡片 */
+.course-detail-card {
+  border-left: 3px solid #104186;
+  background: #f7f9fc;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+}

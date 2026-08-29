@@ -1,0 +1,61 @@
+services:
+  mysql:
+    image: mysql:8.0.36
+    container_name: tev2_mysql
+    restart: unless-stopped
+    command: >
+      --sort-buffer-size=8M
+      --innodb-sort-buffer-size=8M
+      --read-buffer-size=2M
+      --read-rnd-buffer-size=2M
+    env_file:
+      - ./backend-go/.env
+    volumes:
+      - v2_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - tev2_network
+
+  # Go 版后端（默认启用，服务名 backend 与前端 nginx 代理地址一致）
+  backend:
+    build:
+      context: ./backend-go
+      dockerfile: Dockerfile
+    container_name: tev2_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend-go/.env
+    volumes:
+      - ./backend-go/uploads:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - tev2_network
+
+  # React 新前端
+  frontend:
+    build:
+      context: ./frontend-react
+      dockerfile: Dockerfile
+    container_name: tev2_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - tev2_network
+
+volumes:
+  v2_mysql_data:
+    external: true
+
+networks:
+  tev2_network:
+    driver: bridge

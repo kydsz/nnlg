@@ -1,0 +1,93 @@
+# ============================================================
+# 教学评价系统 V3 - 构建并推送镜像到腾讯云 CCR（个人版）
+#
+# 触发条件：push 到 main 分支、或推送 v* 标签、或手动触发
+# 产物：
+#   ccr.ccs.tencentyun.com/nnlg/backend-go     :sha-<commit> / latest / v*
+#   ccr.ccs.tencentyun.com/nnlg/frontend-react :sha-<commit> / latest / v*
+#
+# 需要的 GitHub Secrets：
+#   CCR_USERNAME   (= 腾讯云账号 ID)
+#   CCR_PASSWORD   (= 腾讯云账号密码)
+# ============================================================
+name: Build & Push Docker Images (CCR)
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'backend-go/**'
+      - 'frontend-react/**'
+      - '.github/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ccr.ccs.tencentyun.com
+  # 腾讯云 CCR 个人版命名空间（需在 CCR 控制台提前创建）
+  NAMESPACE: nnlg
+
+concurrency:
+  group: build-push-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend-go
+            context: ./backend-go
+            dockerfile: ./backend-go/Dockerfile
+          - name: frontend-react
+            context: ./frontend-react
+            dockerfile: ./frontend-react/Dockerfile
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: buildx-${{ matrix.name }}-${{ github.sha }}
+          restore-keys: |
+            buildx-${{ matrix.name }}-
+
+      - name: Login to Tencent Cloud CCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.CCR_USERNAME }}
+          password: ${{ secrets.CCR_PASSWORD }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.name }}
+          tags: |
+            # 每次构建打 sha 标签；main 分支额外打 latest；v* 标签再打对应版本号
+            type=sha,prefix=sha-
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max

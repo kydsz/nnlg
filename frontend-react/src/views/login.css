@@ -1,0 +1,54 @@
+/* 登录页 — 对齐旧版 Vue 设计 */
+.login-page {
+  min-height: 100vh;
+  background: #fafbfc;
+  background-image:
+    radial-gradient(circle at 20% 50%, rgba(15, 118, 110, 0.04) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(16, 65, 134, 0.05) 0%, transparent 40%),
+    radial-gradient(circle at 60% 80%, rgba(16, 65, 134, 0.03) 0%, transparent 40%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.login-container {
+  width: 100%;
+  max-width: 400px;
+  background: #fff;
+  border-radius: 16px;
+  padding: 40px 24px;
+  box-shadow: 0 -1px 0.36rem 0 rgba(26, 91, 185, 0.1);
+  border: 1px solid #e0e0e0;
+}
+
+.login-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.login-logo {
+  max-width: 240px;
+  height: auto;
+  margin-bottom: 16px;
+  margin-left: auto;
+  margin-right: auto;
+  display: block;
+}
+
+.login-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #252525;
+  margin-bottom: 4px;
+}
+
+.login-header p {
+  font-size: 13px;
+  color: #999999;
+}
+
+.login-btn-wrapper {
+  margin-top: 24px;
+  padding: 0 16px;
+}
