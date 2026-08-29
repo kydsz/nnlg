@@ -45,8 +45,9 @@ log/
 # ----------------------------------------
 node_modules/
 venv/
-env/
-ENV/
+# 仅忽略根目录的虚拟环境目录（不加 / 会因 Windows 大小写不敏感误伤 vendor 下的 env/ 等同名目录）
+/env/
+/ENV/
 .venv/
 __pycache__/
 
@@ -55,6 +56,8 @@ __pycache__/
 # ----------------------------------------
 dist/
 build/
+/server
+server.exe
 *.tsbuildinfo
 *.egg-info/
 .pytest_cache/
