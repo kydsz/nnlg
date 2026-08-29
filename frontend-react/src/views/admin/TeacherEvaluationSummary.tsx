@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import {
   Card,
@@ -19,20 +19,13 @@ import dayjs from 'dayjs'
 import { statsApi, type RecordQuery } from '@/api/modules/stats'
 import { orgApi } from '@/api/modules/org'
 import { scheduleApi } from '@/api/modules/schedule'
+import { roleApi } from '@/api/modules/roles'
 import ExportFieldSelector from '@/components/ExportFieldSelector'
 import { useDebounce } from '@/hooks/useDebounce'
 import { downloadBlob, exportFilename } from '@/utils/download'
 import { roleNamesStr } from '@/utils/roleNames'
 import { formatDate } from '@/utils/format'
 import type { TeacherEvaluationSummary, EvaluationRecord } from '@/api/types'
-
-const ROLE_OPTIONS = [
-  { label: '教师', value: 'teacher' },
-  { label: '督导', value: 'supervisor' },
-  { label: '校级督导', value: 'school_supervisor' },
-  { label: '院级督导', value: 'college_supervisor' },
-  { label: '学院管理员', value: 'college_admin' },
-]
 
 const SORT_FIELDS = [
   { label: '评教次数', value: 'given_count' },
@@ -60,6 +53,15 @@ export default function TeacherEvaluationSummary() {
     queryKey: ['colleges', undefined],
     queryFn: () => orgApi.collegeList(),
   })
+  const { data: roleListRes } = useQuery({
+    queryKey: ['roles'],
+    queryFn: () => roleApi.list(),
+  })
+  // 角色筛选选项与角色管理保持一致（动态加载，而非硬编码）
+  const roleOptions = useMemo(
+    () => (roleListRes?.list || []).map((r) => ({ label: r.name, value: r.code })),
+    [roleListRes]
+  )
   const { data: currentSemester } = useQuery({
     queryKey: ['current-semester'],
     queryFn: () => scheduleApi.currentSemester(),
@@ -129,7 +131,7 @@ export default function TeacherEvaluationSummary() {
             maxTagCount={2}
             placeholder="角色"
             style={{ minWidth: 160 }}
-            options={ROLE_OPTIONS}
+            options={roleOptions}
             value={roles}
             onChange={setRoles}
           />
