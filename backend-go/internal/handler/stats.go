@@ -63,6 +63,10 @@ func (h *Stats) Teachers(c *gin.Context) {
 		badReq(c, "end_date 格式错误")
 		return
 	}
+	if f.Start != nil && f.End != nil && f.Start.After(*f.End) {
+		badReq(c, "开始日期不能晚于结束日期")
+		return
+	}
 	u := middleware.CurrentUser(c)
 	list, total, err := h.svc.TeacherStats(h.db, u, f)
 	if err != nil {
@@ -105,6 +109,10 @@ func (h *Stats) Colleges(c *gin.Context) {
 	}
 	if f.End, err = parseDatePtr(c.Query("end_date")); err != nil {
 		badReq(c, "end_date 格式错误")
+		return
+	}
+	if f.Start != nil && f.End != nil && f.Start.After(*f.End) {
+		badReq(c, "开始日期不能晚于结束日期")
 		return
 	}
 	u := middleware.CurrentUser(c)
@@ -165,6 +173,10 @@ func (h *Stats) Supervisors(c *gin.Context) {
 		badReq(c, "end_date 格式错误")
 		return
 	}
+	if f.Start != nil && f.End != nil && f.Start.After(*f.End) {
+		badReq(c, "开始日期不能晚于结束日期")
+		return
+	}
 	u := middleware.CurrentUser(c)
 	list, total, err := h.svc.SupervisorStats(h.db, u, f)
 	if err != nil {
@@ -197,6 +209,10 @@ func (h *Stats) Evaluators(c *gin.Context) {
 	}
 	if f.End, err = parseDatePtr(c.Query("end_date")); err != nil {
 		badReq(c, "end_date 格式错误")
+		return
+	}
+	if f.Start != nil && f.End != nil && f.Start.After(*f.End) {
+		badReq(c, "开始日期不能晚于结束日期")
 		return
 	}
 	u := middleware.CurrentUser(c)
@@ -244,6 +260,10 @@ func (h *Stats) EvaluationRecords(c *gin.Context) {
 		badReq(c, "end_date 格式错误")
 		return
 	}
+	if f.Start != nil && f.End != nil && f.Start.After(*f.End) {
+		badReq(c, "开始日期不能晚于结束日期")
+		return
+	}
 	u := middleware.CurrentUser(c)
 	list, total, err := h.svc.EvaluationRecordsStats(h.db, u, f)
 	if err != nil {
@@ -285,6 +305,10 @@ func (h *Stats) TeacherSummary(c *gin.Context) {
 	}
 	if f.End, err = parseDatePtr(c.Query("end_date")); err != nil {
 		badReq(c, "end_date 格式错误")
+		return
+	}
+	if f.Start != nil && f.End != nil && f.Start.After(*f.End) {
+		badReq(c, "开始日期不能晚于结束日期")
 		return
 	}
 	u := middleware.CurrentUser(c)

@@ -65,12 +65,14 @@ export default function TeacherEvaluationSummary() {
     queryFn: () => scheduleApi.currentSemester(),
   })
 
-  // 默认日期区间：当前学期开学日 ~ 今天
+  // 显式默认日期区间：当前学期开学日 ~ 今天，展示在日期选择器中供用户确认/修改
   useEffect(() => {
     if (!datesInitRef.current && currentSemester?.start_date) {
       datesInitRef.current = true
       const start = dayjs(currentSemester.start_date)
-      setDates([start.format('YYYY-MM-DD'), dayjs().format('YYYY-MM-DD')])
+      const today = dayjs()
+      if (start.isAfter(today)) return
+      setDates([start.format('YYYY-MM-DD'), today.format('YYYY-MM-DD')])
     }
   }, [currentSemester]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -174,7 +176,13 @@ export default function TeacherEvaluationSummary() {
           <Button
             icon={<DownloadOutlined />}
             loading={exportMut.isPending}
-            onClick={() => setExportOpen(true)}
+            onClick={() => {
+              if (!dates[0] || !dates[1]) {
+                message.warning('请先选择导出日期区间')
+                return
+              }
+              setExportOpen(true)
+            }}
           >
             导出
           </Button>
@@ -207,6 +215,7 @@ export default function TeacherEvaluationSummary() {
           'user_no',
           'college_name',
           'role_names',
+          'has_courses',
           'given_count',
           'given_avg_score',
           'received_count',
@@ -249,6 +258,11 @@ function TeacherCard({
           <strong>{item.teacher_name}</strong>
           <span style={{ color: '#999' }}>{item.user_no}</span>
           <span>{item.college_name}</span>
+          {item.has_courses ? (
+            <Tag color="green">有课</Tag>
+          ) : (
+            <Tag color="default">无课</Tag>
+          )}
           <Tag>{roleNamesStr(item.role_names)}</Tag>
         </Space>
         <Space size={16}>

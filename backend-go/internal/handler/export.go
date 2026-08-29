@@ -201,6 +201,10 @@ func dateRange(c *gin.Context) (*time.Time, *time.Time, bool) {
 		badReq(c, "end_date 格式错误")
 		return nil, nil, false
 	}
+	if start != nil && end != nil && start.After(*end) {
+		badReq(c, "开始日期不能晚于结束日期")
+		return nil, nil, false
+	}
 	return start, end, true
 }
 
@@ -657,6 +661,10 @@ func (h *Stats) ExportTeacherSummary(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if start == nil || end == nil {
+		badReq(c, "导出必须选择日期区间")
+		return
+	}
 	f.Start, f.End = start, end
 	u := middleware.CurrentUser(c)
 	list, _, err := h.svc.TeacherEvaluationSummary(h.db, u, f)
@@ -672,11 +680,16 @@ func (h *Stats) ExportTeacherSummary(c *gin.Context) {
 			row[k] = v
 		}
 		row["role_names"] = strings.Join(roleNames, ",")
+		if with, _ := item["has_courses"].(bool); with {
+			row["has_courses"] = "有课"
+		} else {
+			row["has_courses"] = "无课"
+		}
 		rows = append(rows, row)
 	}
 	cols := exportFields(c, []xlsxCol{
 		{"teacher_name", "教师姓名"}, {"user_no", "工号"}, {"college_name", "学院"},
-		{"role_names", "角色"}, {"given_count", "评教次数"}, {"given_avg_score", "评教平均给分"},
+		{"role_names", "角色"}, {"has_courses", "是否有课"}, {"given_count", "评教次数"}, {"given_avg_score", "评教平均给分"},
 		{"given_teacher_count", "评教教师数"}, {"received_count", "被评教次数"},
 		{"received_avg_score", "被评教平均得分"}, {"received_evaluator_count", "评教人数"},
 		{"total_tasks", "总任务数"}, {"evaluated_tasks", "已评任务数"},

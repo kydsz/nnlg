@@ -311,7 +311,7 @@ export interface TeacherEvaluationSummary {
   received_avg_score?: number
   task_count?: number
   evaluation_rate?: number
-  has_schedule?: boolean
+  has_courses?: boolean
 }
 
 export interface SyncResult {
