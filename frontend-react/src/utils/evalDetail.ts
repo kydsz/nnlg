@@ -48,6 +48,41 @@ export function isImageArray(v: unknown): v is string[] {
   )
 }
 
+/**
+ * 解析维度 field_config 中的选项映射（value -> label）。
+ * 兼容 config.options 为对象数组，或历史遗留的二次编码 JSON 字符串。
+ */
+export function optionLabelMap(fieldConfig: unknown): Map<string, string> {
+  const map = new Map<string, string>()
+  if (!fieldConfig || typeof fieldConfig !== 'object') return map
+  let options: unknown = (fieldConfig as { options?: unknown }).options
+  if (typeof options === 'string') {
+    try {
+      options = JSON.parse(options)
+    } catch {
+      return map
+    }
+  }
+  if (!Array.isArray(options)) return map
+  for (const o of options) {
+    if (!o || typeof o !== 'object') continue
+    const rec = o as { label?: unknown; value?: unknown }
+    const label = rec.label == null ? '' : String(rec.label)
+    const value = rec.value == null ? '' : String(rec.value)
+    map.set(value === '' ? label : value, label || value)
+  }
+  return map
+}
+
+/** 单选/多选原始值转显示文本（选项未匹配时保留原值） */
+export function formatChoiceText(v: unknown, labels: Map<string, string>): string | undefined {
+  const list = (Array.isArray(v) ? (v as unknown[]) : [v])
+    .map((x) => String(x))
+    .filter((x) => x !== '' && x !== 'null' && x !== 'undefined')
+  if (list.length === 0) return undefined
+  return list.map((x) => labels.get(x) || x).join('、')
+}
+
 /** 判断字符串数组是否为文件（非图片）URL 数组 */
 export function isFileArray(v: unknown): v is string[] {
   return (
@@ -156,11 +191,17 @@ function groupFromSchema(
         grp.score += v
         if (maxScore) grp.max_score += maxScore
       }
+      // 单选/多选：原始值映射为中文标签
+      let displayValue: string | undefined
+      if (ft === 'single_choice' || ft === 'multiple_choice') {
+        displayValue = formatChoiceText(v, optionLabelMap((dim as { field_config?: unknown }).field_config))
+      }
       grp.rows.push({
         code: dim.code,
         name: dim.name || dim.code,
         field_type: ft,
         value: v,
+        display_value: displayValue,
         score,
         max_score: maxScore,
       })
@@ -205,11 +246,7 @@ export function buildEvalPrintHtml(detail: EvaluationRecord): string {
           } else {
             valHtml = escapeHtml(r.display_value || formatValueText(r.value))
           }
-          const scoreText =
-            typeof r.score === 'number'
-              ? ` <b style="color:#c00">${r.score}/${r.max_score ?? ''}分</b>`
-              : ''
-          return `<tr><td style="border:1px solid #ddd;padding:6px;width:35%">${escapeHtml(r.name)}</td><td style="border:1px solid #ddd;padding:6px">${valHtml}${scoreText}</td></tr>`
+          return `<tr><td style="border:1px solid #ddd;padding:6px;width:35%">${escapeHtml(r.name)}</td><td style="border:1px solid #ddd;padding:6px">${valHtml}</td></tr>`
         })
         .join('')
       const groupScore =

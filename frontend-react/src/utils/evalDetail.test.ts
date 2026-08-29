@@ -12,6 +12,8 @@ import {
   formatValueText,
   groupEvaluationDimensions,
   buildEvalPrintHtml,
+  optionLabelMap,
+  formatChoiceText,
 } from '@/utils/evalDetail'
 
 function makeRecord(overrides: Partial<EvaluationRecord> = {}): EvaluationRecord {
@@ -213,6 +215,114 @@ describe('groupEvaluationDimensions - 新格式 dimension_groups', () => {
       })
     )
     expect(groups[0].key).toBe('7')
+  })
+})
+
+describe('optionLabelMap / formatChoiceText', () => {
+  const cfg = {
+    options: [
+      { label: '考勤', value: 'present' },
+      { label: '未考勤', value: 'absent' },
+      { label: '教材', value: '' },
+    ],
+  }
+
+  it('value 映射到 label', () => {
+    const map = optionLabelMap(cfg)
+    expect(map.get('present')).toBe('考勤')
+    expect(map.get('absent')).toBe('未考勤')
+  })
+
+  it('value 留空时回退到 label', () => {
+    expect(optionLabelMap(cfg).get('教材')).toBe('教材')
+  })
+
+  it('兼容二次编码的 options JSON 字符串', () => {
+    const map = optionLabelMap({ options: '[{"label":"教学大纲","value":"syllabus"}]' })
+    expect(map.get('syllabus')).toBe('教学大纲')
+  })
+
+  it('空/非法配置返回空映射', () => {
+    expect(optionLabelMap(null).size).toBe(0)
+    expect(optionLabelMap({}).size).toBe(0)
+    expect(optionLabelMap('不是JSON').size).toBe(0)
+  })
+
+  it('多选 join 为顿号，无匹配时保留原值', () => {
+    const map = optionLabelMap(cfg)
+    expect(formatChoiceText(['present', 'absent'], map)).toBe('考勤、未考勤')
+    expect(formatChoiceText('present', map)).toBe('考勤')
+    expect(formatChoiceText(['syllabus'], map)).toBe('syllabus')
+  })
+})
+
+describe('groupEvaluationDimensions - 单选/多选映射中文标签', () => {
+  const schema: DimensionSchemaGroup[] = [
+    {
+      id: 1,
+      name: '课堂情况',
+      group_code: 'attendance',
+      dimensions: [
+        {
+          code: 'att',
+          name: '课堂考勤',
+          field_type: 'single_choice',
+          field_config: {
+            options: [
+              { label: '考勤', value: 'present' },
+              { label: '未考勤', value: 'absent' },
+            ],
+          },
+        },
+        {
+          code: 'docs',
+          name: '教学文档',
+          field_type: 'multiple_choice',
+          field_config: {
+            options: [
+              { label: '教学大纲', value: 'syllabus' },
+              { label: '教材', value: 'textbook' },
+            ],
+          },
+        },
+      ],
+    },
+  ]
+
+  it('原始选项值映射为中文标签', () => {
+    const groups = groupEvaluationDimensions(
+      makeRecord({
+        dimension_values: { att: 'present', docs: ['syllabus', 'textbook'] },
+        dimension_groups: schema,
+      })
+    )
+    expect(groups[0].rows[0].display_value).toBe('考勤')
+    expect(groups[0].rows[1].display_value).toBe('教学大纲、教材')
+    // 值保持原始数据不变，仅展示值映射
+    expect(groups[0].rows[0].value).toBe('present')
+  })
+
+  it('未命中的值保留原值显示', () => {
+    const groups = groupEvaluationDimensions(
+      makeRecord({
+        dimension_values: { att: 'n/a', docs: ['syllabus'] },
+        dimension_groups: schema,
+      })
+    )
+    expect(groups[0].rows[0].display_value).toBe('n/a')
+    expect(groups[0].rows[1].display_value).toBe('教学大纲')
+  })
+
+  it('缺 field_config 时不报错，显示原始值', () => {
+    const groups = groupEvaluationDimensions(
+      makeRecord({
+        dimension_values: { att: 'present' },
+        dimension_groups: [
+          { id: 1, name: 'G', group_code: 'g', dimensions: [{ code: 'att', name: '课堂考勤', field_type: 'single_choice' }] },
+        ],
+      })
+    )
+    expect(groups[0].rows[0].display_value).toBe('present')
   })
 })
 

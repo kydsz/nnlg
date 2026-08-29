@@ -215,11 +215,6 @@ export default function Evaluations() {
                   {g.rows.map((row) => (
                     <Descriptions.Item key={row.code} label={row.name}>
                       <ValueRender value={row.value} displayValue={row.display_value} />
-                      {typeof row.score === 'number' && row.max_score ? (
-                        <span style={{ color: '#c00', marginLeft: 8 }}>
-                          {row.score}/{row.max_score}分
-                        </span>
-                      ) : null}
                     </Descriptions.Item>
                   ))}
                 </Descriptions>

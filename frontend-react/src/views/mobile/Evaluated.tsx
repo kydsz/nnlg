@@ -292,11 +292,6 @@ function ValueRow({ row }: { row: EvalDetailRow }) {
         ) : (
           <span>{row.display_value || formatValueText(row.value)}</span>
         )}
-        {typeof row.score === 'number' && row.max_score ? (
-          <span style={{ color: '#c00', marginLeft: 8 }}>
-            {row.score}/{row.max_score}分
-          </span>
-        ) : null}
       </div>
     </div>
   )
