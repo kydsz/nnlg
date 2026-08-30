@@ -570,7 +570,7 @@ DELETE /dimensions/{dim_id}                                                     
 ### 获取任务列表
 
 ```http
-GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1&has_supervisor_eval=false&create_by=1&create_by_not=2
+GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1&has_supervisor_eval=false&create_by=1&create_by_not=2&start_date=2026-08-31&end_date=2027-01-18
 ```
 
 **查询参数**:
@@ -586,6 +586,8 @@ GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1
 | has_supervisor_eval | bool | 否 | 按督导已评筛选 |
 | create_by | int | 否 | 按创建者筛选 |
 | create_by_not | int | 否 | 排除创建者 |
+| start_date | string | 否 | 开始日期 `YYYY-MM-DD`，按上课时间（class_time）筛选 |
+| end_date | string | 否 | 结束日期 `YYYY-MM-DD`（含当天），按上课时间筛选；须不早于 start_date |
 
 **响应示例**:
 
@@ -675,10 +677,10 @@ POST /tasks/export
 **请求体**:
 
 ```json
-{ "status": 1, "college_id": 1, "keyword": "高等", "fields": ["task_id", "teacher_name", "course_name", "class_time", "classroom", "college_name", "status_name", "evaluation_count", "has_supervisor_eval", "create_time"] }
+{ "status": 1, "college_id": 1, "keyword": "高等", "start_date": "2026-08-31", "end_date": "2027-01-18", "fields": ["task_id", "teacher_name", "course_name", "class_time", "classroom", "college_name", "status_name", "evaluation_count", "has_supervisor_eval", "create_time"] }
 ```
 
-返回 XLSX 附件（`fields` 为空时使用默认列）。
+`start_date` / `end_date` 与列表接口一致，按上课时间筛选；格式 `YYYY-MM-DD`。返回 XLSX 附件（`fields` 为空时使用默认列）。
 
 ### 更新/取消/删除
 

@@ -14,6 +14,7 @@ import {
   DatePicker,
   type GetProp,
 } from 'antd'
+import dayjs from 'dayjs'
 import { PlusOutlined, SearchOutlined, DownloadOutlined, LoadingOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { taskApi, type TaskPayload } from '@/api/modules/tasks'
@@ -22,11 +23,19 @@ import { downloadBlob, exportFilename } from '@/utils/download'
 import type { Task, User } from '@/api/types'
 import { taskStatusInfo, formatDate } from '@/utils/format'
 import { useDebounce } from '@/hooks/useDebounce'
+import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
 
 export default function Tasks() {
   const { message } = App.useApp()
   const qc = useQueryClient()
-  const [params, setParams] = useState<{ page: number; page_size: number; keyword?: string; status?: number }>({
+  const [params, setParams] = useState<{
+    page: number
+    page_size: number
+    keyword?: string
+    status?: number
+    start_date?: string
+    end_date?: string
+  }>({
     page: 1,
     page_size: 20,
   })
@@ -37,12 +46,14 @@ export default function Tasks() {
   const [editing, setEditing] = useState<Task | null>(null)
   const [form] = Form.useForm()
   const [batchForm] = Form.useForm()
+  // 默认日期区间：当前学期（开学日 ~ 开学日+weeks×7天），手动选择后以手动值为准
+  const { effective: dates, onRange } = useSemesterRangePicker()
 
   const effectiveKeyword = debouncedSearch
 
   const { data, isLoading } = useQuery({
-    queryKey: ['tasks', params, effectiveKeyword],
-    queryFn: () => taskApi.list({ ...params, keyword: effectiveKeyword }),
+    queryKey: ['tasks', params, effectiveKeyword, dates],
+    queryFn: () => taskApi.list({ ...params, keyword: effectiveKeyword, start_date: dates[0], end_date: dates[1] }),
   })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['tasks'] })
@@ -150,6 +161,12 @@ export default function Tasks() {
     <div>
       <h3 className="page-title">评教任务</h3>
       <div className="filter-bar">
+        <DatePicker.RangePicker
+          value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
+          onChange={(v) =>
+            onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
+          }
+        />
         <Input
           allowClear
           prefix={<SearchOutlined />}
@@ -199,7 +216,14 @@ export default function Tasks() {
         <Button
           icon={<DownloadOutlined />}
           loading={exportMut.isPending}
-          onClick={() => exportMut.mutate({ ...params, keyword: effectiveKeyword })}
+          onClick={() =>
+            exportMut.mutate({
+              ...params,
+              keyword: effectiveKeyword,
+              start_date: dates[0],
+              end_date: dates[1],
+            })
+          }
         >
           导出
         </Button>

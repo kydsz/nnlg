@@ -337,6 +337,8 @@ func (h *Task) Export(c *gin.Context) {
 		CollegeID *int     `json:"college_id"`
 		Keyword   string   `json:"keyword"`
 		Fields    []string `json:"fields"`
+		StartDate string   `json:"start_date"`
+		EndDate   string   `json:"end_date"`
 	}
 	if err := c.ShouldBindJSON(&p); err != nil {
 		response.FailValidation(c, []map[string]interface{}{{
@@ -345,6 +347,25 @@ func (h *Task) Export(c *gin.Context) {
 		return
 	}
 	u := middleware.CurrentUser(c)
+
+	var start, end *time.Time
+	var err error
+	if p.StartDate != "" {
+		if start, err = parseDatePtr(p.StartDate); err != nil {
+			badReq(c, "start_date 格式错误")
+			return
+		}
+	}
+	if p.EndDate != "" {
+		if end, err = parseDatePtr(p.EndDate); err != nil {
+			badReq(c, "end_date 格式错误")
+			return
+		}
+	}
+	if start != nil && end != nil && start.After(*end) {
+		badReq(c, "开始日期不能晚于结束日期")
+		return
+	}
 
 	// 权限范围（对齐旧端：教师=本学院；督导非管理=全校；其余非系统管理员=可管理学院）
 	var scope []int // nil 表示全校
@@ -371,7 +392,7 @@ func (h *Task) Export(c *gin.Context) {
 		scope = []int{*p.CollegeID}
 	}
 
-	f := service.TaskFilters{Status: p.Status, Keyword: p.Keyword, CollegeIDs: scope}
+	f := service.TaskFilters{Status: p.Status, Keyword: p.Keyword, CollegeIDs: scope, Start: start, End: end}
 	f.Page, f.PageSize = 1, 10000
 	tasks, _, err := h.svc.List(h.db, u, f)
 	if err != nil {

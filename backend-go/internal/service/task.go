@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"backend-go/internal/model"
 
@@ -23,6 +24,7 @@ type TaskFilters struct {
 	HasSupervisorEval *bool
 	CreateBy          *int
 	CreateByNot       *int
+	Start, End        *time.Time // 按上课时间（class_time）筛选学期区间
 	Page, PageSize    int
 }
 
@@ -45,6 +47,13 @@ func (s *Task) buildQuery(db *gorm.DB, f TaskFilters, caller *model.User) (*gorm
 	}
 	if f.Status != nil {
 		q = q.Where("status = ?", *f.Status)
+	}
+	if f.Start != nil {
+		q = q.Where("class_time >= ?", *f.Start)
+	}
+	if f.End != nil {
+		// end 为结束日期（含当天），上界取次日零点
+		q = q.Where("class_time < ?", f.End.AddDate(0, 0, 1))
 	}
 	if f.TeacherID != nil {
 		q = q.Where("teacher_id = ?", *f.TeacherID)

@@ -10,6 +10,8 @@ export interface TaskListParams {
   has_supervisor_eval?: boolean
   create_by?: number
   create_by_not?: number
+  start_date?: string
+  end_date?: string
 }
 
 export interface TaskPayload {
