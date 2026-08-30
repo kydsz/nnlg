@@ -70,12 +70,13 @@ jobs:
           cache: npm
           cache-dependency-path: frontend-react/package-lock.json
 
-      - name: Frontend unit tests (vitest)
+      - name: Frontend unit tests (vitest) + type check
         if: matrix.name == 'frontend-react'
         working-directory: frontend-react
         run: |
           npm ci
           npm test
+          npx tsc -b
 
   # ====================== 构建 + 推送镜像 ======================
   build-and-push:
