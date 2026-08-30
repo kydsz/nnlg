@@ -45,7 +45,8 @@ export default function ScheduleGrid({ courses, loading, meta, onCellClick }: Pr
           class_info: c.class_info,
           student_count: c.student_count,
         }
-        if (!arr.some((x) => x.course_name === item.course_name)) {
+        // 同一小节内按课程身份键去重（同课名不同班级/教师/教室视为不同课程）
+        if (!arr.some((x) => cellKey(x) === cellKey(item))) {
           arr.push(item)
         }
         map.set(key, arr)
@@ -144,7 +145,6 @@ export default function ScheduleGrid({ courses, loading, meta, onCellClick }: Pr
             <tr key={slot.label}>
               <td style={{ ...tdStyle, fontSize: 12, background: '#fafafa' }}>
                 <div>{slot.label}</div>
-                <div style={{ opacity: 0.7 }}>{slot.time}</div>
               </td>
               {WEEK_DAYS.map((_, colIdx) => {
                 const weekDay = colIdx + 1
@@ -154,7 +154,10 @@ export default function ScheduleGrid({ courses, loading, meta, onCellClick }: Pr
                 for (const s of [firstSection, firstSection + 1]) {
                   const arr = courseMap.get(`${weekDay}-${String(s).padStart(2, '0')}`)
                   if (arr) {
-                    for (const c of arr) if (!cells.includes(c)) cells.push(c)
+                    // 两小节合成一个大节：按课程身份键去重，同课名不同班级/教师/教室不算重复
+                    for (const c of arr) {
+                      if (!cells.some((x) => cellKey(x) === cellKey(c))) cells.push(c)
+                    }
                   }
                 }
                 const key = `${weekDay}-${rowIdx}`
@@ -216,6 +219,13 @@ const thStyle: React.CSSProperties = {
   background: '#fafafa',
   fontWeight: 500,
 }
+
+/**
+ * 课程身份去重键：用课程名 + 教室 + 班级信息 + 周次联合标识一门课。
+ * 同课名不同班级/教师/教室视为不同课程；同一门课跨两小节拆出的多条记录键相同，可正确去重。
+ */
+const cellKey = (c: CellCourse) =>
+  [c.course_name, c.classroom, c.class_info, c.week_pattern].join('|')
 
 /** 统一行高：保证每个课程格尺寸一致，不随内容变化 */
 const ROW_HEIGHT = 72
