@@ -154,6 +154,31 @@ func (h *Stats) Campus(c *gin.Context) {
 	response.OK(c, out)
 }
 
+// Campuses 校区评教统计列表（按校区逐行聚合）
+func (h *Stats) Campuses(c *gin.Context) {
+	var err error
+	var start, end *time.Time
+	if start, err = parseDatePtr(c.Query("start_date")); err != nil {
+		badReq(c, "start_date 格式错误")
+		return
+	}
+	if end, err = parseDatePtr(c.Query("end_date")); err != nil {
+		badReq(c, "end_date 格式错误")
+		return
+	}
+	if start != nil && end != nil && start.After(*end) {
+		badReq(c, "开始日期不能晚于结束日期")
+		return
+	}
+	u := middleware.CurrentUser(c)
+	list, total, err := h.svc.CampusStatsList(h.db, u, start, end)
+	if err != nil {
+		serverErr(c, "查询失败")
+		return
+	}
+	response.OK(c, gin.H{"list": list, "total": total})
+}
+
 // CollegeTeachers 指定学院教师评教详情
 func (h *Stats) CollegeTeachers(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("college_id"))

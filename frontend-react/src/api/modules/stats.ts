@@ -47,6 +47,9 @@ export const statsApi = {
   campus: (params?: RecordQuery) =>
     request<unknown[]>({ url: '/stats/campus', method: 'GET', params }),
 
+  campuses: (params?: RecordQuery) =>
+    request<PageData<Record<string, unknown>>>({ url: '/stats/campuses', method: 'GET', params }),
+
   supervisors: (params?: RecordQuery) =>
     request<PageData<SupervisorStat>>({ url: '/stats/supervisors', method: 'GET', params }),
 

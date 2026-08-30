@@ -152,11 +152,10 @@ function CollegeStatsTab() {
 function CampusStatsTab() {
   const { effective: dates, onRange } = useSemesterRangePicker()
   const { data, isLoading } = useQuery({
-    queryKey: ['stats', 'campus', dates],
-    queryFn: () => statsApi.campus({ start_date: dates[0], end_date: dates[1] }),
+    queryKey: ['stats', 'campuses', dates],
+    queryFn: () => statsApi.campuses({ start_date: dates[0], end_date: dates[1] }),
   })
-  // /stats/campus 返回单个校区（或"全部校区"）的汇总对象，转为单行渲染
-  const rows = (Array.isArray(data) ? data : data ? [data] : []) as Record<string, unknown>[]
+  const rows = (data?.list || []) as Record<string, unknown>[]
   return (
     <div>
       <div className="filter-bar" style={{ marginBottom: 12 }}>

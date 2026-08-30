@@ -743,6 +743,66 @@ func (s *Stats) CampusStats(db *gorm.DB, viewer *model.User, campusID *int, star
 	}, nil
 }
 
+// ---------- /stats/campuses ----------
+
+// CampusStatsList 校区评教统计列表（按校区逐行聚合，对齐 CollegeStatsList 口径：以学期 class_time 区间统计任务）
+func (s *Stats) CampusStatsList(db *gorm.DB, viewer *model.User, start, end *time.Time) ([]map[string]interface{}, int64, error) {
+	// 未指定日期时，默认按当前学期汇总
+	if start == nil && end == nil {
+		start, end = currentSemesterRange(db)
+	}
+	scope := collegeScopeFor(viewer)
+
+	cq := db.Model(&model.Campus{}).Where("status = 1").Order("id ASC")
+	if scope != nil {
+		if len(scope) == 0 {
+			return []map[string]interface{}{}, 0, nil
+		}
+		cq = cq.Where("id IN (SELECT DISTINCT campus_id FROM college WHERE id IN ? AND status = 1)", scope)
+	}
+	var campuses []model.Campus
+	cq.Find(&campuses)
+
+	semester, _ := currentSemesterOf(db)
+	list := make([]map[string]interface{}, 0, len(campuses))
+	for _, campus := range campuses {
+		var colleges []model.College
+		db.Where("status = 1 AND campus_id = ?", campus.ID).Find(&colleges)
+		cids := make([]int, 0, len(colleges))
+		for _, c := range colleges {
+			cids = append(cids, c.ID)
+		}
+		_, teacherIDs := collegeTeacherIDs(db, cids)
+		withCourses := teachersWithCourses(db, teacherIDs, semester)
+		courseIDs := make([]int, 0, len(withCourses))
+		for id := range withCourses {
+			courseIDs = append(courseIDs, id)
+		}
+
+		total, evaluated, pending, evaluations, _ := taskStatsFor(db, taskStatsInput{
+			TeacherIDs: courseIDs, ClassStart: start, ClassEnd: end,
+		})
+		withTasks := distinctTeachersWithTasks(db, courseIDs, start, end)
+
+		coverage := 0.0
+		if len(courseIDs) > 0 {
+			coverage = round2(float64(withTasks) / float64(len(courseIDs)) * 100)
+		}
+		evalRate := 0.0
+		if total > 0 {
+			evalRate = round2(float64(evaluated) / float64(total) * 100)
+		}
+		list = append(list, map[string]interface{}{
+			"campus_id": campus.ID, "campus_name": campus.Name,
+			"teacher_count": len(courseIDs),
+			"total_tasks":   total, "evaluated_tasks": evaluated, "pending_tasks": pending,
+			"total_evaluations": evaluations, "coverage_rate": coverage,
+			"evaluation_rate":   evalRate,
+		})
+	}
+	return list, int64(len(campuses)), nil
+}
+
 // ---------- /stats/college-teachers/{college_id} ----------
 
 // CollegeTeacherDetails 指定学院教师评教详情

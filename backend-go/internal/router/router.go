@@ -218,6 +218,7 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		stats.GET("/college", statsH.College)
 		stats.GET("/colleges", statsH.Colleges)
 		stats.GET("/campus", statsH.Campus)
+		stats.GET("/campuses", statsH.Campuses)
 		stats.GET("/college-teachers/:college_id", statsH.CollegeTeachers)
 		stats.GET("/supervisors", statsH.Supervisors)
 		stats.GET("/evaluators", statsH.Evaluators)
