@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { List, Tag, Button, Dialog, Input, Toast, NavBar, Picker, Popup } from 'antd-mobile'
+import { List, Tag, Button, Dialog, Input, Toast, NavBar, Picker } from 'antd-mobile'
 import { AppOutline } from 'antd-mobile-icons'
 import { authApi } from '@/api/modules/auth'
 import { userApi } from '@/api/modules/users'
@@ -42,11 +42,11 @@ export default function Profile() {
     ],
   ]
 
-  const saveRoom = async () => {
-    const val = roomSelected?.[0] ?? ''
+  const saveRoom = async (val?: string) => {
+    const roomVal = val ?? roomSelected?.[0] ?? ''
     try {
-      await userApi.updateMyResearchRoom(val ? Number(val) : null)
-      const picked = (rooms?.list || []).find((r) => String(r.id) === val)
+      await userApi.updateMyResearchRoom(roomVal ? Number(roomVal) : null)
+      const picked = (rooms?.list || []).find((r) => String(r.id) === roomVal)
       if (user) {
         setUser({
           ...user,
@@ -171,19 +171,18 @@ export default function Profile() {
         }}
       />
 
-      <Popup visible={roomOpen} onMaskClick={() => setRoomOpen(false)} destroyOnClose>
-        <div style={{ padding: 12 }}>
-          <Picker
-            columns={roomColumns}
-            value={roomSelected ?? ['']}
-            onConfirm={(v) => {
-              setRoomSelected(v as string[])
-              saveRoom()
-            }}
-            onCancel={() => setRoomOpen(false)}
-          />
-        </div>
-      </Popup>
+      <Picker
+        visible={roomOpen}
+        columns={roomColumns}
+        value={roomSelected ?? ['']}
+        title="选择教研室"
+        onClose={() => setRoomOpen(false)}
+        onConfirm={(v) => {
+          setRoomSelected(v as string[])
+          saveRoom((v as string[])[0])
+        }}
+        onCancel={() => setRoomOpen(false)}
+      />
     </div>
   )
 }
