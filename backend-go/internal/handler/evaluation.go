@@ -215,11 +215,27 @@ func (h *Evaluation) Delete(c *gin.Context) {
 		return
 	}
 	u := middleware.CurrentUser(c)
-	if err := h.svc.Delete(h.db, u, id); err != nil {
+	rec, err := h.svc.Delete(h.db, u, id)
+	if err != nil {
 		badReq(c, err.Error())
 		return
 	}
-	service.LogRecord(h.db, &u.ID, u.Username, "delete", "evaluation", &id, "evaluation_record", nil)
+	// 操作日志：记录被删评教的教师/课程/评教人等上下文，便于审计追查
+	content := map[string]interface{}{
+		"task_id":       rec.TaskID,
+		"evaluator_name": rec.EvaluatorName,
+		"is_anonymous":  rec.IsAnonymous,
+	}
+	if rec.SubmitTime != nil {
+		content["submit_time"] = rec.SubmitTime
+	}
+	var t model.EvaluationTask
+	if err := h.db.Where("id = ?", rec.TaskID).First(&t).Error; err == nil {
+		content["teacher_id"] = t.TeacherID
+		content["teacher_name"] = t.TeacherName
+		content["course_name"] = t.CourseName
+	}
+	service.LogRecord(h.db, &u.ID, u.Username, "delete", "evaluation", &rec.ID, "evaluation_record", content)
 	response.OKMsg(c, "删除成功", nil)
 }
 

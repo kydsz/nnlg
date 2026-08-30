@@ -182,7 +182,8 @@ function RecordList({ type, userId }: { type: EvalType; userId: number }) {
                 onClick={() => {
                   Dialog.confirm({
                     title: '确认删除',
-                    content: '确定要删除这条评教记录吗？',
+                    content:
+                      '删除后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化。确定要删除这条评教记录吗？',
                     confirmText: '删除',
                     cancelText: '取消',
                     onConfirm: () => delMut(detail.id),

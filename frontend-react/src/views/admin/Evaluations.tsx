@@ -20,10 +20,12 @@ import {
 } from '@/utils/evalDetail'
 import type { EvaluationRecord } from '@/api/types'
 import { formatDate } from '@/utils/format'
+import { useAuthStore } from '@/stores/auth'
 
 export default function Evaluations() {
   const { message } = App.useApp()
   const qc = useQueryClient()
+  const canDelete = useAuthStore((s) => s.hasPermission('evaluation:delete'))
   const [params, setParams] = useState<{ page: number; page_size: number; keyword?: string; teacher_id?: number }>({ page: 1, page_size: 20 })
   const [keyword, setKeyword] = useState('')
   const [detailId, setDetailId] = useState<number | null>(null)
@@ -99,11 +101,20 @@ export default function Evaluations() {
           <Button size="small" onClick={() => setDetailId(record.id)}>
             详情
           </Button>
-          <Popconfirm title="确认删除？" onConfirm={() => delMut.mutate(record.id)}>
-            <Button size="small" danger>
-              删除
-            </Button>
-          </Popconfirm>
+          {canDelete && (
+            <Popconfirm
+              title="确认删除该评教记录？"
+              description="删除后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化，且该操作不可恢复。"
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => delMut.mutate(record.id)}
+            >
+              <Button size="small" danger>
+                删除
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -174,14 +185,20 @@ export default function Evaluations() {
               >
                 导出
               </Button>
-              <Popconfirm
-                title="确认删除该记录？"
-                onConfirm={() => delMut.mutate(detail.id)}
-              >
-                <Button danger size="small">
-                  删除
-                </Button>
-              </Popconfirm>
+              {canDelete && (
+                <Popconfirm
+                  title="确认删除该评教记录？"
+                  description="删除后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化，且该操作不可恢复。"
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => delMut.mutate(detail.id)}
+                >
+                  <Button danger size="small">
+                    删除
+                  </Button>
+                </Popconfirm>
+              )}
             </Space>
           )
         }
