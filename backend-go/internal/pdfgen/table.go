@@ -2,6 +2,7 @@ package pdfgen
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/signintech/gopdf"
 )
@@ -100,6 +101,23 @@ func RenderTablePDF(title string, cols []TableCol, rows []map[string]interface{}
 	return gp.GetBytesPdfReturnErr()
 }
 
+// DerefValue 递归解引用导出单元格中的指针字段（*string/*float64/*bool 等）。
+// 返回 (底层值, true) 表示确实解引用了一级或多级指针；非指针输入返回 (v, false)；nil 指针返回 (nil, true)。
+// 用于避免 fmt 把标量指针按 %p 渲染成 0x... 内存地址。
+func DerefValue(v interface{}) (interface{}, bool) {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() || rv.Kind() != reflect.Ptr {
+		return nil, false
+	}
+	for rv.Kind() == reflect.Ptr {
+		if rv.IsNil() {
+			return nil, true
+		}
+		rv = rv.Elem()
+	}
+	return rv.Interface(), true
+}
+
 // cellText 单元格值转文本（对齐旧端 str(value)）
 func cellText(v interface{}) string {
 	switch n := v.(type) {
@@ -115,6 +133,12 @@ func cellText(v interface{}) string {
 	case string:
 		return n
 	default:
+		if u, ok := DerefValue(n); ok {
+			if u == nil {
+				return ""
+			}
+			return cellText(u)
+		}
 		return fmt.Sprintf("%v", n)
 	}
 }

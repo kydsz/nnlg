@@ -33,6 +33,10 @@ func displayWidth(v interface{}) int {
 	case float32:
 		s = strconv.FormatFloat(float64(n), 'f', -1, 64)
 	default:
+		// 指针字段需解引用后参与宽度计算，避免按 0x... 内存地址估宽
+		if u, ok := pdfgen.DerefValue(n); ok {
+			return displayWidth(u)
+		}
 		s = fmt.Sprint(n)
 	}
 	w := 0
@@ -68,6 +72,14 @@ func cellValue(v interface{}) interface{} {
 		}
 		return n
 	default:
+		// 导出行可能传入 *string/*float64/*bool 等指针字段，
+		// 先解引用再取值，避免 fmt 把指针渲染成 0x... 内存地址
+		if u, ok := pdfgen.DerefValue(n); ok {
+			if u == nil {
+				return ""
+			}
+			return cellValue(u)
+		}
 		return fmt.Sprint(n)
 	}
 }
