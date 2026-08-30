@@ -155,7 +155,8 @@ function CampusStatsTab() {
     queryKey: ['stats', 'campus', dates],
     queryFn: () => statsApi.campus({ start_date: dates[0], end_date: dates[1] }),
   })
-  const rows = (Array.isArray(data) ? data : []) as Record<string, unknown>[]
+  // /stats/campus 返回单个校区（或"全部校区"）的汇总对象，转为单行渲染
+  const rows = (Array.isArray(data) ? data : data ? [data] : []) as Record<string, unknown>[]
   return (
     <div>
       <div className="filter-bar" style={{ marginBottom: 12 }}>
@@ -167,7 +168,7 @@ function CampusStatsTab() {
         />
       </div>
       <Table<Record<string, unknown>>
-        rowKey={(r) => String(r.campus_id ?? r.id)}
+        rowKey={(r) => String(r.campus_id ?? r.campus_name ?? 'all')}
         loading={isLoading}
         size="small"
         pagination={false}
