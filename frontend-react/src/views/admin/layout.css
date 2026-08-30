@@ -265,9 +265,22 @@
 }
 
 /* ── Content ── */
+/*
+ * 内容区垂直居中：页面内容比视口矮时上下居中（避免"靠上"留大白边）；
+ * 内容超出时容器随文档自然撑高（main-wrapper 为 min-height），独子元素 margin auto
+ * 解析为 0，仍从顶部排布，不存在 flex 居中导致的上部裁切问题。
+ */
 .content {
   flex: 1;
   padding: 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+.content > * {
+  width: 100%;
+  margin-top: auto;
+  margin-bottom: auto;
 }
 
 /* ═══ Responsive ═══ */

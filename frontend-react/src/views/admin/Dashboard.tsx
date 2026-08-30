@@ -16,7 +16,7 @@ import { useNavigate } from 'react-router-dom'
 import type { ECharts } from 'echarts'
 
 const QUICK_LINKS: { path: string; label: string }[] = [
-  { path: '/admin/course-schedule', label: '课程表' },
+  { path: '/admin/course-schedule', label: '学期配置与课表查询' },
   { path: '/admin/data-sync', label: '数据同步' },
   { path: '/admin/users', label: '用户管理' },
   { path: '/admin/stats', label: '统计报表' },

@@ -43,7 +43,12 @@ const MENU: MenuItem[] = [
   },
   { key: '/admin/users', icon: <TeamOutlined />, label: '用户管理', perm: 'user:view' },
   { key: '/admin/roles', icon: <SafetyOutlined />, label: '角色管理', perm: 'role:manage' },
-  { key: '/admin/course-schedule', icon: <CalendarOutlined />, label: '课程表', perm: 'schedule:view' },
+  {
+    key: '/admin/course-schedule',
+    icon: <CalendarOutlined />,
+    label: '学期配置与课表查询',
+    perm: 'schedule:view',
+  },
   { key: '/admin/data-sync', icon: <SyncOutlined />, label: '数据同步', perm: 'sync:execute' },
   { key: '/admin/dimensions', icon: <TagsOutlined />, label: '评教维度', perm: 'dimension:manage' },
   { key: '/admin/tasks', icon: <FileTextOutlined />, label: '评教任务', perm: 'task:view' },
