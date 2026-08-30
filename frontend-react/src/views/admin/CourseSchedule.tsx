@@ -18,7 +18,6 @@ import type { GetProp } from 'antd'
 import { PlusOutlined, DeleteOutlined, LoadingOutlined } from '@ant-design/icons'
 import { scheduleApi } from '@/api/modules/schedule'
 import { orgApi } from '@/api/modules/org'
-import { userApi } from '@/api/modules/users'
 import ScheduleGrid from '@/components/ScheduleGrid'
 import { formatSemester, generateSemesters } from '@/utils/format'
 import { useDebounce } from '@/hooks/useDebounce'
@@ -252,10 +251,9 @@ function TeacherSelect({
     const id = ++reqId.current
     setLoading(true)
     try {
-      const res = await userApi.list({
+      const res = await scheduleApi.teachers({
         page: p,
         page_size: PAGE_SIZE,
-        role: 'teacher',
         keyword: kw || undefined,
         college_id: collegeId,
       })

@@ -1,5 +1,5 @@
 import { request } from '../http'
-import type { CourseItem, PageData, SemesterConfig, TeacherSchedule } from '../types'
+import type { CourseItem, PageData, SemesterConfig, TeacherSchedule, User } from '../types'
 
 export const scheduleApi = {
   list: (params?: {
@@ -26,6 +26,14 @@ export const scheduleApi = {
       method: 'GET',
       params: { semester },
     }),
+
+  teachers: (params?: {
+    page?: number
+    page_size?: number
+    keyword?: string
+    college_id?: string | number
+    research_room_id?: number
+  }) => request<PageData<User>>({ url: '/course-schedules/teachers', method: 'GET', params }),
 
   semesters: () => request<string[]>({ url: '/course-schedules/semesters', method: 'GET' }),
 

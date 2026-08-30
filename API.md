@@ -826,6 +826,7 @@ GET /files/*filepath
 GET    /course-schedules/list?page=&page_size=&semester=&teacher_id=&teacher_name=   # 课表列表
 GET    /course-schedules/detail/{schedule_id}                                        # 课表详情
 GET    /course-schedules/teacher/{teacher_id}?semester=2024-2025-1                   # 教师课表
+GET    /course-schedules/teachers?page=&page_size=&keyword=&college_id=&research_room_id=  # 教师列表（课表选教师用）
 GET    /course-schedules/my-schedule?semester=2024-2025-1                            # 我的课表（教师）
 GET    /course-schedules/versions?semester=2024-2025-1                               # 版本历史
 GET    /course-schedules/teacher-status?semester=2024-2025-1                         # 教师课表同步状态（semester 必填）

@@ -15,7 +15,6 @@ import {
 import { SetOutline } from 'antd-mobile-icons'
 import { scheduleApi } from '@/api/modules/schedule'
 import { orgApi } from '@/api/modules/org'
-import { userApi } from '@/api/modules/users'
 import { taskApi } from '@/api/modules/tasks'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -36,7 +35,11 @@ export default function Schedule() {
   const qc = useQueryClient()
   const user = useAuthStore((s) => s.user)
   const hasPermission = useAuthStore((s) => s.hasPermission)
-  const canViewUsers = hasPermission('user:view')
+  // 能查看他人课表：管理员（user:view）或督导（schedule:view + 督导角色）；普通教师仅看本人课表
+  const SUPERVISOR_ROLES = ['supervisor', 'school_supervisor', 'college_supervisor']
+  const isSupervisor = (user?.roles || []).some((r) => SUPERVISOR_ROLES.includes(r))
+  const canViewOthers =
+    hasPermission('user:view') || (hasPermission('schedule:view') && isSupervisor)
   const userId = user?.id
 
   // 学期
@@ -62,23 +65,23 @@ export default function Schedule() {
     }
   }, [currentCfg, dynamicSemesters, semester])
 
-  // 教师选择（有 user:view 权限时弹层选教师）
+  // 教师选择（管理员/督导可弹层选教师查看课表）
   const [selectedTeacher, setSelectedTeacher] = useState<{ id: number; name: string } | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   useEffect(() => {
-    if (canViewUsers) setPickerOpen(true)
+    if (canViewOthers) setPickerOpen(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canViewUsers])
+  }, [canViewOthers])
 
   // 课表数据：选了教师 → teacher/:id；否则本人 my-schedule
-  const targetTeacherId = selectedTeacher?.id ?? (canViewUsers ? undefined : userId)
+  const targetTeacherId = selectedTeacher?.id ?? (canViewOthers ? undefined : userId)
   const { data: scheduleData, isLoading } = useQuery({
     queryKey: ['schedule', 'mobile', targetTeacherId, semester],
     queryFn: () =>
       targetTeacherId
         ? scheduleApi.byTeacher(targetTeacherId, semester)
         : scheduleApi.mySchedule(semester),
-    enabled: !!semester && (targetTeacherId != null || !canViewUsers),
+    enabled: !!semester && (targetTeacherId != null || !canViewOthers),
   })
 
   // 起始日：API → localStorage → 默认值
@@ -165,7 +168,7 @@ export default function Schedule() {
     if (addedSet.has(key)) return
     let teacherId: number | undefined
     if (selectedTeacher) teacherId = selectedTeacher.id
-    else if (!canViewUsers && userId != null) teacherId = userId
+    else if (!canViewOthers && userId != null) teacherId = userId
     else if (scheduleData?.teacher_id) teacherId = scheduleData.teacher_id
     if (!teacherId) {
       Toast.show({ content: '无法获取教师信息', icon: 'fail' })
@@ -201,10 +204,10 @@ export default function Schedule() {
             size="small"
             fill="none"
             onClick={() => {
-              if (canViewUsers) setPickerOpen(true)
+              if (canViewOthers) setPickerOpen(true)
             }}
           >
-            {selectedTeacher ? `教师：${selectedTeacher.name}` : canViewUsers ? '选择教师' : ''}
+            {selectedTeacher ? `教师：${selectedTeacher.name}` : canViewOthers ? '选择教师' : ''}
           </Button>
         }
       >
@@ -494,10 +497,9 @@ function TeacherPicker({
   } = useInfiniteQuery({
     queryKey: ['picker-teachers', collegeId, roomId, debouncedKeyword || undefined],
     queryFn: ({ pageParam }) =>
-      userApi.list({
+      scheduleApi.teachers({
         page: pageParam,
         page_size: 50,
-        role: 'teacher',
         keyword: debouncedKeyword || undefined,
         college_id: collegeId,
         research_room_id: roomId,

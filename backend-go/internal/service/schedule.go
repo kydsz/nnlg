@@ -114,6 +114,45 @@ func (s *Schedule) List(db *gorm.DB, f ScheduleFilters, page, pageSize int) ([]m
 	return list, total, err
 }
 
+// TeacherFilter 教师列表查询参数（课表选教师用，仅需 schedule:view）
+type TeacherFilter struct {
+	Page           int
+	PageSize       int
+	Keyword        string
+	CollegeID      string // 支持逗号分隔多个学院 ID
+	ResearchRoomID string
+}
+
+// ListTeachers 分页查询教师（主角色 teacher 或 user_role 关联 teacher）
+func (s *Schedule) ListTeachers(db *gorm.DB, f TeacherFilter) ([]model.User, int64, error) {
+	q := db.Model(&model.User{}).Where("status = 1")
+	if f.Keyword != "" {
+		kw := "%" + f.Keyword + "%"
+		q = q.Where("user_no LIKE ? OR username LIKE ?", kw, kw)
+	}
+	roles := []string{model.RoleTeacher}
+	q = q.Where("`user`.`role` IN ? OR `user`.`id` IN (SELECT user_id FROM user_role WHERE role IN ?)", roles, roles)
+	if f.CollegeID != "" {
+		ids := splitInts(f.CollegeID)
+		q = q.Where("`user`.`college_id` IN ? OR `user`.`id` IN (SELECT user_id FROM user_college WHERE college_id IN ?)", ids, ids)
+	}
+	if f.ResearchRoomID != "" {
+		q = q.Where("`user`.`research_room_id` = ? OR `user`.`id` IN (SELECT user_id FROM user_research_room WHERE research_room_id = ?)", f.ResearchRoomID, f.ResearchRoomID)
+	}
+	var total int64
+	if err := q.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var users []model.User
+	err := q.Session(&gorm.Session{}).
+		Preload("College").
+		Preload("ResearchRoom").
+		Order("username ASC, id ASC").
+		Offset((f.Page - 1) * f.PageSize).Limit(f.PageSize).
+		Find(&users).Error
+	return users, total, err
+}
+
 // studentCountRe 对齐旧端 re.findall(r'\((\d+)\)')，仅匹配半角括号
 var studentCountRe = regexp.MustCompile(`\((\d+)\)`)
 

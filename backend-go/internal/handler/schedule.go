@@ -102,6 +102,37 @@ func (h *Schedule) ByTeacher(c *gin.Context) {
 	response.OK(c, h.svc.ByTeacher(h.db, teacherID, c.Query("semester")))
 }
 
+// Teachers 教师列表（课表选教师用，仅需 schedule:view）
+func (h *Schedule) Teachers(c *gin.Context) {
+	page, pageSize := pageOf(c)
+	f := service.TeacherFilter{
+		Page:           page,
+		PageSize:       pageSize,
+		Keyword:        c.Query("keyword"),
+		CollegeID:      c.Query("college_id"),
+		ResearchRoomID: c.Query("research_room_id"),
+	}
+	users, total, err := h.svc.ListTeachers(h.db, f)
+	if err != nil {
+		serverErr(c, "查询失败")
+		return
+	}
+	list := []gin.H{}
+	for i := range users {
+		u := &users[i]
+		list = append(list, gin.H{
+			"id":                u.ID,
+			"user_no":           u.UserNo,
+			"username":          u.Username,
+			"college_id":        u.CollegeID,
+			"college_name":      collegeName(u.College),
+			"research_room_id":  u.ResearchRoomID,
+			"research_room_name": roomName(u.ResearchRoom),
+		})
+	}
+	response.OK(c, gin.H{"list": list, "total": total, "page": page, "page_size": pageSize})
+}
+
 // CurrentSemester 当前学期配置
 func (h *Schedule) CurrentSemester(c *gin.Context) {
 	var cfg model.SemesterConfig
