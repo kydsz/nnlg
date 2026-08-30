@@ -683,7 +683,11 @@ func (s *Stats) CollegeStatsList(db *gorm.DB, viewer *model.User, f CollegeStats
 // ---------- /stats/campus ----------
 
 // CampusStats 校区评教统计
-func (s *Stats) CampusStats(db *gorm.DB, viewer *model.User, campusID *int) (map[string]interface{}, error) {
+func (s *Stats) CampusStats(db *gorm.DB, viewer *model.User, campusID *int, start, end *time.Time) (map[string]interface{}, error) {
+	// 未指定日期时，默认按当前学期汇总
+	if start == nil && end == nil {
+		start, end = currentSemesterRange(db)
+	}
 	scope := collegeScopeFor(viewer)
 
 	cq := db.Model(&model.College{}).Where("status = 1")
@@ -726,7 +730,7 @@ func (s *Stats) CampusStats(db *gorm.DB, viewer *model.User, campusID *int) (map
 	}
 
 	_, teacherIDs := collegeTeacherIDs(db, cids)
-	total, evaluated, pending, evaluations, _ := taskStatsFor(db, taskStatsInput{TeacherIDs: teacherIDs})
+	total, evaluated, pending, evaluations, _ := taskStatsFor(db, taskStatsInput{TeacherIDs: teacherIDs, ClassStart: start, ClassEnd: end})
 	evalRate := 0.0
 	if total > 0 {
 		evalRate = round2(float64(evaluated) / float64(total) * 100)
@@ -982,8 +986,12 @@ func (s *Stats) EvaluatorStats(db *gorm.DB, viewer *model.User, f PersonStatsFil
 
 // ---------- /stats/unteached-teachers ----------
 
-// UnteachedTeachers 未被听课教师列表
-func (s *Stats) UnteachedTeachers(db *gorm.DB, viewer *model.User, collegeID *int, page, pageSize int) ([]map[string]interface{}, int64, error) {
+// UnteachedTeachers 未被听课教师列表（指定日期区间内无评教任务；未指定日期默认按当前学期）
+func (s *Stats) UnteachedTeachers(db *gorm.DB, viewer *model.User, collegeID *int, start, end *time.Time, page, pageSize int) ([]map[string]interface{}, int64, error) {
+	// 未指定日期时，默认按当前学期区间
+	if start == nil && end == nil {
+		start, end = currentSemesterRange(db)
+	}
 	scope := collegeScopeFor(viewer)
 	target := collegeID
 	if target != nil && scope != nil {
@@ -1007,8 +1015,9 @@ func (s *Stats) UnteachedTeachers(db *gorm.DB, viewer *model.User, collegeID *in
 		target = &scope[0]
 	}
 
-	q := db.Model(&model.User{}).Where("status = 1 AND " + teacherCondAlias("user") +
-		" AND NOT EXISTS (SELECT 1 FROM evaluation_task t WHERE t.teacher_id = user.id)")
+	q := db.Model(&model.User{}).Where("status = 1 AND "+teacherCondAlias("user")+
+		" AND NOT EXISTS (SELECT 1 FROM evaluation_task t WHERE t.teacher_id = user.id AND t.class_time >= ? AND t.class_time < ?)",
+		*start, *end)
 	if target != nil {
 		q = q.Where("college_id = ?", *target)
 	} else if scope != nil {

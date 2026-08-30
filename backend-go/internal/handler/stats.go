@@ -131,8 +131,22 @@ func (h *Stats) Colleges(c *gin.Context) {
 
 // Campus 校区评教统计
 func (h *Stats) Campus(c *gin.Context) {
+	var err error
+	var start, end *time.Time
+	if start, err = parseDatePtr(c.Query("start_date")); err != nil {
+		badReq(c, "start_date 格式错误")
+		return
+	}
+	if end, err = parseDatePtr(c.Query("end_date")); err != nil {
+		badReq(c, "end_date 格式错误")
+		return
+	}
+	if start != nil && end != nil && start.After(*end) {
+		badReq(c, "开始日期不能晚于结束日期")
+		return
+	}
 	u := middleware.CurrentUser(c)
-	out, err := h.svc.CampusStats(h.db, u, qInt(c, "campus_id"))
+	out, err := h.svc.CampusStats(h.db, u, qInt(c, "campus_id"), start, end)
 	if err != nil {
 		badReq(c, err.Error())
 		return
@@ -227,8 +241,22 @@ func (h *Stats) Evaluators(c *gin.Context) {
 // UnteachedTeachers 未被听课教师
 func (h *Stats) UnteachedTeachers(c *gin.Context) {
 	page, pageSize := pageOf(c)
+	var err error
+	var start, end *time.Time
+	if start, err = parseDatePtr(c.Query("start_date")); err != nil {
+		badReq(c, "start_date 格式错误")
+		return
+	}
+	if end, err = parseDatePtr(c.Query("end_date")); err != nil {
+		badReq(c, "end_date 格式错误")
+		return
+	}
+	if start != nil && end != nil && start.After(*end) {
+		badReq(c, "开始日期不能晚于结束日期")
+		return
+	}
 	u := middleware.CurrentUser(c)
-	list, total, err := h.svc.UnteachedTeachers(h.db, u, qInt(c, "college_id"), page, pageSize)
+	list, total, err := h.svc.UnteachedTeachers(h.db, u, qInt(c, "college_id"), start, end, page, pageSize)
 	if err != nil {
 		badReq(c, err.Error())
 		return

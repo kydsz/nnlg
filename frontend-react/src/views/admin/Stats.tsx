@@ -150,34 +150,52 @@ function CollegeStatsTab() {
 }
 
 function CampusStatsTab() {
+  const { effective: dates, onRange } = useSemesterRangePicker()
   const { data, isLoading } = useQuery({
-    queryKey: ['stats', 'campus'],
-    queryFn: () => statsApi.campus(),
+    queryKey: ['stats', 'campus', dates],
+    queryFn: () => statsApi.campus({ start_date: dates[0], end_date: dates[1] }),
   })
   const rows = (Array.isArray(data) ? data : []) as Record<string, unknown>[]
   return (
-    <Table<Record<string, unknown>>
-      rowKey={(r) => String(r.campus_id ?? r.id)}
-      loading={isLoading}
-      size="small"
-      pagination={false}
-      dataSource={rows}
-      columns={[
-        { title: '校区', dataIndex: 'campus_name' },
-        { title: '教师数', dataIndex: 'teacher_count', width: 90 },
-        { title: '总任务', dataIndex: 'total_tasks', width: 90 },
-        { title: '已评', dataIndex: 'evaluated_tasks', width: 80 },
-        { title: '评教记录数', dataIndex: 'total_evaluations', width: 100 },
-        { title: '完成率(%)', dataIndex: 'evaluation_rate', width: 100 },
-      ]}
-    />
+    <div>
+      <div className="filter-bar" style={{ marginBottom: 12 }}>
+        <DatePicker.RangePicker
+          value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
+          onChange={(v) =>
+            onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
+          }
+        />
+      </div>
+      <Table<Record<string, unknown>>
+        rowKey={(r) => String(r.campus_id ?? r.id)}
+        loading={isLoading}
+        size="small"
+        pagination={false}
+        dataSource={rows}
+        columns={[
+          { title: '校区', dataIndex: 'campus_name' },
+          { title: '教师数', dataIndex: 'teacher_count', width: 90 },
+          { title: '总任务', dataIndex: 'total_tasks', width: 90 },
+          { title: '已评', dataIndex: 'evaluated_tasks', width: 80 },
+          { title: '评教记录数', dataIndex: 'total_evaluations', width: 100 },
+          { title: '完成率(%)', dataIndex: 'evaluation_rate', width: 100 },
+        ]}
+      />
+    </div>
   )
 }
 
 function UnteachedTab() {
+  const { effective: dates, onRange } = useSemesterRangePicker()
   const { data, isLoading } = useQuery({
-    queryKey: ['stats', 'unteached'],
-    queryFn: () => statsApi.unteachedTeachers({ page: 1, page_size: 100 }),
+    queryKey: ['stats', 'unteached', dates],
+    queryFn: () =>
+      statsApi.unteachedTeachers({
+        page: 1,
+        page_size: 100,
+        start_date: dates[0],
+        end_date: dates[1],
+      }),
   })
   const rows = (data?.list || []) as {
     id: number
@@ -187,19 +205,29 @@ function UnteachedTab() {
     research_room_name?: string
   }[]
   return (
-    <Table<(typeof rows)[number]>
-      rowKey="id"
-      loading={isLoading}
-      size="small"
-      pagination={false}
-      dataSource={rows}
-      columns={[
-        { title: '工号', dataIndex: 'user_no', width: 110 },
-        { title: '姓名', dataIndex: 'username', width: 120 },
-        { title: '学院', dataIndex: 'college_name', width: 200, ellipsis: true },
-        { title: '教研室', dataIndex: 'research_room_name', width: 300, ellipsis: true },
-      ]}
-    />
+    <div>
+      <div className="filter-bar" style={{ marginBottom: 12 }}>
+        <DatePicker.RangePicker
+          value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
+          onChange={(v) =>
+            onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
+          }
+        />
+      </div>
+      <Table<(typeof rows)[number]>
+        rowKey="id"
+        loading={isLoading}
+        size="small"
+        pagination={false}
+        dataSource={rows}
+        columns={[
+          { title: '工号', dataIndex: 'user_no', width: 110 },
+          { title: '姓名', dataIndex: 'username', width: 120 },
+          { title: '学院', dataIndex: 'college_name', width: 200, ellipsis: true },
+          { title: '教研室', dataIndex: 'research_room_name', width: 300, ellipsis: true },
+        ]}
+      />
+    </div>
   )
 }
 

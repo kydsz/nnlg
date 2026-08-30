@@ -959,10 +959,10 @@ GET /stats/college-teachers/{college_id}                 # 指定学院教师评
 ### 校区评教统计
 
 ```http
-GET /stats/campus?campus_id=1
+GET /stats/campus?campus_id=1&start_date=&end_date=
 ```
 
-不传 `campus_id` 则统计所有校区。
+不传 `campus_id` 则统计所有校区；不传日期默认按当前学期区间。
 
 ### 督导/评教人统计
 
@@ -989,10 +989,10 @@ GET /stats/evaluators?page=&page_size=&college_ids=&keyword=&evaluator_roles=&st
 ### 未被听课教师
 
 ```http
-GET /stats/unteached-teachers?page=&page_size=&college_id=
+GET /stats/unteached-teachers?page=&page_size=&college_id=&start_date=&end_date=
 ```
 
-不传 `college_id` 时按当前用户数据范围返回。
+不传 `college_id` 时按当前用户数据范围返回；不传日期默认按当前学期区间，返回该区间内无评教任务的教师。
 
 ### 评教记录合并统计
 
