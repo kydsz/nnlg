@@ -25,7 +25,15 @@ type SemesterInfo struct {
 	EndDate   string `json:"end_date"`
 }
 
-const semesterDays = 140 // 学期约 20 周
+const defaultSemesterWeeks = 20
+
+// semesterDurationDays 学期总天数：周数可配置，未配置（<=0）按默认 20 周
+func semesterDurationDays(weeks int) int {
+	if weeks <= 0 {
+		weeks = defaultSemesterWeeks
+	}
+	return weeks * 7
+}
 
 // CurrentSemesterByDate 按日期推算当前学期（对齐旧端 _get_current_semester，不查库）
 func (s *Schedule) CurrentSemesterByDate() SemesterInfo {
@@ -47,7 +55,7 @@ func (s *Schedule) CurrentSemesterByDate() SemesterInfo {
 	return SemesterInfo{
 		Semester:  sem,
 		StartDate: start.Format("2006-01-02"),
-		EndDate:   start.AddDate(0, 0, semesterDays).Format("2006-01-02"),
+		EndDate:   start.AddDate(0, 0, semesterDurationDays(0)).Format("2006-01-02"),
 	}
 }
 
@@ -60,7 +68,7 @@ func (s *Schedule) CurrentSemester(db *gorm.DB) (*SemesterInfo, error) {
 		return &SemesterInfo{
 			Semester:  cfg.Semester,
 			StartDate: start.Format("2006-01-02"),
-			EndDate:   start.AddDate(0, 0, semesterDays).Format("2006-01-02"),
+			EndDate:   start.AddDate(0, 0, semesterDurationDays(cfg.Weeks)).Format("2006-01-02"),
 		}, nil
 	}
 	info := s.CurrentSemesterByDate()
@@ -334,18 +342,18 @@ func (s *Schedule) SemesterConfigBySemester(db *gorm.DB, semester string) (*mode
 }
 
 // CreateSemesterConfig 新建学期配置（is_current 互斥）
-func (s *Schedule) CreateSemesterConfig(db *gorm.DB, semester string, startDate time.Time, isCurrent bool) (*model.SemesterConfig, error) {
+func (s *Schedule) CreateSemesterConfig(db *gorm.DB, semester string, startDate time.Time, weeks int, isCurrent bool) (*model.SemesterConfig, error) {
 	existing, _ := s.SemesterConfigBySemester(db, semester)
 	if existing != nil {
 		return nil, errors.New("该学期配置已存在")
 	}
-	return s.upsertSemesterConfig(db, nil, semester, &startDate, &isCurrent)
+	return s.upsertSemesterConfig(db, nil, semester, &startDate, &weeks, &isCurrent)
 }
 
 // UpdateSemesterConfig 更新学期配置（不存在则创建，对齐旧端 update_config 的 upsert 行为）
-func (s *Schedule) UpdateSemesterConfig(db *gorm.DB, semester string, startDate *time.Time, isCurrent *bool) (*model.SemesterConfig, error) {
+func (s *Schedule) UpdateSemesterConfig(db *gorm.DB, semester string, startDate *time.Time, weeks *int, isCurrent *bool) (*model.SemesterConfig, error) {
 	existing, _ := s.SemesterConfigBySemester(db, semester)
-	return s.upsertSemesterConfig(db, existing, semester, startDate, isCurrent)
+	return s.upsertSemesterConfig(db, existing, semester, startDate, weeks, isCurrent)
 }
 
 // DeleteSemesterConfig 删除学期配置（当前学期不可删除）
@@ -360,11 +368,15 @@ func (s *Schedule) DeleteSemesterConfig(db *gorm.DB, semester string) error {
 	return db.Delete(&model.SemesterConfig{}, cfg.ID).Error
 }
 
-func (s *Schedule) upsertSemesterConfig(db *gorm.DB, existing *model.SemesterConfig, semester string, startDate *time.Time, isCurrent *bool) (*model.SemesterConfig, error) {
+func (s *Schedule) upsertSemesterConfig(db *gorm.DB, existing *model.SemesterConfig, semester string, startDate *time.Time, weeks *int, isCurrent *bool) (*model.SemesterConfig, error) {
 	var cfg model.SemesterConfig
 	err := db.Transaction(func(tx *gorm.DB) error {
 		if existing == nil {
-			cfg = model.SemesterConfig{Semester: semester, StartDate: model.LocalDate(*startDate), IsCurrent: false}
+			w := defaultSemesterWeeks
+			if weeks != nil {
+				w = *weeks
+			}
+			cfg = model.SemesterConfig{Semester: semester, StartDate: model.LocalDate(*startDate), Weeks: w, IsCurrent: false}
 			if isCurrent != nil {
 				cfg.IsCurrent = *isCurrent
 			}
@@ -380,6 +392,10 @@ func (s *Schedule) upsertSemesterConfig(db *gorm.DB, existing *model.SemesterCon
 		if startDate != nil {
 			updates["start_date"] = *startDate
 			cfg.StartDate = model.LocalDate(*startDate)
+		}
+		if weeks != nil {
+			updates["weeks"] = *weeks
+			cfg.Weeks = *weeks
 		}
 		if isCurrent != nil && *isCurrent {
 			if err := tx.Model(&model.SemesterConfig{}).Where("is_current = 1").Update("is_current", false).Error; err != nil {

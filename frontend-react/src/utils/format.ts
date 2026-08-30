@@ -72,37 +72,43 @@ export function taskStatusInfo(status: number): { text: string; color: string } 
 
 /* ═══ 周次工具（对齐旧前端 / 后端 parse_week_pattern）═══ */
 
-/** 解析周次模式为具体周集合；无法解析时返回 null 表示"恒真"（全周） */
-export function parseWeekPattern(pattern: string | null | undefined): number[] | null {
+/** 解析周次模式为具体周集合；无法解析时返回 null 表示"恒真"（全周）
+ *  weeks：学期总周数，单/双周按不超过该周数生成，默认 20 */
+export function parseWeekPattern(
+  pattern: string | null | undefined,
+  weeks = 20
+): number[] | null {
   if (!pattern) return null
   const p = pattern.trim()
+  const total = weeks <= 0 ? 20 : weeks
   if (!p || p === '全周' || p === '全部' || p === '每周') return null
   if (p === '单周' || p === '奇数周') {
-    return Array.from({ length: 10 }, (_, i) => i * 2 + 1) // 1,3,...,19
+    return Array.from({ length: Math.ceil(total / 2) }, (_, i) => i * 2 + 1) // 1,3,...(≤ total)
   }
   if (p === '双周' || p === '偶数周') {
-    return Array.from({ length: 10 }, (_, i) => i * 2 + 2) // 2,4,...,20
+    return Array.from({ length: Math.floor(total / 2) }, (_, i) => i * 2 + 2) // 2,4,...(≤ total)
   }
-  const weeks = new Set<number>()
+  const weeksSet = new Set<number>()
   // 形如 "1-12周"、"1-2,4,7-8周"、"9周"（可能带"周"字后缀与逗号/顿号分隔）
   const re = /(\d+)\s*[-–~]\s*(\d+)|(\d+)/g
   let m: RegExpExecArray | null
   while ((m = re.exec(p))) {
     if (m[1] && m[2]) {
-      for (let i = Number(m[1]); i <= Number(m[2]); i++) weeks.add(i)
+      for (let i = Number(m[1]); i <= Number(m[2]); i++) weeksSet.add(i)
     } else if (m[3]) {
-      weeks.add(Number(m[3]))
+      weeksSet.add(Number(m[3]))
     }
   }
-  return weeks.size > 0 ? [...weeks].sort((a, b) => a - b) : null
+  return weeksSet.size > 0 ? [...weeksSet].sort((a, b) => a - b) : null
 }
 
-/** 课程在指定周是否上课 */
+/** 课程在指定周是否上课（weeks 为学期总周数，默认 20） */
 export function isCourseInWeek(
   weekPattern: string | null | undefined,
-  week: number
+  week: number,
+  weeks = 20
 ): boolean {
-  const set = parseWeekPattern(weekPattern)
+  const set = parseWeekPattern(weekPattern, weeks)
   return set === null || set.includes(week)
 }
 
@@ -114,11 +120,11 @@ export function defaultSemesterStart(semester: string): string {
   return term === '2' ? `${y2}-02-17` : `${y1}-09-01`
 }
 
-/** 当前教学周：起始日起第 1 周，限 1-20 */
-export function currentWeekOf(startDate: string): number {
+/** 当前教学周：起始日起第 1 周，限定在学期总周数内（默认 20） */
+export function currentWeekOf(startDate: string, weeks = 20): number {
   const diff = dayjs().startOf('day').diff(dayjs(startDate).startOf('day'), 'day')
   const week = Math.floor(diff / 7) + 1
-  return Math.min(Math.max(week, 1), 20)
+  return Math.min(Math.max(week, 1), weeks || 20)
 }
 
 /** 第 week 周中 weekDay(1=周一..7=周日) 的日期 */

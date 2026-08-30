@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import {
   Card,
@@ -18,10 +18,10 @@ import { DownloadOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { statsApi, type RecordQuery } from '@/api/modules/stats'
 import { orgApi } from '@/api/modules/org'
-import { scheduleApi } from '@/api/modules/schedule'
 import { roleApi } from '@/api/modules/roles'
 import ExportFieldSelector from '@/components/ExportFieldSelector'
 import { useDebounce } from '@/hooks/useDebounce'
+import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
 import { downloadBlob, exportFilename } from '@/utils/download'
 import { roleNamesStr } from '@/utils/roleNames'
 import { formatDate } from '@/utils/format'
@@ -40,8 +40,8 @@ export default function TeacherEvaluationSummary() {
   const [collegeIds, setCollegeIds] = useState<string[]>([])
   const [roles, setRoles] = useState<string[]>([])
   const [hasSchedule, setHasSchedule] = useState<boolean | undefined>(undefined)
-  const [dates, setDates] = useState<[string?, string?]>([])
-  const datesInitRef = useRef(false)
+  // 默认日期区间：当前学期（开学日 ~ 开学日+20周），学期变更后数据随之变动
+  const { effective: dates, onRange } = useSemesterRangePicker()
   const [sortBy, setSortBy] = useState<string | undefined>()
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [search, setSearch] = useState('')
@@ -62,21 +62,6 @@ export default function TeacherEvaluationSummary() {
     () => (roleListRes?.list || []).map((r) => ({ label: r.name, value: r.code })),
     [roleListRes]
   )
-  const { data: currentSemester } = useQuery({
-    queryKey: ['current-semester'],
-    queryFn: () => scheduleApi.currentSemester(),
-  })
-
-  // 显式默认日期区间：当前学期开学日 ~ 今天，展示在日期选择器中供用户确认/修改
-  useEffect(() => {
-    if (!datesInitRef.current && currentSemester?.start_date) {
-      datesInitRef.current = true
-      const start = dayjs(currentSemester.start_date)
-      const today = dayjs()
-      if (start.isAfter(today)) return
-      setDates([start.format('YYYY-MM-DD'), today.format('YYYY-MM-DD')])
-    }
-  }, [currentSemester]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const params: RecordQuery = {
     page,
@@ -146,8 +131,9 @@ export default function TeacherEvaluationSummary() {
             onChange={(v) => setHasSchedule(v === 'yes' ? true : v === 'no' ? false : undefined)}
           />
           <DatePicker.RangePicker
+            value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
             onChange={(v) =>
-              setDates(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : [])
+              onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
             }
           />
           <Select

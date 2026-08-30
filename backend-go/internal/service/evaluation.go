@@ -207,6 +207,7 @@ type EvaluationFilters struct {
 	CollegeID      string
 	TeacherName    string
 	Type           string // received / sent / 空
+	Start, End     *time.Time
 	Page, PageSize int
 }
 
@@ -288,6 +289,12 @@ func (s *Evaluation) buildRecordQuery(db *gorm.DB, viewer *model.User, f Evaluat
 	}
 	if f.TeacherName != "" {
 		q = q.Where("t.teacher_name LIKE ?", "%"+f.TeacherName+"%")
+	}
+	if f.Start != nil {
+		q = q.Where("r.submit_time >= ?", *f.Start)
+	}
+	if f.End != nil {
+		q = q.Where("r.submit_time < ?", *f.End)
 	}
 	return q, nil
 }

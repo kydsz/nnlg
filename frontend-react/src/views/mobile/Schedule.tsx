@@ -90,6 +90,8 @@ export default function Schedule() {
     queryFn: () => scheduleApi.semesterConfig(semester!),
     enabled: !!semester,
   })
+  /** 学期总周数：按配置，未配置默认 20 */
+  const semesterWeeks = semCfg?.weeks || 20
   useEffect(() => {
     if (!semester) return
     const fromLs = localStorage.getItem(lsKey)
@@ -103,8 +105,8 @@ export default function Schedule() {
   }, [semester, semCfg, lsKey])
 
   const currentWeek = useMemo(
-    () => (startDate ? currentWeekOf(startDate) : 1),
-    [startDate]
+    () => (startDate ? currentWeekOf(startDate, semesterWeeks) : 1),
+    [startDate, semesterWeeks]
   )
   const [selectedWeek, setSelectedWeek] = useState<number | null>(null)
   const week = selectedWeek ?? currentWeek
@@ -152,7 +154,7 @@ export default function Schedule() {
       let m: RegExpExecArray | null
       while ((m = re.exec(String(d.section ?? '')))) nums.push(Number(m[1]))
       if (!nums.some((n) => sections.includes(n))) return false
-      return isCourseInWeek(d.week_pattern as string, week)
+      return isCourseInWeek(d.week_pattern as string, week, semesterWeeks)
     })
   }
 
@@ -265,9 +267,9 @@ export default function Schedule() {
         </div>
       )}
 
-      {/* 20 周次横向 Tab */}
+      {/* 周次横向 Tab（按学期配置周数） */}
       <div style={{ display: 'flex', gap: 6, overflowX: 'auto', padding: '8px 12px' }}>
-        {Array.from({ length: 20 }, (_, i) => i + 1).map((w) => {
+        {Array.from({ length: semesterWeeks }, (_, i) => i + 1).map((w) => {
           const isActive = w === week
           const isCurrent = w === currentWeek
           return (

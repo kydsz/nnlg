@@ -5,6 +5,7 @@ import {
   Button,
   Form,
   Input,
+  InputNumber,
   Select,
   Space,
   App,
@@ -61,7 +62,7 @@ export default function CourseSchedule() {
   }
 
   const updateMut = useMutation({
-    mutationFn: ({ semester, data }: { semester: string; data: { start_date?: string; is_current?: boolean } }) =>
+    mutationFn: ({ semester, data }: { semester: string; data: { start_date?: string; weeks?: number; is_current?: boolean } }) =>
       scheduleApi.updateSemesterConfig(semester, data),
     onSuccess: () => {
       message.success('保存成功')
@@ -71,7 +72,7 @@ export default function CourseSchedule() {
   })
 
   const createMut = useMutation({
-    mutationFn: (values: { semester: string; start_date: string; is_current?: boolean }) =>
+    mutationFn: (values: { semester: string; start_date: string; weeks?: number; is_current?: boolean }) =>
       scheduleApi.createSemesterConfig(values),
     onSuccess: () => {
       message.success('学期配置已创建')
@@ -102,7 +103,7 @@ export default function CourseSchedule() {
 
   return (
     <div>
-      <h3 className="page-title">课表管理</h3>
+      <h3 className="page-title">学期配置与课表查询</h3>
 
       {/* 学期配置 */}
       <Card size="small" title="学期配置" style={{ marginBottom: 16 }}>
@@ -126,6 +127,22 @@ export default function CourseSchedule() {
                           semester: c.semester,
                           data: { start_date: e.target.value },
                         })
+                      }
+                    }}
+                  />
+                  <span style={{ color: '#666', fontSize: 12 }}>周数</span>
+                  <InputNumber
+                    size="small"
+                    min={1}
+                    max={52}
+                    step={1}
+                    defaultValue={c.weeks || 20}
+                    style={{ width: 76 }}
+                    onBlur={(e) => {
+                      const v = Number((e.target as HTMLInputElement).value)
+                      const old = c.weeks || 20
+                      if (Number.isInteger(v) && v >= 1 && v <= 52 && v !== old) {
+                        updateMut.mutate({ semester: c.semester, data: { weeks: v } })
                       }
                     }}
                   />
@@ -319,7 +336,7 @@ function CreateSemesterForm({
   loading,
 }: {
   existing: string[]
-  onCreate: (v: { semester: string; start_date: string; is_current?: boolean }) => void
+  onCreate: (v: { semester: string; start_date: string; weeks?: number; is_current?: boolean }) => void
   loading: boolean
 }) {
   const [form] = Form.useForm()
@@ -333,6 +350,7 @@ function CreateSemesterForm({
         onCreate({
           semester: v.semester,
           start_date: v.start_date.format('YYYY-MM-DD'),
+          weeks: v.weeks,
           is_current: !!v.is_current,
         })
         form.resetFields()
@@ -355,6 +373,14 @@ function CreateSemesterForm({
         rules={[{ required: true, message: '选择开学日期' }]}
       >
         <DatePicker placeholder="开学日期" />
+      </Form.Item>
+      <Form.Item
+        name="weeks"
+        label="周数"
+        initialValue={20}
+        rules={[{ required: true, message: '填写周数' }]}
+      >
+        <InputNumber min={1} max={52} style={{ width: 90 }} />
       </Form.Item>
       <Form.Item name="is_current" valuePropName="checked">
         <Checkbox>设为当前学期</Checkbox>

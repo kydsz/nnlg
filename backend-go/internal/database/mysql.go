@@ -10,8 +10,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// Init 连接 MySQL。
-// 注意：表结构由现有数据库/SQL 迁移管理，此处不做 AutoMigrate。
+// Init 连接 MySQL 并自动执行幂等迁移。
+// 注意：业务表结构的主体仍由外部 SQL 迁移管理；Migrate 只负责增量、幂等的结构变更。
 func Init(cfg *config.Config) (*gorm.DB, error) {
 	logLevel := logger.Warn
 	if cfg.Debug {
@@ -22,6 +22,11 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		Logger: logger.Default.LogMode(logLevel),
 	})
 	if err != nil {
+		return nil, err
+	}
+
+	// 自动执行幂等迁移（列已存在自动跳过，可重复启动）
+	if err := Migrate(db); err != nil {
 		return nil, err
 	}
 

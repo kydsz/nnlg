@@ -2,8 +2,10 @@ import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { Table, Tabs, Card, Col, Row, Statistic, Button, App, DatePicker } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import type { ColumnsType } from 'antd/es/table'
 import { statsApi, type RecordQuery } from '@/api/modules/stats'
+import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
 import ExportFieldSelector from '@/components/ExportFieldSelector'
 import type { TeacherStat, CollegeStat, SupervisorStat, EvaluationRecord } from '@/api/types'
 import { downloadBlob, exportFilename } from '@/utils/download'
@@ -29,12 +31,20 @@ export default function Stats() {
 
 function TeacherStatsTab() {
   const { message } = App.useApp()
+  const { effective: dates, onRange } = useSemesterRangePicker()
   const { data, isLoading } = useQuery({
-    queryKey: ['stats', 'teachers'],
-    queryFn: () => statsApi.teachers({ page: 1, page_size: 100 }),
+    queryKey: ['stats', 'teachers', dates],
+    queryFn: () =>
+      statsApi.teachers({
+        page: 1,
+        page_size: 100,
+        start_date: dates[0],
+        end_date: dates[1],
+      }),
   })
   const exportMut = useMutation({
-    mutationFn: () => statsApi.exportTeachers({ format: 'xlsx' }),
+    mutationFn: () =>
+      statsApi.exportTeachers({ format: 'xlsx', start_date: dates[0], end_date: dates[1] }),
     onSuccess: (blob) => downloadBlob(blob, exportFilename('教师评教统计')),
     onError: (e) => message.error(e.message),
   })
@@ -52,14 +62,21 @@ function TeacherStatsTab() {
 
   return (
     <div>
-      <Button
-        icon={<DownloadOutlined />}
-        loading={exportMut.isPending}
-        style={{ marginBottom: 12 }}
-        onClick={() => exportMut.mutate()}
-      >
-        导出 xlsx
-      </Button>
+      <div className="filter-bar" style={{ marginBottom: 12 }}>
+        <DatePicker.RangePicker
+          value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
+          onChange={(v) =>
+            onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
+          }
+        />
+        <Button
+          icon={<DownloadOutlined />}
+          loading={exportMut.isPending}
+          onClick={() => exportMut.mutate()}
+        >
+          导出 xlsx
+        </Button>
+      </div>
       <Table<TeacherStat>
         rowKey="teacher_id"
         loading={isLoading}
@@ -76,12 +93,20 @@ function TeacherStatsTab() {
 
 function CollegeStatsTab() {
   const { message } = App.useApp()
+  const { effective: dates, onRange } = useSemesterRangePicker()
   const { data, isLoading } = useQuery({
-    queryKey: ['stats', 'colleges'],
-    queryFn: () => statsApi.colleges({ page: 1, page_size: 100 }),
+    queryKey: ['stats', 'colleges', dates],
+    queryFn: () =>
+      statsApi.colleges({
+        page: 1,
+        page_size: 100,
+        start_date: dates[0],
+        end_date: dates[1],
+      }),
   })
   const exportMut = useMutation({
-    mutationFn: () => statsApi.exportColleges({ format: 'xlsx' }),
+    mutationFn: () =>
+      statsApi.exportColleges({ format: 'xlsx', start_date: dates[0], end_date: dates[1] }),
     onSuccess: (blob) => downloadBlob(blob, exportFilename('学院评教统计')),
     onError: (e) => message.error(e.message),
   })
@@ -98,14 +123,21 @@ function CollegeStatsTab() {
 
   return (
     <div>
-      <Button
-        icon={<DownloadOutlined />}
-        loading={exportMut.isPending}
-        style={{ marginBottom: 12 }}
-        onClick={() => exportMut.mutate()}
-      >
-        导出 xlsx
-      </Button>
+      <div className="filter-bar" style={{ marginBottom: 12 }}>
+        <DatePicker.RangePicker
+          value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
+          onChange={(v) =>
+            onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
+          }
+        />
+        <Button
+          icon={<DownloadOutlined />}
+          loading={exportMut.isPending}
+          onClick={() => exportMut.mutate()}
+        >
+          导出 xlsx
+        </Button>
+      </div>
       <Table<CollegeStat>
         rowKey="college_id"
         loading={isLoading}
@@ -173,7 +205,7 @@ function UnteachedTab() {
 
 function SupervisorStatsTab() {
   const { message } = App.useApp()
-  const [dates, setDates] = useState<[string?, string?]>([])
+  const { effective: dates, onRange } = useSemesterRangePicker()
   const { data, isLoading } = useQuery({
     queryKey: ['stats', 'supervisors', dates],
     queryFn: () =>
@@ -198,10 +230,9 @@ function SupervisorStatsTab() {
     <div>
       <div className="filter-bar">
         <DatePicker.RangePicker
+          value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
           onChange={(v) =>
-            setDates(
-              v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : []
-            )
+            onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
           }
         />
         <Button
@@ -226,13 +257,20 @@ function SupervisorStatsTab() {
 function RecordsTab() {
   const { message } = App.useApp()
   const [exportOpen, setExportOpen] = useState(false)
+  const { effective: dates, onRange } = useSemesterRangePicker()
   const { data, isLoading } = useQuery({
-    queryKey: ['stats', 'evaluation-records'],
-    queryFn: () => statsApi.evaluationRecords({ page: 1, page_size: 20 }),
+    queryKey: ['stats', 'evaluation-records', dates],
+    queryFn: () =>
+      statsApi.evaluationRecords({
+        page: 1,
+        page_size: 20,
+        start_date: dates[0],
+        end_date: dates[1],
+      }),
   })
   const exportMut = useMutation({
     mutationFn: (fields: string[]) =>
-      statsApi.exportEvaluationRecords({ fields }),
+      statsApi.exportEvaluationRecords({ fields, start_date: dates[0], end_date: dates[1] }),
     onSuccess: (blob) => downloadBlob(blob, exportFilename('听课明细')),
     onError: (e) => message.error(e.message),
   })
@@ -251,13 +289,17 @@ function RecordsTab() {
 
   return (
     <div>
-      <Button
-        icon={<DownloadOutlined />}
-        style={{ marginBottom: 12 }}
-        onClick={() => setExportOpen(true)}
-      >
-        选择字段导出
-      </Button>
+      <div className="filter-bar" style={{ marginBottom: 12 }}>
+        <DatePicker.RangePicker
+          value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
+          onChange={(v) =>
+            onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
+          }
+        />
+        <Button icon={<DownloadOutlined />} onClick={() => setExportOpen(true)}>
+          选择字段导出
+        </Button>
+      </div>
       <Table<EvaluationRecord>
         rowKey="id"
         loading={isLoading}

@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Table, Button, Space, App, Popconfirm, Tag, Drawer, Input, Descriptions, Image } from 'antd'
+import { Table, Button, Space, App, Popconfirm, Tag, Drawer, Input, Descriptions, DatePicker, Image } from 'antd'
 import { DownloadOutlined, PrinterOutlined, SearchOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import type { ColumnsType } from 'antd/es/table'
 import { evaluationApi } from '@/api/modules/evaluations'
 import { statsApi } from '@/api/modules/stats'
+import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
 import { downloadBlob, exportFilename } from '@/utils/download'
 import ExportFieldSelector from '@/components/ExportFieldSelector'
 import {
@@ -26,10 +28,12 @@ export default function Evaluations() {
   const [keyword, setKeyword] = useState('')
   const [detailId, setDetailId] = useState<number | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
+  // 默认日期区间：当前学期（开学日 ~ 开学日+20周）
+  const { effective: dates, onRange } = useSemesterRangePicker()
 
   const { data, isLoading } = useQuery({
-    queryKey: ['evaluations', params],
-    queryFn: () => evaluationApi.list(params),
+    queryKey: ['evaluations', params, dates],
+    queryFn: () => evaluationApi.list({ ...params, start_date: dates[0], end_date: dates[1] }),
   })
 
   // 详情走独立接口：含分组 schema（打印不再"未分组"）、格式化的提交时间、满分合计
@@ -48,7 +52,7 @@ export default function Evaluations() {
 
   const exportMut = useMutation({
     mutationFn: (fields: string[]) =>
-      statsApi.exportEvaluationRecords({ ...params, fields }),
+      statsApi.exportEvaluationRecords({ ...params, fields, start_date: dates[0], end_date: dates[1] }),
     onSuccess: (blob) => downloadBlob(blob, exportFilename('评教记录')),
     onError: (e) => message.error(e.message),
   })
@@ -109,6 +113,12 @@ export default function Evaluations() {
     <div>
       <h3 className="page-title">评教记录</h3>
       <div className="filter-bar">
+        <DatePicker.RangePicker
+          value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
+          onChange={(v) =>
+            onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
+          }
+        />
         <Button
           icon={<DownloadOutlined />}
           style={{ width: 220 }}

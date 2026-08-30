@@ -66,6 +66,19 @@ func (h *Evaluation) List(c *gin.Context) {
 		TeacherName: c.Query("teacher_name"), Type: c.Query("type"),
 		Page: page, PageSize: pageSize,
 	}
+	var err error
+	if f.Start, err = parseDatePtr(c.Query("start_date")); err != nil {
+		badReq(c, "start_date 格式错误")
+		return
+	}
+	if f.End, err = parseDatePtr(c.Query("end_date")); err != nil {
+		badReq(c, "end_date 格式错误")
+		return
+	}
+	if f.Start != nil && f.End != nil && f.Start.After(*f.End) {
+		badReq(c, "开始日期不能晚于结束日期")
+		return
+	}
 	u := middleware.CurrentUser(c)
 	list, total, err := h.svc.List(h.db, u, f)
 	if err != nil {

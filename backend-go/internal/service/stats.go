@@ -43,6 +43,10 @@ type TeacherStatsFilters struct {
 
 // TeacherStats 教师评教统计（分页，仅含实际有评教记录的教师，对齐旧端）
 func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilters) ([]TeacherStatItem, int64, error) {
+	// 未指定日期时，默认按当前学期汇总
+	if f.Start == nil && f.End == nil {
+		f.Start, f.End = currentSemesterRange(db)
+	}
 	// 有评教记录的教师 ID（按角色/日期筛选记录集）
 	rq := db.Table("evaluation_record r").Joins("JOIN evaluation_task t ON t.id = r.task_id").Where("r.is_deleted = 0")
 	if len(f.EvaluatorRoles) > 0 {
@@ -152,7 +156,7 @@ func (s *Stats) Overview(db *gorm.DB, viewer *model.User, semester string) (map[
 	if semester == "" {
 		semester, _ = currentSemesterOf(db)
 	}
-	start, end := semesterRange(semester)
+	start, end := semesterRangeOf(db, semester)
 
 	// 数据范围
 	scope := AccessibleCollegeIDs(viewer)
@@ -289,6 +293,25 @@ func semesterRange(semester string) (*time.Time, *time.Time) {
 	}
 	return timePtr(time.Date(ey, 2, 1, 0, 0, 0, 0, time.Local)),
 		timePtr(time.Date(ey, 9, 1, 0, 0, 0, 0, time.Local))
+}
+
+// semesterRangeOf 学期代码 -> 起止日期（优先取 semester_config 开学日期，未配置回退默认推断）
+func semesterRangeOf(db *gorm.DB, semester string) (*time.Time, *time.Time) {
+	if semester == "" {
+		semester, _ = currentSemesterOf(db)
+	}
+	var cfg model.SemesterConfig
+	if err := db.Where("semester = ?", semester).First(&cfg).Error; err == nil {
+		start := cfg.StartDate.ToTime()
+		return timePtr(start), timePtr(start.AddDate(0, 0, semesterDurationDays(cfg.Weeks)))
+	}
+	return semesterRange(semester)
+}
+
+// currentSemesterRange 当前学期默认区间（后端兜底：未传日期时按当前学期汇总）
+func currentSemesterRange(db *gorm.DB) (*time.Time, *time.Time) {
+	semester, _ := currentSemesterOf(db)
+	return semesterRangeOf(db, semester)
 }
 
 // teachersWithCourses 学期内有课（有实际课程明细）的教师集合
@@ -468,7 +491,7 @@ func (s *Stats) CollegeStats(db *gorm.DB, viewer *model.User, collegeID *int, se
 	if semester == "" {
 		semester, _ = currentSemesterOf(db)
 	}
-	start, end := semesterRange(semester)
+	start, end := semesterRangeOf(db, semester)
 
 	collegeName := "全部学院"
 	var users []model.User
@@ -564,7 +587,7 @@ func (s *Stats) CollegeStatsList(db *gorm.DB, viewer *model.User, f CollegeStats
 		if semester == "" {
 			semester, _ = currentSemesterOf(db)
 		}
-		start, end = semesterRange(semester)
+		start, end = semesterRangeOf(db, semester)
 	}
 
 	scoreCodes := scoreDimCodeSet(db)
@@ -782,6 +805,10 @@ const supervisorRolesIn = "('supervisor','school_supervisor','college_supervisor
 
 // SupervisorStats 督导评教统计列表（分页）
 func (s *Stats) SupervisorStats(db *gorm.DB, viewer *model.User, f PersonStatsFilters) ([]map[string]interface{}, int64, error) {
+	// 未指定日期时，默认按当前学期汇总
+	if f.Start == nil && f.End == nil {
+		f.Start, f.End = currentSemesterRange(db)
+	}
 	scope := collegeScopeFor(viewer)
 
 	q := db.Model(&model.User{}).Where("user.status = 1 AND (user.role IN " + supervisorRolesIn +
@@ -863,6 +890,10 @@ func (s *Stats) SupervisorStats(db *gorm.DB, viewer *model.User, f PersonStatsFi
 
 // EvaluatorStats 评教人统计列表（分页）
 func (s *Stats) EvaluatorStats(db *gorm.DB, viewer *model.User, f PersonStatsFilters, evaluatorRoles []string) ([]map[string]interface{}, int64, error) {
+	// 未指定日期时，默认按当前学期汇总
+	if f.Start == nil && f.End == nil {
+		f.Start, f.End = currentSemesterRange(db)
+	}
 	scope := collegeScopeFor(viewer)
 
 	// 有提交记录的评教人 ID（按范围过滤）
@@ -1074,6 +1105,10 @@ func studentCountFor(db *gorm.DB, teacherID int, courseName string) (int, bool) 
 
 // EvaluationRecordsStats 评教记录合并统计（分页）
 func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f RecordStatsFilters) ([]map[string]interface{}, int64, error) {
+	// 未指定日期时，默认按当前学期汇总
+	if f.Start == nil && f.End == nil {
+		f.Start, f.End = currentSemesterRange(db)
+	}
 	scope := collegeScopeFor(viewer)
 	isPureTeacher := viewer.HasRole(model.RoleTeacher) && !IsAdminRole(viewer) && !IsSupervisor(viewer)
 
@@ -1282,6 +1317,10 @@ type SummaryFilters struct {
 
 // TeacherEvaluationSummary 教师评教汇总（分页 + 排序）
 func (s *Stats) TeacherEvaluationSummary(db *gorm.DB, viewer *model.User, f SummaryFilters) ([]map[string]interface{}, int64, error) {
+	// 未指定日期时，默认按当前学期汇总
+	if f.Start == nil && f.End == nil {
+		f.Start, f.End = currentSemesterRange(db)
+	}
 	scope := collegeScopeFor(viewer)
 	semester, _ := currentSemesterOf(db)
 

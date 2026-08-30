@@ -191,15 +191,25 @@ func (h *Schedule) SemesterConfig(c *gin.Context) {
 	response.OK(c, cfg)
 }
 
+// validWeeks 校验可选周数（1-52），未提供（nil）视为合法
+func validWeeks(w *int) bool {
+	return w == nil || (*w >= 1 && *w <= 52)
+}
+
 // CreateSemesterConfig 新建学期配置（管理员）
 func (h *Schedule) CreateSemesterConfig(c *gin.Context) {
 	var p struct {
 		Semester  string  `json:"semester" binding:"required"`
 		StartDate *string `json:"start_date" binding:"required"`
+		Weeks     *int    `json:"weeks"`
 		IsCurrent bool    `json:"is_current"`
 	}
 	if err := c.ShouldBindJSON(&p); err != nil {
 		badReq(c, "请求参数错误")
+		return
+	}
+	if !validWeeks(p.Weeks) {
+		badReq(c, "weeks 须在 1-52 之间")
 		return
 	}
 	var start *time.Time
@@ -215,7 +225,11 @@ func (h *Schedule) CreateSemesterConfig(c *gin.Context) {
 		badReq(c, "start_date 为必填")
 		return
 	}
-	cfg, err := h.svc.CreateSemesterConfig(h.db, p.Semester, *start, p.IsCurrent)
+	weeks := 0
+	if p.Weeks != nil {
+		weeks = *p.Weeks
+	}
+	cfg, err := h.svc.CreateSemesterConfig(h.db, p.Semester, *start, weeks, p.IsCurrent)
 	if err != nil {
 		badReq(c, err.Error())
 		return
@@ -227,10 +241,15 @@ func (h *Schedule) CreateSemesterConfig(c *gin.Context) {
 func (h *Schedule) UpdateSemesterConfig(c *gin.Context) {
 	var p struct {
 		StartDate *string `json:"start_date"`
+		Weeks     *int    `json:"weeks"`
 		IsCurrent *bool   `json:"is_current"`
 	}
 	if err := c.ShouldBindJSON(&p); err != nil {
 		badReq(c, "请求参数错误")
+		return
+	}
+	if !validWeeks(p.Weeks) {
+		badReq(c, "weeks 须在 1-52 之间")
 		return
 	}
 	var start *time.Time
@@ -242,7 +261,7 @@ func (h *Schedule) UpdateSemesterConfig(c *gin.Context) {
 		}
 		start = &t
 	}
-	cfg, err := h.svc.UpdateSemesterConfig(h.db, c.Param("semester"), start, p.IsCurrent)
+	cfg, err := h.svc.UpdateSemesterConfig(h.db, c.Param("semester"), start, p.Weeks, p.IsCurrent)
 	if err != nil {
 		badReq(c, err.Error())
 		return

@@ -227,7 +227,16 @@ export interface SemesterConfig {
   id: number
   semester: string
   start_date: string
+  /** 每学期周数，未配置/默认 20 */
+  weeks?: number
   is_current: boolean
+}
+
+/** /stats/current-semester 返回的当前学期信息（含按配置周数推算的结束日） */
+export interface SemesterInfo {
+  semester: string
+  start_date: string
+  end_date: string
 }
 
 export interface CourseItem {

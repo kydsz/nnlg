@@ -5,6 +5,7 @@ type SemesterConfig struct {
 	Model
 	Semester  string    `gorm:"column:semester;size:32" json:"semester"`
 	StartDate LocalDate `gorm:"column:start_date;type:date" json:"start_date"`
+	Weeks     int       `gorm:"column:weeks;default:20" json:"weeks"`
 	IsCurrent bool      `gorm:"column:is_current" json:"is_current"`
 }
 

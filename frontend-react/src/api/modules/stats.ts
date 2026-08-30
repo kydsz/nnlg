@@ -4,7 +4,7 @@ import type {
   EvaluationRecord,
   OverviewStats,
   PageData,
-  SemesterConfig,
+  SemesterInfo,
   SupervisorStat,
   TeacherEvaluationSummary,
   TeacherStat,
@@ -34,7 +34,7 @@ export interface RecordQuery {
 
 export const statsApi = {
   currentSemester: () =>
-    request<SemesterConfig>({ url: '/stats/current-semester', method: 'GET' }),
+    request<SemesterInfo>({ url: '/stats/current-semester', method: 'GET' }),
 
   overview: () => request<OverviewStats>({ url: '/stats/overview', method: 'GET' }),
 

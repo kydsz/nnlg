@@ -9,6 +9,8 @@ export interface EvaluationListParams {
   evaluator_id?: number
   evaluator_name?: string
   keyword?: string
+  start_date?: string
+  end_date?: string
 }
 
 export interface SubmitPayload {

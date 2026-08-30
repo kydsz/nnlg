@@ -62,12 +62,12 @@ export const scheduleApi = {
       method: 'GET',
     }),
 
-  createSemesterConfig: (data: { semester: string; start_date: string; is_current?: boolean }) =>
+  createSemesterConfig: (data: { semester: string; start_date: string; weeks?: number; is_current?: boolean }) =>
     request<SemesterConfig>({ url: '/course-schedules/semester-configs', method: 'POST', data }),
 
   updateSemesterConfig: (
     semester: string,
-    data: { start_date?: string; is_current?: boolean }
+    data: { start_date?: string; weeks?: number; is_current?: boolean }
   ) =>
     request<SemesterConfig>({
       url: `/course-schedules/semester-configs/${semester}`,

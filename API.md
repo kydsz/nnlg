@@ -695,10 +695,10 @@ DELETE /tasks/{task_id}          # 删除（task:delete，软删除）
 ### 获取评教记录列表
 
 ```http
-GET /evaluations?page=1&page_size=20&task_id=1&teacher_id=1&evaluator_id=1&evaluator_name=张&evaluator_role=supervisor&college_id=1&teacher_name=&type=&keyword=
+GET /evaluations?page=1&page_size=20&task_id=1&teacher_id=1&evaluator_id=1&evaluator_name=张&evaluator_role=supervisor&college_id=1&teacher_name=&type=&keyword=&start_date=&end_date=
 ```
 
-**查询参数**: `task_id`、`teacher_id`、`evaluator_id`、`evaluator_name`、`evaluator_role`、`college_id`、`teacher_name`、`type`、`keyword`、`page`、`page_size`。
+**查询参数**: `task_id`、`teacher_id`、`evaluator_id`、`evaluator_name`、`evaluator_role`、`college_id`、`teacher_name`、`type`、`keyword`、`start_date`、`end_date`、`page`、`page_size`（`start_date` / `end_date` 格式 `YYYY-MM-DD`，按提交时间过滤）。
 
 **可见性**: 教师角色只能查看自己的评教记录；督导默认只能查看自己评教的记录，需 `evaluation:view_all` 权限码（在角色管理中分配）后按学院范围查看他人记录。
 
@@ -837,7 +837,9 @@ PUT    /course-schedules/semester-configs/{semester}                            
 DELETE /course-schedules/semester-configs/{semester}                                 # 删除学期配置（org:view，当前学期不可删）
 ```
 
-学期配置请求体：`{ "semester": "2024-2025-1", "start_date": "2024-09-01", "is_current": false }`（更新时只需 `start_date` / `is_current`）。
+学期配置请求体：`{ "semester": "2024-2025-1", "start_date": "2024-09-01", "weeks": 20, "is_current": false }`（更新时只需 `start_date` / `weeks` / `is_current`）。`weeks` 为每学期周数，范围 1-52，默认 20。
+
+学期结束日期 = 开学日期 + weeks × 7 天，前端各评教统计页面的默认日期区间取该学期期间。
 
 ---
 
@@ -886,11 +888,15 @@ POST /crawl/llsykb                                          # 单教师 llsykb �
 
 整组路由均需 `stats:view` 权限码。除标注外，`page` 默认 1，`page_size` 默认 10。
 
+未传 `start_date` / `end_date` 时，统计默认按当前学期区间汇总（开学日 ~ 开学日 + weeks×7 天，weeks 为学期配置的每学期周数）。
+
 ### 当前学期
 
 ```http
 GET /stats/current-semester
 ```
+
+**响应**: `data` 为 `{ "semester": "2026-2027-1", "start_date": "2026-08-31", "end_date": "2027-01-18" }`，`end_date = start_date + weeks × 7 天`（weeks 为学期配置的每学期周数）。
 
 ### 系统概览
 
@@ -1013,6 +1019,7 @@ POST /stats/evaluation-records/export     # 评教记录导出
 ```
 
 - GET 系列 `format` 仅支持 `xlsx` / `pdf`（pdf 为表格类 PDF 附件，对齐旧端 reportlab 模板；依赖容器内中文字体），默认 xlsx；`fields` 重复传参控制导出列，如 `?fields=teacher_name&fields=course_name`。
+- `GET /stats/export/teacher-evaluation-summary` 的 `start_date` / `end_date` 为必填（列表页默认携带学期区间）。
 - `POST /stats/evaluation-records/export` 请求体：
 
 ```json
