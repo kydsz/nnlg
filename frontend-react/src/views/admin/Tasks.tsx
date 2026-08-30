@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Table,
@@ -12,13 +12,14 @@ import {
   Popconfirm,
   Tag,
   DatePicker,
+  type GetProp,
 } from 'antd'
-import { PlusOutlined, SearchOutlined, DownloadOutlined } from '@ant-design/icons'
+import { PlusOutlined, SearchOutlined, DownloadOutlined, LoadingOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { taskApi, type TaskPayload } from '@/api/modules/tasks'
 import { userApi } from '@/api/modules/users'
 import { downloadBlob, exportFilename } from '@/utils/download'
-import type { Task } from '@/api/types'
+import type { Task, User } from '@/api/types'
 import { taskStatusInfo, formatDate } from '@/utils/format'
 import { useDebounce } from '@/hooks/useDebounce'
 
@@ -42,13 +43,6 @@ export default function Tasks() {
   const { data, isLoading } = useQuery({
     queryKey: ['tasks', params, effectiveKeyword],
     queryFn: () => taskApi.list({ ...params, keyword: effectiveKeyword }),
-  })
-
-  // 教师选项（搜索）
-  const { data: teachers, refetch: refetchTeachers } = useQuery({
-    queryKey: ['teacher-options', ''],
-    queryFn: () => userApi.list({ page: 1, page_size: 50, role: 'teacher' }),
-    enabled: modalOpen,
   })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['tasks'] })
@@ -94,11 +88,6 @@ export default function Tasks() {
     },
     onError: (e) => message.error(e.message),
   })
-
-  const teacherOptions = (teachers?.list || []).map((t) => ({
-    label: `${t.username}（${t.user_no}）`,
-    value: t.id,
-  }))
 
   const columns: ColumnsType<Task> = [
     { title: 'ID', dataIndex: 'id', width: 70 },
@@ -234,9 +223,6 @@ export default function Tasks() {
         onCancel={() => setModalOpen(false)}
         onOk={() => form.submit()}
         confirmLoading={saveMut.isPending}
-        afterOpenChange={(open) => {
-          if (open) refetchTeachers()
-        }}
       >
         <Form
           form={form}
@@ -264,12 +250,7 @@ export default function Tasks() {
             label="被评教师"
             rules={[{ required: true, message: '请选择教师' }]}
           >
-            <Select
-              showSearch
-              optionFilterProp="label"
-              options={teacherOptions}
-              placeholder="选择教师"
-            />
+            <TeacherSelect />
           </Form.Item>
           <Form.Item name="classroom" label="教室">
             <Input />
@@ -280,12 +261,7 @@ export default function Tasks() {
         </Form>
       </Modal>
 
-      <BatchCreateModal
-        open={batchOpen}
-        onClose={() => setBatchOpen(false)}
-        teacherOptions={teacherOptions}
-        onCreated={invalidate}
-      />
+      <BatchCreateModal open={batchOpen} onClose={() => setBatchOpen(false)} onCreated={invalidate} />
     </div>
   )
 }
@@ -294,12 +270,10 @@ export default function Tasks() {
 function BatchCreateModal({
   open,
   onClose,
-  teacherOptions,
   onCreated,
 }: {
   open: boolean
   onClose: () => void
-  teacherOptions: { label: string; value: number }[]
   onCreated: () => void
 }) {
   const { message } = App.useApp()
@@ -341,7 +315,7 @@ function BatchCreateModal({
           label="被评教师"
           rules={[{ required: true, message: '请选择教师' }]}
         >
-          <Select showSearch optionFilterProp="label" options={teacherOptions} />
+          <TeacherSelect />
         </Form.Item>
         <Form.Item
           name="course_names"
@@ -355,5 +329,114 @@ function BatchCreateModal({
         </Form.Item>
       </Form>
     </Modal>
+  )
+}
+
+/**
+ * 教师选择器：远程搜索（姓名/工号）+ 下拉滚动分页动态加载，
+ * 编辑时自动回显已选教师（不在当前已加载列表时单独拉取）。
+ */
+function TeacherSelect({
+  value,
+  onChange,
+}: {
+  value?: number
+  onChange?: (v: number | undefined) => void
+}) {
+  const PAGE_SIZE = 50
+  const [keyword, setKeyword] = useState('')
+  const debouncedKeyword = useDebounce(keyword, 300)
+  const [options, setOptions] = useState<User[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [loading, setLoading] = useState(false)
+  const [selected, setSelected] = useState<User | null>(null)
+  const reqId = useRef(0)
+
+  const fetchPage = async (p: number, kw: string, append: boolean) => {
+    const id = ++reqId.current
+    setLoading(true)
+    try {
+      const res = await userApi.list({
+        page: p,
+        page_size: PAGE_SIZE,
+        role: 'teacher',
+        keyword: kw || undefined,
+      })
+      if (id !== reqId.current) return // 已有更新的请求，丢弃过期结果
+      setOptions((prev) => (append ? [...prev, ...(res.list || [])] : res.list || []))
+      setTotal(res.total ?? 0)
+      setPage(p)
+    } finally {
+      if (id === reqId.current) setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchPage(1, debouncedKeyword, false)
+  }, [debouncedKeyword])
+
+  // 编辑回显：选中教师不在当前已加载列表时，单独拉取该教师信息
+  useEffect(() => {
+    if (value == null) {
+      setSelected(null)
+      return
+    }
+    if (selected?.id === value || options.some((o) => o.id === value)) return
+    userApi
+      .get(value)
+      .then((u) => setSelected(u || null))
+      .catch(() => {})
+  }, [value])
+
+  const handlePopupScroll: GetProp<typeof Select, 'onPopupScroll'> = (e) => {
+    const el = e.currentTarget
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40 && !loading && options.length < total) {
+      fetchPage(page + 1, debouncedKeyword, true)
+    }
+  }
+
+  // 保持列表原始顺序；仅当已选中教师不在当前已加载列表时（如翻页后）追加到末尾用于回显
+  const mergedOptions =
+    selected && !options.some((o) => o.id === selected.id) ? [...options, selected] : options
+
+  return (
+    <Select
+      showSearch
+      allowClear
+      filterOption={false}
+      placeholder="选择教师（支持姓名/工号搜索）"
+      value={value}
+      loading={loading}
+      onSearch={setKeyword}
+      onPopupScroll={handlePopupScroll}
+      onChange={(v) => {
+        // 选中/清空后重置搜索词，下次打开恢复完整列表的原始顺序
+        setKeyword('')
+        if (v == null) {
+          setSelected(null)
+          onChange?.(undefined)
+          return
+        }
+        const u = mergedOptions.find((o) => o.id === v)
+        setSelected(u || null)
+        onChange?.(v as number)
+      }}
+      notFoundContent={loading ? <LoadingOutlined spin /> : '暂无教师'}
+      options={mergedOptions.map((t) => ({
+        value: t.id,
+        label: `${t.username}（${t.user_no}）`,
+        desc: t.college_name || undefined,
+      }))}
+      optionRender={(option) => {
+        const { label, desc } = option as unknown as { label?: React.ReactNode; desc?: string }
+        return (
+          <Space>
+            <span>{label}</span>
+            {desc && <span style={{ color: '#999', fontSize: 12 }}>{desc}</span>}
+          </Space>
+        )
+      }}
+    />
   )
 }
