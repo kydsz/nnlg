@@ -80,6 +80,9 @@ volumes:
 
 networks:
   tev2_network:
+    # 显式固定网络名(否则会带项目名前缀,如 v3_tev2_network)。
+    # 固定后,预发布文件(docker-compose.pre.yml)才能通过 external: true 复用此网络
+    name: tev2_network
     driver: bridge
     ipam:
       driver: default

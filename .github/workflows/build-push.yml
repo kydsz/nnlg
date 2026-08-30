@@ -108,12 +108,31 @@ jobs:
           restore-keys: |
             buildx-${{ matrix.name }}-
 
-      - name: Login to Tencent Cloud CCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.CCR_USERNAME }}
-          password: ${{ secrets.CCR_PASSWORD }}
+      - name: Login to Tencent Cloud CCR (with retry)
+        # docker/login-action 无内置重试，CCR 偶发网络超时会导致整个 job 失败，
+        # 因此改用带重试的 docker login，并对单次请求设置更长超时。
+        shell: bash
+        env:
+          CCR_REGISTRY: ${{ env.REGISTRY }}
+          CCR_USERNAME: ${{ secrets.CCR_USERNAME }}
+          CCR_PASSWORD: ${{ secrets.CCR_PASSWORD }}
+          DOCKER_CLIENT_TIMEOUT: '120'
+          COMPOSE_HTTP_TIMEOUT: '120'
+        run: |
+          max_attempts=5
+          for i in $(seq 1 "$max_attempts"); do
+            if echo "$CCR_PASSWORD" | docker login "$CCR_REGISTRY" \
+              -u "$CCR_USERNAME" --password-stdin; then
+              echo "docker login succeeded on attempt $i"
+              exit 0
+            fi
+            if [ "$i" -lt "$max_attempts" ]; then
+              echo "docker login attempt $i failed, retrying in 10s..."
+              sleep 10
+            fi
+          done
+          echo "docker login failed after $max_attempts attempts"
+          exit 1
 
       - name: Extract metadata (tags, labels)
         id: meta

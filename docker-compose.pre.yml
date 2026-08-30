@@ -1,0 +1,71 @@
+# ============================================
+# 教学评价系统 V2 - 预发布环境（与生产同机共存）
+# 使用: docker compose -f docker-compose.pre.yml up -d
+#
+# 设计要点:
+#   - 不重复部署 MySQL：同一台服务器上，同一个数据卷(v2_mysql_data)
+#     不能被两个 MySQL 实例同时读写（会锁库/损坏数据），所以预发布
+#     不启动 mysql 服务，而是通过外部网络 tev2_network 直连生产
+#     的 tev2_mysql 容器（主机名 = 服务名 mysql），数据与生产完全一致。
+#   - 端口与生产错开：前端对外 8080（生产是 80），改这里即可换端口。
+#   - 与生产共用同一镜像仓库 :latest 标签：
+#     pull 只把新镜像下载到本地,不会影响正在运行的容器;
+#     prod 容器仍跑旧版本,直到手动 up -d 重建才切换到新版本。
+#
+# 前置条件:
+#   1. 生产已启动: docker compose -f docker-compose.prod.yml up -d
+#      (外部网络 tev2_network 上的 mysql 实例由生产提供，需先创建)
+#   2. 与生产共用 ./backend-go/.env（DB_HOST=mysql 无需修改）
+#   3. 如需停用预发布: docker compose -f docker-compose.pre.yml down
+# ============================================
+services:
+
+  # Go 后端：同时加入预发专有网络 + 生产网络，
+  # 通过生产 mysql 服务访问同一份数据
+  backend:
+    image: ccr.ccs.tencentyun.com/nnlg/backend-go:latest
+    container_name: tev2_pre_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend-go/.env
+    volumes:
+      - ./backend-go/uploads:/app/uploads
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - tev2_pre_network
+      - tev2_network
+
+  # React 前端：8080 端口对外，/api 与 /uploads 反代到 backend:8000
+  frontend:
+    image: ccr.ccs.tencentyun.com/nnlg/frontend-react:latest
+    container_name: tev2_pre_frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - tev2_pre_network
+
+networks:
+  # 预发自身网络（前端<->后端互通）
+  tev2_pre_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        # 避开生产 192.168.100.0/24 和 Docker 默认 172.x 地址池
+        - subnet: 192.168.101.0/24
+          gateway: 192.168.101.1
+  # 生产网络（由 docker-compose.prod.yml 创建，预发后端加入后可直连 mysql）
+  tev2_network:
+    external: true
