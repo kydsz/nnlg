@@ -4,6 +4,9 @@ import (
 	"testing"
 
 	"backend-go/internal/model"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestSemesterDurationDays(t *testing.T) {
@@ -171,4 +174,131 @@ func sameInts(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+// teacherScopeTestDB 构造内存库并灌入教师/督导样例：
+// 学院 5=文理学院，6=马克思主义学院（模拟 user_college 交叉记录的真实场景）
+func teacherScopeTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开内存库失败: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&model.User{}, &model.UserRole{}, &model.UserCollege{},
+		&model.UserRoom{}, &model.College{}, &model.ResearchRoom{},
+	); err != nil {
+		t.Fatalf("建表失败: %v", err)
+	}
+	users := []model.User{
+		{UserNo: "T001", Username: "文理教师", Role: model.RoleTeacher, CollegeID: intPtr(5), Status: 1},
+		// 主学院马院，但 user_college 记了文理学院（交叉记录）
+		{UserNo: "T002", Username: "马院教师A", Role: model.RoleTeacher, CollegeID: intPtr(6), Status: 1},
+		{UserNo: "T003", Username: "马院教师B", Role: model.RoleTeacher, CollegeID: intPtr(6), Status: 1},
+		// 主学院马院的督导，负责文理学院（user_college 语义来源）
+		{UserNo: "T004", Username: "马院督导", Role: model.RoleSupervisor, CollegeID: intPtr(6), Status: 1},
+		// 主学院马院但兼职文理学院教研室的教师
+		{UserNo: "T005", Username: "马院兼职教师", Role: model.RoleTeacher, CollegeID: intPtr(6), Status: 1},
+	}
+	if err := db.Create(&users).Error; err != nil {
+		t.Fatalf("灌入用户失败: %v", err)
+	}
+	seed := []struct {
+		ucUser  int
+		ucColl  int
+		roomUser int
+		roomID  int
+	}{
+		{ucUser: int(users[1].ID), ucColl: 5},
+		{ucUser: int(users[3].ID), ucColl: 5},
+		{roomUser: int(users[4].ID), roomID: 1},
+	}
+	for _, s := range seed {
+		if s.ucUser != 0 {
+			if err := db.Create(&model.UserCollege{UserID: s.ucUser, CollegeID: s.ucColl}).Error; err != nil {
+				t.Fatalf("灌入 user_college 失败: %v", err)
+			}
+		}
+		if s.roomUser != 0 {
+			if err := db.Create(&model.UserRoom{UserID: s.roomUser, ResearchRoomID: s.roomID}).Error; err != nil {
+				t.Fatalf("灌入 user_research_room 失败: %v", err)
+			}
+		}
+	}
+	if err := db.Create(&model.ResearchRoom{Code: "R1", Name: "文理教研室", CollegeID: 5, Status: 1}).Error; err != nil {
+		t.Fatalf("灌入教研室失败: %v", err)
+	}
+	return db
+}
+
+func teacherIDsOf(t *testing.T, users []model.User) []string {
+	t.Helper()
+	out := make([]string, 0, len(users))
+	for _, u := range users {
+		out = append(out, u.Username)
+	}
+	return out
+}
+
+func TestListTeachersCollegeFilter(t *testing.T) {
+	db := teacherScopeTestDB(t)
+	svc := &Schedule{}
+
+	t.Run("按学院筛选只匹配教师主学院，忽略 user_college 交叉记录", func(t *testing.T) {
+		users, total, err := svc.ListTeachers(db, TeacherFilter{Page: 1, PageSize: 50, CollegeID: "5"})
+		if err != nil {
+			t.Fatalf("查询失败: %v", err)
+		}
+		got := teacherIDsOf(t, users)
+		if total != 1 || len(got) != 1 || got[0] != "文理教师" {
+			t.Fatalf("college_id=5 应只返回文理教师, 得到 total=%d %v", total, got)
+		}
+	})
+
+	t.Run("督导范围过滤只匹配教师主学院（回归）", func(t *testing.T) {
+		users, total, err := svc.ListTeachers(db, TeacherFilter{
+			Page: 1, PageSize: 50,
+			Scope: &TeacherScope{CollegeIDs: []int{5}, RoomIDs: []int{}},
+		})
+		if err != nil {
+			t.Fatalf("查询失败: %v", err)
+		}
+		got := teacherIDsOf(t, users)
+		if total != 1 || len(got) != 1 || got[0] != "文理教师" {
+			t.Fatalf("范围=文理学院 应只返回文理教师, 得到 total=%d %v", total, got)
+		}
+	})
+
+	t.Run("督导负责教研室可见其中兼职教师", func(t *testing.T) {
+		users, total, err := svc.ListTeachers(db, TeacherFilter{
+			Page: 1, PageSize: 50,
+			Scope: &TeacherScope{CollegeIDs: []int{5}, RoomIDs: []int{1}},
+		})
+		if err != nil {
+			t.Fatalf("查询失败: %v", err)
+		}
+		got := teacherIDsOf(t, users)
+		if len(got) != 2 || !containsStr(got, "文理教师") || !containsStr(got, "马院兼职教师") {
+			t.Fatalf("范围=文理学院+教研室1 应含文理教师与马院兼职教师, 得到 total=%d %v", total, got)
+		}
+	})
+
+	t.Run("教师列表不含督导等非教师角色", func(t *testing.T) {
+		users, _, err := svc.ListTeachers(db, TeacherFilter{Page: 1, PageSize: 50})
+		if err != nil {
+			t.Fatalf("查询失败: %v", err)
+		}
+		if got := teacherIDsOf(t, users); containsStr(got, "马院督导") {
+			t.Fatalf("教师列表不应含督导角色, 得到 %v", got)
+		}
+	})
+}
+
+func containsStr(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

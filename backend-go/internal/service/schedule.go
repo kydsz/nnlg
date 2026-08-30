@@ -156,6 +156,8 @@ func TeacherScopeOf(u *model.User) *TeacherScope {
 }
 
 // applyTeacherScope 按权限边界过滤教师：负责学院 OR 负责教研室
+// 学院维度只匹配教师主学院：user_college 表存的是督导「负责学院」，用它匹配教师
+// 会把其他督导的负责配置误当成教师归属，导致范围外学院的教师漏出
 func applyTeacherScope(q *gorm.DB, s *TeacherScope) *gorm.DB {
 	hasCollege := len(s.CollegeIDs) > 0
 	hasRoom := len(s.RoomIDs) > 0
@@ -165,10 +167,8 @@ func applyTeacherScope(q *gorm.DB, s *TeacherScope) *gorm.DB {
 	var conds []string
 	var args []interface{}
 	if hasCollege {
-		conds = append(conds,
-			"`user`.`college_id` IN ?",
-			"`user`.`id` IN (SELECT user_id FROM user_college WHERE college_id IN ?)")
-		args = append(args, s.CollegeIDs, s.CollegeIDs)
+		conds = append(conds, "`user`.`college_id` IN ?")
+		args = append(args, s.CollegeIDs)
 	}
 	if hasRoom {
 		conds = append(conds,
@@ -258,7 +258,8 @@ func (s *Schedule) ListTeachers(db *gorm.DB, f TeacherFilter) ([]model.User, int
 	}
 	if f.CollegeID != "" {
 		ids := splitInts(f.CollegeID)
-		q = q.Where("`user`.`college_id` IN ? OR `user`.`id` IN (SELECT user_id FROM user_college WHERE college_id IN ?)", ids, ids)
+		// 学院筛选只匹配主学院，与 applyTeacherScope 保持一致（user_college 是督导负责学院，不用于匹配教师归属）
+		q = q.Where("`user`.`college_id` IN ?", ids)
 	}
 	if f.ResearchRoomID != "" {
 		q = q.Where("`user`.`research_room_id` = ? OR `user`.`id` IN (SELECT user_id FROM user_research_room WHERE research_room_id = ?)", f.ResearchRoomID, f.ResearchRoomID)
