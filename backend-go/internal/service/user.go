@@ -48,7 +48,9 @@ func (s *User) List(db *gorm.DB, p UserParams) ([]model.User, int64, error) {
 	}
 	if p.CollegeID != "" {
 		ids := splitInts(p.CollegeID)
-		q = q.Where("`user`.`college_id` IN ? OR `user`.`id` IN (SELECT user_id FROM user_college WHERE college_id IN ?)", ids, ids)
+		// 学院筛选只匹配主学院：user_college 表混存了督导「负责学院」与部分教师的杂散关联，
+		// 用它匹配用户会把主学院不在该学院的用户漏出（与 applyTeacherScope / ListTeachers 保持一致）
+		q = q.Where("`user`.`college_id` IN ?", ids)
 	}
 	if p.ResearchRoomID != "" {
 		q = q.Where("`user`.`research_room_id` = ? OR `user`.`id` IN (SELECT user_id FROM user_research_room WHERE research_room_id = ?)", p.ResearchRoomID, p.ResearchRoomID)
