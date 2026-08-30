@@ -111,6 +111,7 @@ func (h *Schedule) Teachers(c *gin.Context) {
 		Keyword:        c.Query("keyword"),
 		CollegeID:      c.Query("college_id"),
 		ResearchRoomID: c.Query("research_room_id"),
+		Scope:          service.TeacherScopeOf(middleware.CurrentUser(c)),
 	}
 	users, total, err := h.svc.ListTeachers(h.db, f)
 	if err != nil {
@@ -131,6 +132,17 @@ func (h *Schedule) Teachers(c *gin.Context) {
 		})
 	}
 	response.OK(c, gin.H{"list": list, "total": total, "page": page, "page_size": pageSize})
+}
+
+// TeacherScope 教师选择器可见学院/教研室范围（下拉框用）
+func (h *Schedule) TeacherScope(c *gin.Context) {
+	u := middleware.CurrentUser(c)
+	out, err := h.svc.TeacherScopeDetail(h.db, u)
+	if err != nil {
+		serverErr(c, "查询失败")
+		return
+	}
+	response.OK(c, out)
 }
 
 // CurrentSemester 当前学期配置

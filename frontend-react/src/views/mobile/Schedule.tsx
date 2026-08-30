@@ -14,7 +14,6 @@ import {
 } from 'antd-mobile'
 import { SetOutline } from 'antd-mobile-icons'
 import { scheduleApi } from '@/api/modules/schedule'
-import { orgApi } from '@/api/modules/org'
 import { taskApi } from '@/api/modules/tasks'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -477,16 +476,16 @@ function TeacherPicker({
     if (visible) setKeyword('')
   }, [visible])
 
-  const { data: colleges } = useQuery({
-    queryKey: ['colleges', undefined],
-    queryFn: () => orgApi.collegeList(),
+  const { data: scope } = useQuery({
+    queryKey: ['teacher-scope'],
+    queryFn: () => scheduleApi.teacherScope(),
     enabled: visible,
   })
-  const { data: rooms } = useQuery({
-    queryKey: ['research-rooms', collegeId],
-    queryFn: () => orgApi.roomList({ college_id: collegeId }),
-    enabled: visible,
-  })
+  const colleges = scope?.colleges || []
+  const rooms = useMemo(
+    () => (scope?.rooms || []).filter((r) => !collegeId || r.college_id === collegeId),
+    [scope, collegeId]
+  )
 
   const {
     data,
@@ -533,7 +532,7 @@ function TeacherPicker({
             style={selectStyle}
           >
             <option value="">全部学院</option>
-            {(colleges?.list || []).map((c) => (
+            {colleges.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>
@@ -545,7 +544,7 @@ function TeacherPicker({
             style={selectStyle}
           >
             <option value="">全部教研室</option>
-            {(rooms?.list || []).map((r) => (
+            {rooms.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name}
               </option>

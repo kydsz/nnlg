@@ -35,6 +35,12 @@ export const scheduleApi = {
     research_room_id?: number
   }) => request<PageData<User>>({ url: '/course-schedules/teachers', method: 'GET', params }),
 
+  teacherScope: () =>
+    request<{
+      colleges: { id: number; name: string }[]
+      rooms: { id: number; name: string; college_id: number }[]
+    }>({ url: '/course-schedules/teacher-scope', method: 'GET' }),
+
   semesters: () => request<string[]>({ url: '/course-schedules/semesters', method: 'GET' }),
 
   versions: (semester: string) =>

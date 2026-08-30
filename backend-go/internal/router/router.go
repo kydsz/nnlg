@@ -170,6 +170,7 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		schedules.GET("/detail/:id", schH.Detail)
 		schedules.GET("/teacher/:teacher_id", schH.ByTeacher)
 		schedules.GET("/teachers", schH.Teachers)
+		schedules.GET("/teacher-scope", schH.TeacherScope)
 		schedules.GET("/my-schedule", schH.MySchedule)
 		schedules.GET("/versions", schH.Versions)
 		schedules.GET("/teacher-status", schH.TeacherStatus)

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"backend-go/internal/model"
@@ -121,6 +122,126 @@ type TeacherFilter struct {
 	Keyword        string
 	CollegeID      string // 支持逗号分隔多个学院 ID
 	ResearchRoomID string
+	Scope          *TeacherScope // 权限边界：nil 表示全校
+}
+
+// TeacherScope 教师选择器可见范围：负责学院 + 负责教研室
+type TeacherScope struct {
+	CollegeIDs []int
+	RoomIDs    []int
+}
+
+// TeacherScopeOf 当前用户可查看教师的权限边界；nil 表示全校
+// 对齐旧端：system_admin / school_supervisor 全校；管理角色（college_admin/school_admin）无学院绑定时视为全校
+func TeacherScopeOf(u *model.User) *TeacherScope {
+	if u == nil || IsAllScope(u) {
+		return nil
+	}
+	collegeIDs := AccessibleCollegeIDs(u)
+	// 管理角色无学院绑定时返回 nil 表示全校（旧端行为）；其余角色（督导/教师）无负责范围则仅限本人/空范围
+	if collegeIDs == nil && IsAdminRole(u) {
+		return nil
+	}
+	roomIDs := []int{}
+	if u.ResearchRoomID != nil {
+		roomIDs = append(roomIDs, *u.ResearchRoomID)
+	}
+	for _, ur := range u.UserRooms {
+		roomIDs = append(roomIDs, ur.ResearchRoomID)
+	}
+	if collegeIDs == nil {
+		collegeIDs = []int{}
+	}
+	return &TeacherScope{CollegeIDs: collegeIDs, RoomIDs: roomIDs}
+}
+
+// applyTeacherScope 按权限边界过滤教师：负责学院 OR 负责教研室
+func applyTeacherScope(q *gorm.DB, s *TeacherScope) *gorm.DB {
+	hasCollege := len(s.CollegeIDs) > 0
+	hasRoom := len(s.RoomIDs) > 0
+	if !hasCollege && !hasRoom {
+		return q.Where("1 = 0")
+	}
+	var conds []string
+	var args []interface{}
+	if hasCollege {
+		conds = append(conds,
+			"`user`.`college_id` IN ?",
+			"`user`.`id` IN (SELECT user_id FROM user_college WHERE college_id IN ?)")
+		args = append(args, s.CollegeIDs, s.CollegeIDs)
+	}
+	if hasRoom {
+		conds = append(conds,
+			"`user`.`research_room_id` IN ?",
+			"`user`.`id` IN (SELECT user_id FROM user_research_room WHERE research_room_id IN ?)")
+		args = append(args, s.RoomIDs, s.RoomIDs)
+	}
+	return q.Where("("+strings.Join(conds, " OR ")+")", args...)
+}
+
+// TeacherScopeDetail 教师选择器可见组织范围（学院/教研室，含名称）；scope 为 nil 时返回全校
+// 教研室 = 负责学院内的全部教研室 + 专门负责的教研室（合并去重），与教师列表过滤范围一致
+func (s *Schedule) TeacherScopeDetail(db *gorm.DB, u *model.User) (map[string]interface{}, error) {
+	scope := TeacherScopeOf(u)
+	if scope == nil {
+		var colleges []model.College
+		if err := db.Where("status = 1").Order("sort_order ASC, id ASC").Find(&colleges).Error; err != nil {
+			return nil, err
+		}
+		var rooms []model.ResearchRoom
+		if err := db.Where("status = 1").Order("id ASC").Find(&rooms).Error; err != nil {
+			return nil, err
+		}
+		return map[string]interface{}{
+			"colleges": teacherCollegesPayload(colleges),
+			"rooms":    teacherRoomsPayload(rooms),
+		}, nil
+	}
+	colleges := []map[string]interface{}{}
+	if len(scope.CollegeIDs) > 0 {
+		var list []model.College
+		db.Where("id IN ? AND status = 1", scope.CollegeIDs).Order("sort_order ASC, id ASC").Find(&list)
+		colleges = teacherCollegesPayload(list)
+	}
+	seen := map[int]bool{}
+	var rooms []model.ResearchRoom
+	if len(scope.CollegeIDs) > 0 {
+		var list []model.ResearchRoom
+		db.Where("status = 1 AND college_id IN ?", scope.CollegeIDs).Order("id ASC").Find(&list)
+		rooms = append(rooms, list...)
+		for _, r := range list {
+			seen[r.ID] = true
+		}
+	}
+	if len(scope.RoomIDs) > 0 {
+		var list []model.ResearchRoom
+		db.Where("status = 1 AND id IN ?", scope.RoomIDs).Order("id ASC").Find(&list)
+		for _, r := range list {
+			if !seen[r.ID] {
+				rooms = append(rooms, r)
+			}
+		}
+	}
+	return map[string]interface{}{
+		"colleges": colleges,
+		"rooms":    teacherRoomsPayload(rooms),
+	}, nil
+}
+
+func teacherCollegesPayload(list []model.College) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(list))
+	for _, c := range list {
+		out = append(out, map[string]interface{}{"id": c.ID, "name": c.Name})
+	}
+	return out
+}
+
+func teacherRoomsPayload(list []model.ResearchRoom) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(list))
+	for _, r := range list {
+		out = append(out, map[string]interface{}{"id": r.ID, "name": r.Name, "college_id": r.CollegeID})
+	}
+	return out
 }
 
 // ListTeachers 分页查询教师（主角色 teacher 或 user_role 关联 teacher）
@@ -132,6 +253,9 @@ func (s *Schedule) ListTeachers(db *gorm.DB, f TeacherFilter) ([]model.User, int
 	}
 	roles := []string{model.RoleTeacher}
 	q = q.Where("`user`.`role` IN ? OR `user`.`id` IN (SELECT user_id FROM user_role WHERE role IN ?)", roles, roles)
+	if f.Scope != nil {
+		q = applyTeacherScope(q, f.Scope)
+	}
 	if f.CollegeID != "" {
 		ids := splitInts(f.CollegeID)
 		q = q.Where("`user`.`college_id` IN ? OR `user`.`id` IN (SELECT user_id FROM user_college WHERE college_id IN ?)", ids, ids)

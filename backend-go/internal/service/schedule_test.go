@@ -95,3 +95,80 @@ func TestScheduleDetailPayload(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+func TestTeacherScopeOf(t *testing.T) {
+	cases := []struct {
+		name string
+		user *model.User
+		want *TeacherScope
+	}{
+		{"system_admin 全校", &model.User{Role: model.RoleSystemAdmin}, nil},
+		{"school_supervisor 全校", &model.User{Role: model.RoleSchoolSupervisor}, nil},
+		{"college_admin 无学院全校", &model.User{Role: model.RoleCollegeAdmin}, nil},
+		{
+			"督导负责学院+教研室",
+			&model.User{
+				Role: model.RoleSupervisor,
+				UserColleges: []model.UserCollege{{CollegeID: 2}, {CollegeID: 3}},
+				UserRooms:    []model.UserRoom{{ResearchRoomID: 5}},
+			},
+			&TeacherScope{CollegeIDs: []int{2, 3}, RoomIDs: []int{5}},
+		},
+		{
+			"督导含主学院与主教研室",
+			&model.User{
+				Role:           model.RoleCollegeSupervisor,
+				CollegeID:      intPtr(1),
+				ResearchRoomID: intPtr(9),
+				UserColleges:   []model.UserCollege{{CollegeID: 1}},
+			},
+			&TeacherScope{CollegeIDs: []int{1}, RoomIDs: []int{9}},
+		},
+		{
+			"督导无任何负责范围返回空范围",
+			&model.User{Role: model.RoleSupervisor},
+			&TeacherScope{CollegeIDs: []int{}, RoomIDs: []int{}},
+		},
+		{
+			"教师仅主学院",
+			&model.User{Role: model.RoleTeacher, CollegeID: intPtr(4)},
+			&TeacherScope{CollegeIDs: []int{4}, RoomIDs: []int{}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := TeacherScopeOf(c.user)
+			if c.want == nil {
+				if got != nil {
+					t.Fatalf("期望全校(nil)，得到 %+v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("期望 %+v，得到 nil", c.want)
+			}
+			if !sameInts(got.CollegeIDs, c.want.CollegeIDs) {
+				t.Fatalf("CollegeIDs = %v，期望 %v", got.CollegeIDs, c.want.CollegeIDs)
+			}
+			if !sameInts(got.RoomIDs, c.want.RoomIDs) {
+				t.Fatalf("RoomIDs = %v，期望 %v", got.RoomIDs, c.want.RoomIDs)
+			}
+		})
+	}
+}
+
+func sameInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := map[int]bool{}
+	for _, v := range b {
+		set[v] = true
+	}
+	for _, v := range a {
+		if !set[v] {
+			return false
+		}
+	}
+	return true
+}
