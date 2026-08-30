@@ -22,7 +22,7 @@ export interface DimPayload {
   field_config?: Record<string, unknown>
   description?: string
   sort_order?: number
-  is_required?: number
+  is_required?: boolean
   status?: number
 }
 

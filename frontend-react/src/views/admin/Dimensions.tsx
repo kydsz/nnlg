@@ -431,7 +431,7 @@ export default function Dimensions() {
           <Form.Item name="sort_order" label="排序号">
             <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="is_required" label="必填" valuePropName="checked">
+          <Form.Item name="is_required" label="必填">
             <SwitchAdapter />
           </Form.Item>
           <Form.Item name="status" label="状态" initialValue={1}>
@@ -529,10 +529,11 @@ function FieldTypeConfigForm({ form }: { form: ReturnType<typeof Form.useForm>[0
   return null
 }
 
-/** 必填下拉（后端 is_required 为 bool） */
-function SwitchAdapter() {
+/** 必填下拉（后端 is_required 为 bool）；必须透传 props 供 Form.Item 注入 value/onChange */
+function SwitchAdapter(props: Record<string, unknown>) {
   return (
     <Select
+      {...props}
       options={[
         { label: '必填', value: true },
         { label: '选填', value: false },
