@@ -56,11 +56,16 @@ instance.interceptors.response.use(
   },
   (error: AxiosError<ApiResponse>) => {
     const status = error.response?.status
-    if (status === 401) {
-      onUnauthorized?.()
-      return Promise.reject(new ApiError(401, '登录已过期，请重新登录'))
-    }
     const body = error.response?.data
+    // 登录接口的 401 表示账号或密码错误，不是会话过期，需要展示后端的具体错误信息
+    const isLoginRequest = error.config?.url === '/auth/login'
+    if (status === 401) {
+      if (!isLoginRequest) onUnauthorized?.()
+      const msg =
+        body?.message ||
+        (isLoginRequest ? '工号或密码错误' : '登录已过期，请重新登录')
+      return Promise.reject(new ApiError(body?.code ?? 401, msg))
+    }
     const msg = body?.message || error.message || '网络错误'
     return Promise.reject(new ApiError(body?.code ?? status ?? 0, msg))
   }
