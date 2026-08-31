@@ -14,6 +14,7 @@ V3 为全量重构版本：后端使用 **Go + Gin + GORM**，前端使用 **Rea
 - **框架**: Gin
 - **ORM**: GORM（MySQL 驱动）
 - **数据库**: MySQL 8.0+
+- **缓存/消息队列**: Redis 7+（go-redis v9）— 统计报表缓存 + 评价提交异步落库削峰
 - **认证**: JWT（golang-jwt/v5，HS256，与旧端互通）
 - **密码加密**: bcrypt（golang.org/x/crypto，与旧端 passlib 兼容）
 - **导出**: excelize（XLSX）
@@ -38,6 +39,7 @@ v3/
 │   ├── internal/
 │   │   ├── config/          # 环境变量配置
 │   │   ├── database/        # MySQL 连接
+│   │   ├── cache/           # Redis 封装（JSON缓存/幂等/Stream生产消费/死信清扫）
 │   │   ├── handler/         # 接口处理（auth/user/role/org/dimension/task/
 │   │   │                    #   evaluation/export/upload/schedule/stats/sync）
 │   │   ├── service/         # 业务逻辑
@@ -82,11 +84,14 @@ v3/
 - 移动端评教，支持匿名评教、富文本（LaTeX 公式）
 - 文件类维度附件上传（图片/文档），单条记录导出（可打印 HTML）
 - 评教可见性控制：自己评的、被评教师、系统管理员，或按权限码 `evaluation:view_all` 按学院范围查看
+- **高并发支持**（Redis Stream 异步削峰）：大批学生集中评教时，提交先入 Redis 队列秒回成功，后台消费者批量落库，避免 MySQL 行锁竞争打满连接池
+- **死信保护**（Redis Stream 消费者组）：单条消息**投递超过阈值**或**在 Pending 停留超 10 分钟**仍未成功落库，自动挪入独立死信流 `<stream>:dead` 并记告警日志，避免无限重试积压且不丢数据（死信流同样受 AOF 保护）。首次死信会**自动重放一次**回主队列，重放仍失败才滞留待人工处理；消费者对"确定不可处理的业务拒绝"才确认丢弃，DB 瞬时故障的消息留待重试。管理端可 `POST /api/v1/queue/replay-dead` 一键重放死信回主队列，`GET /api/v1/queue/status` 查看队列健康（需系统管理员 `role:manage`）
 
 ### 统计报表
 - 教师评教统计、学院/校区评教统计、督导/评教人统计
 - 未被听课教师、评教记录合并统计、教师评教汇总
 - 支持导出 XLSX（任务、教师、学院、督导、评教记录、教师汇总）
+- **统计缓存**：读密集统计接口结果缓存到 Redis（60s TTL），多人同时查看时不再反复全量计算聚合
 - 评教数据以当前学期为节点：统计、评教记录、教师评教汇总默认按当前学期区间（开学日 ~ 开学日 + 周数×7 天）汇总，学期变更后数据随之变动
 
 ### 课程表
@@ -104,6 +109,7 @@ v3/
 - Go 1.26+
 - Node.js 18+
 - MySQL 8.0+（与旧端共用，业务表结构由 `v2/backend` 初始化脚本或 SQL 迁移文件创建；增量结构变更由 `backend-go/internal/database/migrations` 下的 SQL 文件在服务启动时自动执行，幂等可重复启动）
+- Redis 7+（可选但推荐，高并发缓存/消息队列；**不配置则自动降级为直连 DB，不影响原有功能**）
 
 ### 后端启动（Go）
 
@@ -113,6 +119,7 @@ cd v3/backend-go
 # 配置环境变量（复制 .env.example 为 .env 并修改）
 cp .env.example .env
 # 必须配置：DB_HOST / DB_USER / DB_PASSWORD / DB_NAME / SECRET_KEY（至少16字符）
+# 可选配置：REDIS_ADDR=localhost:6379（启用统计缓存与评价异步落库）
 
 # 直接运行
 go run ./cmd/server

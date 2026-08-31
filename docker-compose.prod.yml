@@ -37,6 +37,27 @@ services:
     networks:
       - tev2_network
 
+  # Redis（高并发缓存/消息队列，供统计缓存与评价异步落库使用）
+  redis:
+    image: redis:7-alpine
+    container_name: tev2_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - v2_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - tev2_network
+
   # Go 后端(腾讯云镜像,不在服务器上构建)
   backend:
     image: ccr.ccs.tencentyun.com/nnlg/backend-go:latest
@@ -48,6 +69,8 @@ services:
       - ./backend-go/uploads:/app/uploads
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     logging:
       driver: json-file
@@ -77,6 +100,7 @@ services:
 volumes:
   v2_mysql_data:
     external: true
+  v2_redis_data:
 
 networks:
   tev2_network:

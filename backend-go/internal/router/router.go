@@ -233,5 +233,13 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		stats.POST("/evaluation-records/export", statsH.ExportEvaluationRecords)
 	}
 
+	// 异步队列管理（仅系统管理员）：查看评价队列健康 / 重放死信
+	queueH := handler.NewQueue(db)
+	queue := api.Group("/queue", authMW, middleware.RequirePermission(db, "role:manage"))
+	{
+		queue.GET("/status", queueH.Status)
+		queue.POST("/replay-dead", queueH.ReplayDead)
+	}
+
 	return r
 }

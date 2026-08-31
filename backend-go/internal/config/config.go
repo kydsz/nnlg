@@ -20,6 +20,11 @@ type Config struct {
 	DBPassword string `env:"DB_PASSWORD"`
 	DBName     string `env:"DB_NAME" envDefault:"teaching_eval_v2"`
 
+	// Redis 配置（高并发缓存/消息队列；未配置时自动降级为直连 DB，不影响原有功能）
+	RedisAddr     string `env:"REDIS_ADDR" envDefault:""`
+	RedisPassword string `env:"REDIS_PASSWORD"`
+	RedisDB       int    `env:"REDIS_DB" envDefault:"0"`
+
 	SecretKey          string `env:"SECRET_KEY"`
 	TokenExpireMinutes int    `env:"ACCESS_TOKEN_EXPIRE_MINUTES" envDefault:"1440"`
 	CookieSecure       bool   `env:"COOKIE_SECURE" envDefault:"false"`

@@ -42,7 +42,7 @@
 | 校级督导  | school\_supervisor  | 20                            | all     | 可跨学院督导评教                                                                                                                                           |
 | 督导老师  | supervisor          | 22                            | college | 通用督导（向后兼容）；具备 `task:create`，可添加自己及负责学院教师的课程进待评任务（见 `task:create` 说明）                                                          |
 | 院级督导  | college\_supervisor | 25                            | college | 仅负责本学院督导                                                                                                                                           |
-| 教师    | teacher             | 50                            | self    | `data_scope = self`：仅能查看**自己**的评教记录和课表；**查看评教任务**不受此限制，教师可查看本学院全体教师的评教任务（见下方 `task:view` 说明）；具备 `task:create` 时可添加**自己及本学院其他教师**的课程进待评任务（见 `task:create` 说明）；具备 `schedule:view_college` 时可查看**本学院**其他教师的课表（见课程表说明） |
+| 教师    | teacher             | 50                            | self    | `data_scope = self`：仅能查看**自己**的评教记录和课表；**查看评教任务**不受此限制，教师可查看本学院全体教师的评教任务（见下方 `task:view` 说明）；具备 `task:create` 时可添加**自己及本学院其他教师**的课程进待评任务（见 `task:create` 说明）；具备 `schedule:view_college` 时可查看**本学院**其他教师的课表（见课程表说明）；具备 `evaluation:create`，可提交评教（不能评自己、只能评本学院教师，由后端校验） |
 
 > 说明：`school_admin` 是兼容旧数据的角色编码，显示名同为"学院管理员"，与 `college_admin` 等价处理；具体优先级以 `migration_rbac_roles.sql` 初始化数据为准。
 
@@ -80,6 +80,8 @@
 
 * evaluation:view / evaluation:create / evaluation:view\_anonymous / evaluation:view\_all / evaluation:delete / evaluation:delete\_own
 
+> `evaluation:create`：提交评教。接口 `POST /evaluations`（含 `POST /evaluations/with-files`）均需该权限。教师默认分配该权限后可提交同行评教；业务约束（不能评自己、只能评本学院教师、任务未取消/未重复提交）由后端 `ValidateSubmit` 校验，与路由权限门分离。历史数据缺失 `evaluation:create` 的 teacher 角色由迁移 `008_add_evaluation_create_to_teacher.sql` 自动补齐（幂等）。
+
 > `evaluation:view_all`：查看他人评教记录（含匿名详情）的权限码，由系统管理员在角色管理中按需分配；分配后督导等角色可按其学院数据范围查看他人评教记录/详情/导出。
 
 > `evaluation:delete`：删除任意评教记录；`evaluation:delete_own`：仅能删除评教人本人提交的记录。两者可并存，系统管理员恒可删任意。
@@ -101,6 +103,10 @@
 ### 数据同步
 
 * sync:execute
+
+### 异步队列（系统运维）
+
+* 无独立权限码：队列状态查看 / 死信重放接口由 `role:manage`（系统管理员）保护，非系统管理员不可访问
 
 ## 数据模型
 
@@ -171,6 +177,11 @@
 * GET    /users/{id}/supervisor-scope     查询督导负责范围（user:view）
 
 * PUT    /users/{id}/supervisor-scope     覆盖式设置督导负责范围（user:update）
+
+### 异步队列管理（接口需 `role:manage`，系统管理员）
+
+* GET    /queue/status            查看评价异步队列状态（待处理数 / 死信数）
+* POST   /queue/replay-dead       将死信流消息重放回主队列，由消费者重新落库
 
 ## 前端页面
 

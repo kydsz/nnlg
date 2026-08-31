@@ -39,6 +39,7 @@
 | 统计报表 | `stats:view`                                                                                                                                  |
 | 课程表  | `schedule:view` / `schedule:view_college`                                                                                                     |
 | 数据同步 | `sync:execute`                                                                                                                                |
+| 异步队列 | `role:manage`（系统运维，仅 system\_admin）                                                                                                   |
 
 ## 接口总览
 
@@ -136,6 +137,8 @@
 | POST   | /crawl/timetable（/preview、/async）                 | 管理员                                                  |
 | POST   | /crawl/llsykb                                     | 管理员                                                  |
 | GET    | /stats/...                                        | stats:view（整组）                                       |
+| GET    | /queue/status                                     | role:manage（系统运维）                                   |
+| POST   | /queue/replay-dead                                | role:manage（系统运维）                                   |
 
 ***
 

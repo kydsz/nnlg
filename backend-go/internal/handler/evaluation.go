@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"backend-go/internal/cache"
 	"backend-go/internal/config"
 	"backend-go/internal/middleware"
 	"backend-go/internal/model"
@@ -36,6 +38,8 @@ func NewEvaluationHandler(cfg *config.Config, db *gorm.DB) *Evaluation {
 }
 
 // Submit 提交评教
+// 高并发场景：先做同步校验，再入 Redis Stream 异步落库，秒级返回成功。
+// Redis 不可用（未配置或异常）时自动降级为原同步落库，保证功能不中断。
 func (h *Evaluation) Submit(c *gin.Context) {
 	var p service.SubmitParams
 	if err := c.ShouldBindJSON(&p); err != nil {
@@ -43,17 +47,91 @@ func (h *Evaluation) Submit(c *gin.Context) {
 		return
 	}
 	u := middleware.CurrentUser(c)
+
+	rdb := cache.GetClient()
+	if rdb != nil && rdb.Enabled {
+		// 异步路径：同步校验 + Redis 幂等 + 入队秒回
+		if _, _, err := h.svc.ValidateSubmit(h.db, u, p); err != nil {
+			badReq(c, err.Error())
+			return
+		}
+		// 幂等判重：Redis SETNX（key=task:user），替代 DB Count，防并发重复提交
+		dupKey := fmt.Sprintf("tev:dup:%d:%d", p.TaskID, u.ID)
+		ok, err := rdb.SetNX(c.Request.Context(), dupKey, 30*time.Minute)
+		if err != nil {
+			// Redis 异常：删除可能的残留并降级同步
+			log.Printf("[evaluation] Redis 幂等异常，降级同步提交: %v", err)
+			rec, serr := h.svc.Submit(h.db, u, p)
+			if serr != nil {
+				badReq(c, serr.Error())
+				return
+			}
+			h.logSubmit(c, u, rec, false)
+			response.OKMsg(c, "提交成功", gin.H{
+				"id": rec.ID, "task_id": rec.TaskID, "submit_time": FTime(rec.SubmitTime),
+				"total_score": h.svc.TotalScoreOf(h.db, rec),
+			})
+			return
+		}
+		if !ok {
+			badReq(c, "您已提交过本次评教")
+			return
+		}
+		// 入队
+		raw, _ := json.Marshal(p.DimensionValues)
+		_, err = rdb.Publish(c.Request.Context(), rdb.StreamName, map[string]interface{}{
+			"task_id":          p.TaskID,
+			"user_id":          u.ID,
+			"is_anonymous":     p.IsAnonymous,
+			"dimension_values": string(raw),
+		})
+		if err != nil {
+			// 入队失败：释放幂等键并降级同步提交
+			rdb.Del(c.Request.Context(), dupKey)
+			log.Printf("[evaluation] 入队失败，降级同步提交: %v", err)
+			rec, serr := h.svc.Submit(h.db, u, p)
+			if serr != nil {
+				badReq(c, serr.Error())
+				return
+			}
+			h.logSubmit(c, u, rec, false)
+			response.OKMsg(c, "提交成功", gin.H{
+				"id": rec.ID, "task_id": rec.TaskID, "submit_time": FTime(rec.SubmitTime),
+				"total_score": h.svc.TotalScoreOf(h.db, rec),
+			})
+			return
+		}
+		// 秒回成功（异步落库，数据稍后可见）
+		response.OKMsg(c, "提交成功", gin.H{
+			"task_id": p.TaskID, "submit_time": FTime(model.LocalTimePtr(time.Now())),
+			"total_score": nil, "queued": true,
+		})
+		return
+	}
+
+	// 同步路径（Redis 未配置）：原逻辑
 	rec, err := h.svc.Submit(h.db, u, p)
 	if err != nil {
 		badReq(c, err.Error())
 		return
 	}
-	service.LogRecord(h.db, &u.ID, u.Username, "evaluation_submit", "evaluation", &rec.ID, "evaluation_record",
-		map[string]interface{}{"task_id": rec.TaskID, "is_anonymous": rec.IsAnonymous, "total_score": h.svc.TotalScoreOf(h.db, rec)})
+	h.logSubmit(c, u, rec, false)
 	response.OKMsg(c, "提交成功", gin.H{
 		"id": rec.ID, "task_id": rec.TaskID, "submit_time": FTime(rec.SubmitTime),
 		"total_score": h.svc.TotalScoreOf(h.db, rec),
 	})
+}
+
+// logSubmit 记录提交操作日志（同步/异步共用）
+func (h *Evaluation) logSubmit(c *gin.Context, u *model.User, rec *model.EvaluationRecord, withFiles bool) {
+	content := map[string]interface{}{
+		"task_id": rec.TaskID, "is_anonymous": rec.IsAnonymous,
+		"total_score": h.svc.TotalScoreOf(h.db, rec),
+	}
+	if withFiles {
+		content["with_files"] = true
+	}
+	service.LogRecord(h.db, &u.ID, u.Username, "evaluation_submit", "evaluation", &rec.ID, "evaluation_record", content)
 }
 
 // List 记录分页
@@ -160,6 +238,17 @@ func (h *Evaluation) SubmitWithFiles(c *gin.Context) {
 	}
 
 	u := middleware.CurrentUser(c)
+	// Redis 幂等防重复（带文件提交，key=task:user）；Redis 不可用时跳过，靠 DB 判重兜底
+	if rdb := cache.GetClient(); rdb != nil && rdb.Enabled {
+		dupKey := fmt.Sprintf("tev:dup:%d:%d", taskID, u.ID)
+		ok, err := rdb.SetNX(c.Request.Context(), dupKey, 30*time.Minute)
+		if err != nil {
+			log.Printf("[evaluation] 带文件提交 Redis 幂等异常: %v", err)
+		} else if !ok {
+			badReq(c, "您已提交过本次评教")
+			return
+		}
+	}
 	rec, err := h.svc.Submit(h.db, u, service.SubmitParams{
 		TaskID: taskID, DimensionValues: values, IsAnonymous: isAnonymous,
 	})

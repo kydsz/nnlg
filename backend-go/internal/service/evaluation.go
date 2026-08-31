@@ -93,53 +93,63 @@ func (s *Evaluation) TotalScoreOf(db *gorm.DB, rec *model.EvaluationRecord) *flo
 
 // Submit 提交评教
 func (s *Evaluation) Submit(db *gorm.DB, viewer *model.User, p SubmitParams) (*model.EvaluationRecord, error) {
+	task, evaluatorRole, err := s.ValidateSubmit(db, viewer, p)
+	if err != nil {
+		return nil, err
+	}
+	return s.PersistSubmit(db, task, evaluatorRole, p, viewer)
+}
+
+// ValidateSubmit 提交前的同步校验，返回已校验的有效任务与落库角色。
+// 供同步提交与异步入队前共用；异步场景下入队前校验一次即可，消费者落库不再重复全量校验。
+func (s *Evaluation) ValidateSubmit(db *gorm.DB, viewer *model.User, p SubmitParams) (model.EvaluationTask, string, error) {
 	if p.TaskID == 0 {
-		return nil, errors.New("task_id 为必填")
+		return model.EvaluationTask{}, "", errors.New("task_id 为必填")
 	}
 	if len(p.DimensionValues) == 0 {
-		return nil, errors.New("dimension_values 不能为空")
+		return model.EvaluationTask{}, "", errors.New("dimension_values 不能为空")
 	}
 
 	var task model.EvaluationTask
 	if err := db.Where("id = ? AND is_deleted = 0", p.TaskID).First(&task).Error; err != nil {
-		return nil, errors.New("任务不存在")
+		return task, "", errors.New("任务不存在")
 	}
 	if task.Status == model.TaskStatusCancelled {
-		return nil, errors.New("任务已取消，不能提交评教")
+		return task, "", errors.New("任务已取消，不能提交评教")
 	}
 
 	// 唯一约束：同一任务同一评教人只能一条（已软删除不再参与重复判断，允许重新提交）
 	var dup int64
 	db.Model(&model.EvaluationRecord{}).Where("task_id = ? AND evaluator_id = ? AND is_deleted = 0", task.ID, viewer.ID).Count(&dup)
 	if dup > 0 {
-		return nil, errors.New("您已提交过本次评教")
+		return task, "", errors.New("您已提交过本次评教")
 	}
 
 	// 学院数据范围校验
 	teacher, err := LoadTeacherUser(db, task.TeacherID)
 	if err != nil {
-		return nil, err
+		return task, "", err
 	}
 	switch {
 	case IsAdminRole(viewer) || IsSupervisor(viewer):
 		if !CollegeInScope(viewer, teacher.CollegeID) {
 			if IsSupervisor(viewer) && !IsAdminRole(viewer) {
-				return nil, errors.New("您只能评自己负责学院的教师")
+				return task, "", errors.New("您只能评自己负责学院的教师")
 			}
-			return nil, errors.New("您没有该学院的评教权限")
+			return task, "", errors.New("您没有该学院的评教权限")
 		}
 	default: // 教师：同行评教（先判自评，再判同学院；对齐旧端）
 		if task.TeacherID == viewer.ID {
-			return nil, errors.New("不能评自己")
+			return task, "", errors.New("不能评自己")
 		}
 		if teacher.CollegeID == nil || viewer.CollegeID == nil || *teacher.CollegeID != *viewer.CollegeID {
-			return nil, errForbidden("只能评同学院的教师")
+			return task, "", errForbidden("只能评同学院的教师")
 		}
 	}
 
 	// 维度校验
 	if _, err := validateDimensionValues(db, p.DimensionValues); err != nil {
-		return nil, err
+		return task, "", err
 	}
 
 	// 落库角色：多角色用户按督导优先（持有督导角色即记为督导评教），否则用主角色
@@ -147,6 +157,12 @@ func (s *Evaluation) Submit(db *gorm.DB, viewer *model.User, p SubmitParams) (*m
 	if sup := viewer.SupervisorRole(); sup != "" {
 		evaluatorRole = sup
 	}
+	return task, evaluatorRole, nil
+}
+
+// PersistSubmit 将已通过校验的评教落库（事务：插入记录 + 累加任务计数）。
+// 供同步提交与异步消费者复用。task 须为已校验的有效任务。
+func (s *Evaluation) PersistSubmit(db *gorm.DB, task model.EvaluationTask, evaluatorRole string, p SubmitParams, viewer *model.User) (*model.EvaluationRecord, error) {
 	now := time.Now()
 	rec := model.EvaluationRecord{
 		TaskID: task.ID, EvaluatorID: IPtr(viewer.ID), EvaluatorName: viewer.Username,
@@ -178,6 +194,83 @@ func (s *Evaluation) Submit(db *gorm.DB, viewer *model.User, p SubmitParams) (*m
 		return nil, err
 	}
 	return &rec, nil
+}
+
+// PendingSubmit 一条待批量落库的评教提交（已通过校验）
+type PendingSubmit struct {
+	MsgID         string // Redis Stream 消息 ID（落库成功后用于 ACK）
+	Task          model.EvaluationTask
+	EvaluatorRole string
+	Params        SubmitParams
+	Viewer        *model.User
+}
+
+// PersistBatch 将一批已通过校验的评教批量落库（单事务），降低 MySQL 写放大：
+//   - 批量 INSERT 多条 evaluation_record；
+//   - 按 task 聚合，每个任务只执行一次 UPDATE（evaluation_count += 批内该任务条数），
+//     而非每条提交一次 UPDATE。
+//
+// 供异步消费者攒批后调用。任一记录落库失败则整体回滚，由消费者重试整批。
+func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
+	if len(items) == 0 {
+		return nil
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+		// 1) 批量插入记录
+		recs := make([]model.EvaluationRecord, 0, len(items))
+		for _, it := range items {
+			raw, err := marshalJSON(it.Params.DimensionValues)
+			if err != nil {
+				return err
+			}
+			recs = append(recs, model.EvaluationRecord{
+				TaskID: it.Task.ID, EvaluatorID: IPtr(it.Viewer.ID), EvaluatorName: it.Viewer.Username,
+				EvaluatorRole: it.EvaluatorRole, IsAnonymous: it.Params.IsAnonymous,
+				SubmitTime:      model.LocalTimePtr(now),
+				DimensionValues: raw,
+			})
+		}
+		if err := tx.Create(&recs).Error; err != nil {
+			return err
+		}
+		// 2) 按 task 聚合计数与状态
+		type agg struct {
+			count     int
+			supervisor bool
+			pending    bool // 原任务状态为待评，需置已评
+		}
+		byTask := map[int]*agg{}
+		for _, it := range items {
+			a, ok := byTask[it.Task.ID]
+			if !ok {
+				a = &agg{}
+				byTask[it.Task.ID] = a
+			}
+			a.count++
+			if model.IsSupervisorRole(it.EvaluatorRole) {
+				a.supervisor = true
+			}
+			if it.Task.Status == model.TaskStatusPending {
+				a.pending = true
+			}
+		}
+		for taskID, a := range byTask {
+			updates := map[string]interface{}{
+				"evaluation_count": gorm.Expr("evaluation_count + ?", a.count),
+			}
+			if a.supervisor {
+				updates["has_supervisor_eval"] = true
+			}
+			if a.pending {
+				updates["status"] = model.TaskStatusEvaluated
+			}
+			if err := tx.Model(&model.EvaluationTask{}).Where("id = ?", taskID).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // validateDimensionValues 校验维度值（必填/类型/分值范围），Submit 与 Update 共用
