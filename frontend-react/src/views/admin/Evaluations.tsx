@@ -85,6 +85,12 @@ export default function Evaluations() {
     { title: 'ID', dataIndex: 'id', width: 70 },
     { title: '教师', dataIndex: 'teacher_name', width: 100 },
     { title: '课程', dataIndex: 'course_name' },
+    {
+      title: '上课时间',
+      dataIndex: 'class_time',
+      width: 150,
+      render: (v) => formatDate(v),
+    },
     { title: '学院', dataIndex: 'college_name', width: 130, render: (v) => v || '-' },
     { title: '评教人', dataIndex: 'evaluator_name', width: 100 },
     {

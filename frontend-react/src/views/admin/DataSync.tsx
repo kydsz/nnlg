@@ -36,6 +36,10 @@ export default function DataSync() {
   const [llsykbOpen, setLlsykbOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
 
+  // 批量同步任务（提升到父级：弹窗隐藏后仍持续轮询，完成/失败会回写同步历史并展示进度条）
+  const batchTask = useLlsykbTask('按学院批量同步课表', addSyncHistory)
+  const selectTask = useLlsykbTask('选择教师同步课表', addSyncHistory)
+
   const { data: semesters } = useQuery({
     queryKey: ['semesters'],
     queryFn: () => scheduleApi.semesters(),
@@ -219,6 +223,14 @@ export default function DataSync() {
         </Card>
       )}
 
+      {/* 后台任务进度：即使弹窗已隐藏，也能看到实时进度并回写同步历史 */}
+      {(batchTask.taskId || selectTask.taskId) && (
+        <Card title="后台同步任务" size="small" style={{ marginBottom: 16 }}>
+          <BatchTaskItem task={batchTask} onReopen={() => setBatchOpen(true)} reopenLabel="按学院批量同步" />
+          <BatchTaskItem task={selectTask} onReopen={() => setLlsykbOpen(true)} reopenLabel="选择教师同步" />
+        </Card>
+      )}
+
       {history.length > 0 && (
         <Card
           title="同步历史"
@@ -267,10 +279,90 @@ export default function DataSync() {
       )}
 
       <CrawlModal open={crawlOpen} onClose={() => setCrawlOpen(false)} />
-      <LlsykbSelectModal open={llsykbOpen} onClose={() => setLlsykbOpen(false)} onRecord={addSyncHistory} />
-      <LlsykbBatchModal open={batchOpen} onClose={() => setBatchOpen(false)} onRecord={addSyncHistory} />
+      <LlsykbSelectModal open={llsykbOpen} onClose={() => setLlsykbOpen(false)} task={selectTask} />
+      <LlsykbBatchModal open={batchOpen} onClose={() => setBatchOpen(false)} task={batchTask} />
     </div>
   )
+}
+
+/** 后台任务状态卡片项 */
+function BatchTaskItem({
+  task,
+  onReopen,
+  reopenLabel,
+}: {
+  task: ReturnType<typeof useLlsykbTask>
+  onReopen: () => void
+  reopenLabel: string
+}) {
+  if (!task.taskId) return null
+  const progress = task.progress as Record<string, unknown> | undefined
+  const status = progress?.status as string | undefined
+  const completed = Number(progress?.completed ?? 0)
+  const failed = Number(progress?.failed ?? 0)
+  const total = Number(progress?.total ?? 0)
+  const current = progress?.current_teacher as string | undefined
+  const percent = Number(progress?.percent ?? (total > 0 ? Math.round(((completed + failed) / total) * 100) : 0))
+  const done = status === 'completed' || status === 'success'
+  const isFailed = status === 'failed'
+
+  return (
+    <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 8 }}>
+      <div style={{ width: 150, fontWeight: 500 }}>{task.label}</div>
+      <Progress percent={percent} status={isFailed ? 'exception' : done ? 'success' : 'active'} style={{ flex: 1 }} />
+      <span style={{ color: '#999', fontSize: 12, width: 140, whiteSpace: 'nowrap' }}>
+        {isFailed
+          ? `失败：${(progress?.error as string) || '未知错误'}`
+          : done
+          ? `完成 ${completed}/${total}`
+          : `处理中 ${completed}/${total}${current ? ` · ${current}` : ''}`}
+      </span>
+      {!done && (
+        <Button size="small" onClick={onReopen}>
+          打开{reopenLabel}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+/** 后台任务共享逻辑：轮询进度 + 完成/失败时回写同步历史（弹窗隐藏后依然有效） */
+function useLlsykbTask(
+  label: string,
+  onRecord: (action: string, status: string, msg: string) => void,
+) {
+  const { message } = App.useApp()
+  const qc = useQueryClient()
+  const [taskId, setTaskId] = useState<string | null>(null)
+
+  const { data: progress } = useQuery({
+    queryKey: ['llsykb-progress', taskId],
+    queryFn: () => syncApi.llsykbProgress(taskId!),
+    refetchInterval: 3000,
+    enabled: !!taskId,
+  })
+
+  const status = (progress as { status?: string } | undefined)?.status
+  useEffect(() => {
+    if (status === 'completed' || status === 'success') {
+      const doneMsg = `${label}完成`
+      message.success(doneMsg)
+      onRecord(label, 'success', doneMsg)
+      qc.invalidateQueries({ queryKey: ['semesters'] })
+      qc.invalidateQueries({ queryKey: ['schedule'] })
+      qc.invalidateQueries({ queryKey: ['sync-status'] })
+      // 完成后清空任务，结束轮询
+      setTaskId(null)
+    } else if (status === 'failed') {
+      const reason = (progress as { error?: string } | undefined)?.error || `${label}失败`
+      message.error(reason)
+      onRecord(label, 'failed', reason)
+      qc.invalidateQueries({ queryKey: ['sync-status'] })
+      setTaskId(null)
+    }
+  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return { label, taskId, setTaskId, progress, status }
 }
 
 /** 工号异常清理面板：左滑式列表 → 每行"删除"按钮 */
@@ -330,22 +422,20 @@ function InvalidUsersPanel({
   )
 }
 
-/** 选择教师同步课表：选中教师 → 异步后台任务 + 3 秒轮询进度 */
+/** 选择教师同步课表：选中教师 → 异步后台任务，进度由父级统一轮询（隐藏后仍持续并回写历史） */
 function LlsykbSelectModal({
   open,
   onClose,
-  onRecord,
+  task,
 }: {
   open: boolean
   onClose: () => void
-  onRecord: (action: string, status: string, msg: string) => void
+  task: ReturnType<typeof useLlsykbTask>
 }) {
   const { message } = App.useApp()
-  const qc = useQueryClient()
   const [semester, setSemester] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
   const [selectedNos, setSelectedNos] = useState<string[]>([])
-  const [taskId, setTaskId] = useState<string | null>(null)
 
   const { data: currentSemester } = useQuery({
     queryKey: ['current-semester'],
@@ -371,68 +461,43 @@ function LlsykbSelectModal({
     mutationFn: () => syncApi.llsykbBatch(semester!, undefined, selectedNos),
     onSuccess: (res) => {
       message.success('同步任务已启动')
-      setTaskId(res.task_id)
+      task.setTaskId(res.task_id)
     },
-    onError: (e) => {
-      message.error(e.message)
-      onRecord('选择教师同步课表', 'failed', e.message)
-    },
+    onError: (e) => message.error(e.message),
   })
 
-  // 3 秒轮询进度：按已处理教师数/总教师数计算
-  const { data: progress } = useQuery({
-    queryKey: ['llsykb-progress', taskId],
-    queryFn: () => syncApi.llsykbProgress(taskId!),
-    refetchInterval: 3000,
-    enabled: !!taskId,
-  })
-
-  const status = (progress as { status?: string } | undefined)?.status
-  useEffect(() => {
-    if (status === 'completed' || status === 'success') {
-      message.success('所选教师课表同步完成')
-      onRecord('选择教师同步课表', 'success', `所选教师课表同步完成（${selectedNos.length} 人）`)
-      qc.invalidateQueries({ queryKey: ['semesters'] })
-      qc.invalidateQueries({ queryKey: ['schedule'] })
-      setTaskId(null)
-      onClose()
-    } else if (status === 'failed') {
-      const reason = (progress as { error?: string } | undefined)?.error || '同步失败'
-      message.error(reason)
-      onRecord('选择教师同步课表', 'failed', reason)
-      setTaskId(null)
-    }
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const percent = Number((progress as { percent?: number } | undefined)?.percent || 0)
+  const running = !!task.taskId
+  const progress = task.progress as Record<string, unknown> | undefined
+  const status = task.status
+  const completed = Number(progress?.completed ?? 0)
+  const failed = Number(progress?.failed ?? 0)
+  const total = Number(progress?.total ?? 0)
+  const percent = Number(
+    progress?.percent ?? (total > 0 ? Math.round(((completed + failed) / total) * 100) : 0),
+  )
+  const done = status === 'completed' || status === 'success'
 
   return (
     <Modal
       title="选择教师同步课表"
       open={open}
-      onCancel={() => {
-        setTaskId(null)
-        onClose()
-      }}
+      onCancel={onClose}
       width={640}
       footer={[
         <Button
           key="close"
           onClick={() => {
-            if (taskId) {
-              setTaskId(null) // 任务仍后台运行，仅隐藏进度
-            } else {
-              onClose()
-            }
+            // 任务仍后台运行：仅关闭弹窗，父级继续轮询并在完成/失败时写入同步历史
+            onClose()
           }}
         >
-          {taskId ? '隐藏' : '取消'}
+          {running ? '隐藏' : '取消'}
         </Button>,
         <Button
           key="ok"
           type="primary"
           loading={startMut.isPending}
-          disabled={selectedNos.length === 0 || !!taskId}
+          disabled={selectedNos.length === 0 || running}
           onClick={() => startMut.mutate()}
         >
           同步所选（{selectedNos.length}）
@@ -471,31 +536,31 @@ function LlsykbSelectModal({
           { title: '学院', dataIndex: 'college_name', render: (v) => v || '-' },
         ]}
       />
-      {taskId && (
+      {running && (
         <div style={{ marginTop: 8 }}>
-          <Progress percent={percent} status="active" />
-          <div style={{ color: '#999', fontSize: 12 }}>任务 {taskId}，每 3 秒刷新进度</div>
+          <Progress percent={percent} status={done ? 'success' : 'active'} />
+          <div style={{ color: '#999', fontSize: 12 }}>
+            任务 {task.taskId}，已处理 {completed + failed}/{total}，每 3 秒刷新（隐藏弹窗后进度仍在页面展示）
+          </div>
         </div>
       )}
     </Modal>
   )
 }
 
-/** 按学院批量同步（后台任务 + 3 秒轮询进度） */
+/** 按学院批量同步（后台任务，进度由父级统一轮询，隐藏弹窗后任务仍持续并回写历史） */
 function LlsykbBatchModal({
   open,
   onClose,
-  onRecord,
+  task,
 }: {
   open: boolean
   onClose: () => void
-  onRecord: (action: string, status: string, msg: string) => void
+  task: ReturnType<typeof useLlsykbTask>
 }) {
   const { message } = App.useApp()
-  const qc = useQueryClient()
   const [semester, setSemester] = useState<string | undefined>()
   const [collegeId, setCollegeId] = useState<number | undefined>()
-  const [taskId, setTaskId] = useState<string | null>(null)
 
   const { data: currentSemester } = useQuery({
     queryKey: ['current-semester'],
@@ -520,70 +585,45 @@ function LlsykbBatchModal({
     mutationFn: () => syncApi.llsykbBatch(semester!, collegeId),
     onSuccess: (res) => {
       message.success('批量同步任务已启动')
-      setTaskId(res.task_id)
+      task.setTaskId(res.task_id)
     },
-    onError: (e) => {
-      message.error(e.message)
-      onRecord('按学院批量同步课表', 'failed', e.message)
-    },
+    onError: (e) => message.error(e.message),
   })
 
-  // 3 秒轮询进度：后台任务按「已处理用户数/总用户数」计算 percent，逐个教师完成时回推 completed
-  const { data: progress } = useQuery({
-    queryKey: ['llsykb-progress', taskId],
-    queryFn: () => syncApi.llsykbProgress(taskId!),
-    refetchInterval: 3000,
-    enabled: !!taskId,
-  })
-
-  const status = (progress as { status?: string } | undefined)?.status
-  useEffect(() => {
-    if (status === 'completed' || status === 'success') {
-      message.success('批量同步完成')
-      onRecord('按学院批量同步课表', 'success', '批量同步完成')
-      qc.invalidateQueries({ queryKey: ['semesters'] })
-      qc.invalidateQueries({ queryKey: ['schedule'] })
-      setTaskId(null)
-      onClose()
-    } else if (status === 'failed') {
-      const reason = (progress as { error?: string } | undefined)?.error || '批量同步失败'
-      message.error(reason)
-      onRecord('按学院批量同步课表', 'failed', reason)
-      setTaskId(null)
-    }
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const percent = Number((progress as { percent?: number } | undefined)?.percent || 0)
+  const running = !!task.taskId
+  const progress = task.progress as Record<string, unknown> | undefined
+  const status = task.status
+  const completed = Number(progress?.completed ?? 0)
+  const failed = Number(progress?.failed ?? 0)
+  const total = Number(progress?.total ?? 0)
+  const percent = Number(
+    progress?.percent ?? (total > 0 ? Math.round(((completed + failed) / total) * 100) : 0),
+  )
+  const done = status === 'completed' || status === 'success'
 
   return (
     <Modal
       title="按学院批量同步教师课表"
       open={open}
-      onCancel={() => {
-        setTaskId(null)
-        onClose()
-      }}
+      onCancel={onClose}
       footer={[
         <Button
           key="close"
           onClick={() => {
-            if (taskId) {
-              setTaskId(null) // 任务仍后台运行，仅隐藏进度
-            } else {
-              onClose() // 无任务时取消并关闭弹窗
-            }
+            // 任务仍后台运行：仅关闭弹窗，父级继续轮询并在完成/失败时写入同步历史
+            onClose()
           }}
         >
-          {taskId ? '隐藏' : '取消'}
+          {running ? '隐藏' : '取消'}
         </Button>,
         <Button
           key="start"
           type="primary"
           loading={startMut.isPending}
-          disabled={!!taskId}
+          disabled={running}
           onClick={() => startMut.mutate()}
         >
-          启动批量同步
+          {running ? '同步中…' : '启动批量同步'}
         </Button>,
       ]}
     >
@@ -604,10 +644,12 @@ function LlsykbBatchModal({
           />
         </Form.Item>
       </Form>
-      {taskId && (
+      {running && (
         <div style={{ marginTop: 8 }}>
-          <Progress percent={percent} status="active" />
-          <div style={{ color: '#999', fontSize: 12 }}>任务 {taskId}，每 3 秒刷新进度</div>
+          <Progress percent={percent} status={done ? 'success' : 'active'} />
+          <div style={{ color: '#999', fontSize: 12 }}>
+            任务 {task.taskId}，已处理 {completed + failed}/{total}，每 3 秒刷新（隐藏弹窗后进度仍在页面展示）
+          </div>
         </div>
       )}
     </Modal>
@@ -689,6 +731,12 @@ export function LlsykbProgress({ taskId }: { taskId: string }) {
     refetchInterval: 2000,
     enabled: !!taskId,
   })
-  const percent = Number((data as { percent?: number } | undefined)?.percent || 0)
+  const p = data as Record<string, unknown> | undefined
+  const completed = Number(p?.completed ?? 0)
+  const failed = Number(p?.failed ?? 0)
+  const total = Number(p?.total ?? 0)
+  const percent = Number(
+    p?.percent ?? (total > 0 ? Math.round(((completed + failed) / total) * 100) : 0),
+  )
   return <Progress percent={percent} />
 }

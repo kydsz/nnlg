@@ -58,6 +58,7 @@ export default function CourseSchedule() {
   const invalidateConfigs = () => {
     qc.invalidateQueries({ queryKey: ['semester-configs'] })
     qc.invalidateQueries({ queryKey: ['current-semester'] })
+    qc.invalidateQueries({ queryKey: ['semesters'] })
   }
 
   const updateMut = useMutation({

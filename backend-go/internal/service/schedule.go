@@ -416,20 +416,12 @@ func (s *Schedule) TeacherStatus(db *gorm.DB, semester string) (map[int]map[stri
 	return out, nil
 }
 
-// Semesters 学期列表（有明细的学期 + 已配置学期；无数据给默认）
+// Semesters 学期列表（仅已配置学期；无配置给默认）
+// 注意：学期下拉只取 semester_config 配置表，避免删除配置后仍因历史课表数据残留而显示。
 func (s *Schedule) Semesters(db *gorm.DB) ([]string, error) {
-	set := map[string]bool{}
-	var sems []string
-	db.Table("course_schedule cs").
-		Joins("WHERE EXISTS (SELECT 1 FROM course_schedule_detail d WHERE d.schedule_id = cs.id)").
-		Distinct().Pluck("cs.semester", &sems)
-	for _, s := range sems {
-		if s != "" {
-			set[s] = true
-		}
-	}
 	var cfgs []model.SemesterConfig
 	db.Find(&cfgs)
+	set := map[string]bool{}
 	for _, c := range cfgs {
 		if c.Semester != "" {
 			set[c.Semester] = true

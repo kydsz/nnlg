@@ -31,7 +31,7 @@ func initProgress(taskID string, total int, semester, scope string) {
 	batchMu.Lock()
 	defer batchMu.Unlock()
 	batchProgress[taskID] = map[string]interface{}{
-		"status": "running", "total": total, "completed": 0, "failed": 0,
+		"status": "running", "total": total, "completed": 0, "failed": 0, "percent": 0,
 		"failed_ids": []map[string]interface{}{}, "current_teacher": nil,
 		"current_teacher_no": nil, "semester": semester, "scope": scope,
 		"stats": nil, "error": nil, "started_at": time.Now(), "finished_at": nil,
@@ -416,6 +416,7 @@ func (h *Sync) SyncLlsykbBatch(c *gin.Context) {
 			}
 			completed := rec["completed"].(int)
 			failed := rec["failed"].(int)
+			total := rec["total"].(int)
 			failedIDs, _ := rec["failed_ids"].([]map[string]interface{})
 			batchMu.Unlock()
 
@@ -434,12 +435,17 @@ func (h *Sync) SyncLlsykbBatch(c *gin.Context) {
 						"id": no, "name": name, "reason": reason,
 					})
 				}
+				// 进度百分比：已处理数(含成功+失败)/总数
+				done := completed + 1
+				if total > 0 {
+					fields["percent"] = int(float64(done) / float64(total) * 100)
+				}
 			}
 			updateProgress(taskID, fields)
 		}
 		result := spider.SyncByTeacherNos(h.db, semester, nos, cb)
 		now := time.Now()
-		updateProgress(taskID, map[string]interface{}{"status": "completed", "stats": result, "finished_at": &now})
+		updateProgress(taskID, map[string]interface{}{"status": "completed", "percent": 100, "stats": result, "finished_at": &now})
 	}(taskID, p.Xnxq01id, teacherNos)
 
 	response.OKMsg(c, "批量同步任务已提交到后台执行", gin.H{

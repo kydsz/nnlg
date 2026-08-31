@@ -300,10 +300,10 @@ func (s *Evaluation) buildRecordQuery(db *gorm.DB, viewer *model.User, f Evaluat
 		q = q.Where("t.teacher_name LIKE ?", "%"+f.TeacherName+"%")
 	}
 	if f.Start != nil {
-		q = q.Where("r.submit_time >= ?", *f.Start)
+		q = q.Where("t.class_time >= ?", *f.Start)
 	}
 	if f.End != nil {
-		q = q.Where("r.submit_time < ?", *f.End)
+		q = q.Where("t.class_time < ?", *f.End)
 	}
 	return q, nil
 }
@@ -321,7 +321,7 @@ func (s *Evaluation) List(db *gorm.DB, viewer *model.User, f EvaluationFilters) 
 
 	var recs []model.EvaluationRecord
 	err = q.Session(&gorm.Session{}).Select("r.*").
-		Order("r.submit_time DESC, r.id DESC").
+		Order("t.class_time DESC, r.id DESC").
 		Offset((f.Page - 1) * f.PageSize).Limit(f.PageSize).
 		Scan(&recs).Error
 	if err != nil {
@@ -378,6 +378,7 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 			item["teacher_id"] = task.TeacherID
 			item["teacher_name"] = task.TeacherName
 			item["course_name"] = task.CourseName
+			item["class_time"] = task.ClassTime
 		}
 		if withValues {
 			if r.DimensionValues == nil {

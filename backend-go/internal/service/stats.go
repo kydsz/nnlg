@@ -97,6 +97,7 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 	scoreCodes := scoreDimCodeSet(db)
 	out := make([]TeacherStatItem, 0, len(teachers))
 	for _, t := range teachers {
+		// 全部任务（含已删除，仅用于取评教记录，与评教记录页口径一致：记录不随任务删除消失）
 		var tasks []model.EvaluationTask
 		tq := db.Where("teacher_id = ?", t.ID)
 		if f.Start != nil {
@@ -107,8 +108,13 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 		}
 		tq.Find(&tasks)
 		taskIDs := make([]int, 0, len(tasks))
+		// 生效任务（仅未删除，用于任务计数，与任务列表页口径一致）
+		active := make([]model.EvaluationTask, 0, len(tasks))
 		for _, tk := range tasks {
 			taskIDs = append(taskIDs, tk.ID)
+			if !tk.IsDeleted {
+				active = append(active, tk)
+			}
 		}
 
 		var records []model.EvaluationRecord
@@ -124,7 +130,7 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 		}
 
 		evaluated, pending := int64(0), int64(0)
-		for _, tk := range tasks {
+		for _, tk := range active {
 			switch tk.Status {
 			case model.TaskStatusEvaluated:
 				evaluated++
@@ -133,8 +139,8 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 			}
 		}
 		rate := 0.0
-		if len(tasks) > 0 {
-			rate = round2(float64(evaluated) / float64(len(tasks)) * 100)
+		if len(active) > 0 {
+			rate = round2(float64(evaluated) / float64(len(active)) * 100)
 		}
 		var collegeName *string
 		if t.College != nil {
@@ -143,7 +149,7 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 		out = append(out, TeacherStatItem{
 			TeacherID: t.ID, TeacherName: t.Username, UserNo: t.UserNo,
 			CollegeName: collegeName,
-			TotalTasks:  int64(len(tasks)), EvaluatedTasks: evaluated, PendingTasks: pending,
+			TotalTasks:  int64(len(active)), EvaluatedTasks: evaluated, PendingTasks: pending,
 			TotalEvaluations: len(records), AverageScore: recordsAvgScore(records, scoreCodes),
 			EvaluationRate: rate,
 		})
