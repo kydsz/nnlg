@@ -256,6 +256,30 @@ export default function Evaluations() {
               </Descriptions.Item>
               <Descriptions.Item label="提交时间">{formatDate(detail.submit_time)}</Descriptions.Item>
             </Descriptions>
+            {detail.schedule && (
+              <>
+                <h4 style={{ margin: '16px 0 8px' }}>课表信息</h4>
+                <Descriptions column={1} size="small" bordered>
+                  <Descriptions.Item label="上课时间">
+                    {detail.schedule.class_time_text || '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="教室">
+                    {detail.schedule.classroom || '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="班级">
+                    {detail.schedule.class_info || '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="应到人数">
+                    {detail.schedule.student_count != null
+                      ? `${detail.schedule.student_count}人`
+                      : '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="周次">
+                    {detail.schedule.week_pattern || '-'}
+                  </Descriptions.Item>
+                </Descriptions>
+              </>
+            )}
             <h4 style={{ margin: '16px 0 8px' }}>打分明细</h4>
             {groupEvaluationDimensions(detail).map((g) => (
               <div key={g.key} style={{ marginBottom: 12 }}>

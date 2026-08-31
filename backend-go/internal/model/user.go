@@ -63,6 +63,16 @@ func (u *User) HasAnyRole(codes ...string) bool {
 	return false
 }
 
+// SupervisorRole 取督导类角色编码（多角色时按 level 校级>督导老师>院级），非督导返回空串
+func (u *User) SupervisorRole() string {
+	for _, code := range []string{RoleSchoolSupervisor, RoleSupervisor, RoleCollegeSupervisor} {
+		if u.HasRole(code) {
+			return code
+		}
+	}
+	return ""
+}
+
 // Permissions 用户全部权限（角色表 permissions 字段的并集）
 func (u *User) Permissions(db *gorm.DB) []string {
 	codes := u.RoleCodes()

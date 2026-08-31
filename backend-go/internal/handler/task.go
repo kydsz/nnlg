@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -138,7 +139,7 @@ func (h *Task) Get(c *gin.Context) {
 		"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
 		"teacher_college_id": teacherCollegeID, "teacher_college_name": teacherCollegeName,
 		"course_name": t.CourseName, "class_time": FTimeMin(t.ClassTime),
-		"classroom": t.Classroom, "status": t.Status,
+		"classroom": t.Classroom, "schedule": taskScheduleSnapshot(t), "status": t.Status,
 		"status_name":      model.TaskStatusNames[t.Status],
 		"evaluation_count": t.EvaluationCount, "has_supervisor_eval": t.HasSupervisorEval,
 		"create_by": t.CreateBy, "create_by_name": createByName,
@@ -156,6 +157,7 @@ type taskReq struct {
 	StartTime   *model.LocalTime `json:"start_time"`
 	EndTime     *model.LocalTime `json:"end_time"`
 	Status      *int16           `json:"status"`
+	Schedule    *service.ScheduleSnapshot `json:"schedule"`
 }
 
 func toTaskParams(p taskReq) (service.CreateTaskParams, error) {
@@ -163,7 +165,20 @@ func toTaskParams(p taskReq) (service.CreateTaskParams, error) {
 		TeacherID: p.TeacherID, TeacherName: p.TeacherName,
 		CourseName: p.CourseName, Classroom: p.Classroom,
 		ClassTime: p.ClassTime, StartTime: p.StartTime, EndTime: p.EndTime,
+		ScheduleSnapshot: p.Schedule,
 	}, nil
+}
+
+// taskScheduleSnapshot 解析任务上的课表信息快照；无则返回 nil
+func taskScheduleSnapshot(t *model.EvaluationTask) interface{} {
+	if len(t.ScheduleSnapshot) == 0 {
+		return nil
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(t.ScheduleSnapshot, &m); err != nil {
+		return nil
+	}
+	return m
 }
 
 // taskCreatePayload 创建响应体（对齐旧端 create/batch 返回结构）
@@ -171,7 +186,7 @@ func taskCreatePayload(t *model.EvaluationTask) gin.H {
 	return gin.H{
 		"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
 		"course_name": t.CourseName, "class_time": FTimeMin(t.ClassTime),
-		"classroom": t.Classroom, "status": t.Status,
+		"classroom": t.Classroom, "schedule": taskScheduleSnapshot(t), "status": t.Status,
 		"status_name":      model.TaskStatusNames[t.Status],
 		"evaluation_count": t.EvaluationCount, "has_supervisor_eval": t.HasSupervisorEval,
 		"create_by": t.CreateBy, "create_time": FTime(t.CreateTime),
@@ -187,7 +202,7 @@ func taskUpdatePayload(t *model.EvaluationTask, teacher *model.User) gin.H {
 	return gin.H{
 		"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": teacherName,
 		"course_name": t.CourseName, "class_time": FTimeMin(t.ClassTime),
-		"classroom": t.Classroom, "status": t.Status,
+		"classroom": t.Classroom, "schedule": taskScheduleSnapshot(t), "status": t.Status,
 		"status_name":      model.TaskStatusNames[t.Status],
 		"evaluation_count": t.EvaluationCount, "has_supervisor_eval": t.HasSupervisorEval,
 		"update_time": FTime(t.UpdateTime),
@@ -266,6 +281,7 @@ func (h *Task) Update(c *gin.Context) {
 	up := service.UpdateTaskParams{
 		CourseName: &p.CourseName, Classroom: p.Classroom, Status: p.Status,
 		ClassTime: p.ClassTime, StartTime: p.StartTime, EndTime: p.EndTime,
+		ScheduleSnapshot: p.Schedule,
 	}
 	// 空字符串表示不修改
 	if p.CourseName == "" {

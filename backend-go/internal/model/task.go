@@ -24,6 +24,7 @@ type EvaluationTask struct {
 	CourseName        string     `gorm:"column:course_name;size:128" json:"course_name"`
 	ClassTime         *LocalTime `gorm:"column:class_time" json:"class_time"`
 	Classroom         *string    `gorm:"column:classroom;size:64" json:"classroom"`
+	ScheduleSnapshot  json.RawMessage `gorm:"column:schedule_snapshot;type:json" json:"schedule_snapshot"`
 	Status            int16      `gorm:"column:status" json:"status"`
 	StartTime         *LocalTime `gorm:"column:start_time" json:"start_time"`
 	EndTime           *LocalTime `gorm:"column:end_time" json:"end_time"`

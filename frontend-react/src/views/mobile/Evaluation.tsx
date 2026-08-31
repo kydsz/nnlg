@@ -23,7 +23,7 @@ import { uploadApi } from '@/api/modules/upload'
 import { scheduleApi } from '@/api/modules/schedule'
 import FormulaEditor from '@/components/FormulaEditor'
 import type { Dimension, CourseItem } from '@/api/types'
-import { WEEK_DAYS, formatDate, parseSections } from '@/utils/format'
+import { formatDate } from '@/utils/format'
 
 export default function Evaluation() {
   const { id } = useParams<{ id: string }>()
@@ -64,7 +64,9 @@ export default function Evaluation() {
     })
   }, [dims])
 
-  // 课表自动匹配（仅展示）：按 teacher_id 拉课表，课程名模糊匹配，兜底第一条
+  // 课表信息展示：优先用「加入待评时固化的快照」（周次已收敛到添加周），无快照才回退实时查课表
+  const snapshot = task?.schedule
+  // 课表自动匹配（用于应到人数预填/出勤率计算）：仍走实时课表，与展示解耦
   const { data: schedule } = useQuery({
     queryKey: ['schedule', 'teacher', task?.teacher_id, 'auto'],
     queryFn: () => scheduleApi.byTeacher(task!.teacher_id),
@@ -84,6 +86,19 @@ export default function Evaluation() {
       ) || details[0]
     )
   }, [schedule, task])
+
+  // 展示用的课表信息：快照优先，兜底实时课表（历史/PC 端任务无快照）
+  const displaySchedule = useMemo(() => {
+    if (snapshot) return snapshot
+    if (!matchedCourse) return null
+    return {
+      class_time_text: undefined as string | undefined,
+      classroom: matchedCourse.classroom || undefined,
+      class_info: matchedCourse.class_info || undefined,
+      student_count: matchedCourse.student_count != null ? Number(matchedCourse.student_count) : undefined,
+      week_pattern: matchedCourse.week_pattern || undefined,
+    }
+  }, [snapshot, matchedCourse])
 
   // 应到人数预填：课表匹配到 student_count 时，自动填入「应到人数」维度（未填写时）
   useEffect(() => {
@@ -202,19 +217,18 @@ export default function Evaluation() {
         </div>
       </Card>
 
-      {/* 课表信息（自动匹配，仅展示） */}
-      {matchedCourse && (
+      {/* 课表信息（快照优先，回退实时课表；仅展示） */}
+      {displaySchedule && (
         <Card style={{ margin: '0 12px 12px' }} title={<span style={{ fontSize: 14 }}>课表信息</span>}>
           <InfoRow label="上课时间">
-            {WEEK_DAYS[Number(matchedCourse.week_day) - 1] || '-'}{' '}
-            {formatSection(matchedCourse.section)}
+            {displaySchedule.class_time_text || '-'}
           </InfoRow>
-          {matchedCourse.classroom && <InfoRow label="教室">{matchedCourse.classroom}</InfoRow>}
-          {matchedCourse.class_info && <InfoRow label="班级">{matchedCourse.class_info}</InfoRow>}
-          {matchedCourse.student_count != null && (
-            <InfoRow label="应到人数">{matchedCourse.student_count}人</InfoRow>
+          {displaySchedule.classroom && <InfoRow label="教室">{displaySchedule.classroom}</InfoRow>}
+          {displaySchedule.class_info && <InfoRow label="班级">{displaySchedule.class_info}</InfoRow>}
+          {displaySchedule.student_count != null && (
+            <InfoRow label="应到人数">{displaySchedule.student_count}人</InfoRow>
           )}
-          {matchedCourse.week_pattern && <InfoRow label="周次">{matchedCourse.week_pattern}</InfoRow>}
+          {displaySchedule.week_pattern && <InfoRow label="周次">{displaySchedule.week_pattern}</InfoRow>}
         </Card>
       )}
 
@@ -296,14 +310,6 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
       <span>{children}</span>
     </div>
   )
-}
-
-function formatSection(section: string | null | undefined): string {
-  const nums = parseSections(section || '')
-  if (nums.length === 0) return '-'
-  const first = Number(nums[0])
-  const last = Number(nums[nums.length - 1])
-  return first === last ? `第${first}节` : `第${first}-${last}节`
 }
 
 /* ═══ 单个维度输入 ═══ */

@@ -42,7 +42,14 @@ type EvalDetail struct {
 	ClassTime                            string
 	IsAnonymous                          bool
 	TotalScore, MaxTotalScore            float64
-	Groups                               []EvalDetailGroup
+	// 课表信息（与提交页一致）：上课时间/教室/班级/应到人数/周次
+	ScheduleRows []EvalInfoRow
+	Groups       []EvalDetailGroup
+}
+
+// EvalInfoRow 课表信息单行（label + value）
+type EvalInfoRow struct {
+	Label, Value string
 }
 
 // EvalDetailGroup 维度分组
@@ -76,6 +83,9 @@ func RenderEvaluationPDF(d EvalDetail, uploadDir string) ([]byte, error) {
 	b := &evalPainter{gp: &gp, uploadDir: uploadDir, y: margin}
 	b.drawHeader(d)
 	b.drawInfo(d)
+	if len(d.ScheduleRows) > 0 {
+		b.drawSchedule(d.ScheduleRows)
+	}
 	for i := range d.Groups {
 		b.drawGroup(&d.Groups[i])
 	}
@@ -203,6 +213,50 @@ func (b *evalPainter) drawInfo(d EvalDetail) {
 		}
 	}
 	b.y = top + cardH + 3.0
+}
+
+// drawSchedule 课表信息区：标题 + 两列表格（课表信息，对齐提交页展示内容）
+func (b *evalPainter) drawSchedule(rows []EvalInfoRow) {
+	const headH = 8.0
+	const labelW = 46.0
+	left, right := margin, pageW-margin
+	valX := left + labelW
+	valW := right - valX - 2
+
+	// 标题
+	b.text(left, b.y+4.2, "课表信息", 12, colText)
+	b.gp.SetStrokeColor(colDeepBlue[0], colDeepBlue[1], colDeepBlue[2])
+	b.gp.SetLineWidth(0.8)
+	b.gp.Line(left, b.y+headH-1.2, right, b.y+headH-1.2)
+	b.y += headH
+
+	for _, row := range rows {
+		lines := b.wrapText(row.Value, valW-2, 11)
+		h := 6.0
+		if len(lines) > 1 {
+			h = float64(len(lines))*4.4 + 1.6
+		}
+		if b.y+h > pageH-margin-8 {
+			b.gp.AddPage()
+			b.y = margin
+			b.text(left, b.y+4.2, "课表信息（续）", 12, colText)
+			b.gp.SetStrokeColor(colDeepBlue[0], colDeepBlue[1], colDeepBlue[2])
+			b.gp.SetLineWidth(0.8)
+			b.gp.Line(left, b.y+headH-1.2, right, b.y+headH-1.2)
+			b.y += headH
+		}
+		b.fillRect(left, b.y, labelW, h, colInfoBG)
+		b.text(left+3, baseLine(b.y, h, 10), row.Label, 10, colText)
+		b.gp.SetStrokeColor(colBorder[0], colBorder[1], colBorder[2])
+		b.gp.SetLineWidth(0.25)
+		b.gp.Line(valX, b.y, valX, b.y+h)
+		b.gp.Line(left, b.y+h, right, b.y+h)
+		for i, ln := range lines {
+			b.text(valX+2, baseLine(b.y, h, 11)+float64(i-(len(lines)-1))/2*4.4, ln, 11, colText)
+		}
+		b.y += h
+	}
+	b.y += 3.0
 }
 
 // drawGroup 分组区块：组头（组名/得分 + 深蓝下划线）+ 两列维度表；跨页时重复组头（对齐打印模板 h3）

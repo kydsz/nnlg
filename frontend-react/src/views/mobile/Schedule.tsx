@@ -21,14 +21,39 @@ import {
   TIME_SLOTS,
   formatSemester,
   isCourseInWeek,
+  parseWeekPattern,
   defaultSemesterStart,
   currentWeekOf,
   getDateForWeekAndDay,
   formatSectionText,
 } from '@/utils/format'
-import type { CourseItem, SemesterConfig, TeacherSchedule, User } from '@/api/types'
+import type { CourseItem, EvalScheduleInfo, SemesterConfig, TeacherSchedule, User } from '@/api/types'
 import { useDebounce } from '@/hooks/useDebounce'
 import './schedule.css'
+
+/** 把课表中的一门课固化为「课表信息快照」（加入待评时随任务落库），详情/导出据此展示 */
+function buildScheduleSnapshot(course: CourseItem, week: number): EvalScheduleInfo {
+  const weekDay = WEEK_DAYS[Number(course.week_day) - 1] || ''
+  const sec = formatSectionText(course.section)
+  const classTimeText = [weekDay, sec].filter(Boolean).join(' ') || undefined
+  return {
+    class_time_text: classTimeText,
+    classroom: course.classroom || undefined,
+    class_info: course.class_info || undefined,
+    student_count: course.student_count != null ? Number(course.student_count) : undefined,
+    // 周次收敛到"添加进待评时所在的那一周"，如第 1 周添加 → "第1周"，而非整段 "1-8周"
+    week_pattern: narrowToWeek(course.week_pattern, week),
+  }
+}
+
+/** 把周次范围收敛到当前教学周（如 "1-8周" + 第1周 → "第1周"）；无法识别时保留原值 */
+function narrowToWeek(pattern: string | null | undefined, week: number): string | undefined {
+  if (!pattern) return undefined
+  const set = parseWeekPattern(pattern)
+  if (set === null) return pattern // 全周/单双周等无法确定具体周，保留原表达
+  if (set.includes(week)) return `第${week}周`
+  return pattern // 理论不会发生（cellCourses 已按当前周过滤），兜底保留原值
+}
 
 export default function Schedule() {
   const qc = useQueryClient()
@@ -49,23 +74,21 @@ export default function Schedule() {
     queryKey: ['semester-configs'],
     queryFn: () => scheduleApi.semesterConfigs(),
   })
-  const { data: dynamicSemesters } = useQuery({
-    queryKey: ['semesters'],
-    queryFn: () => scheduleApi.semesters(),
+  const { data: currentSemester } = useQuery({
+    queryKey: ['semester-current'],
+    queryFn: () => scheduleApi.currentSemester(),
   })
   const configList: SemesterConfig[] = configs || []
-  const semesterOptions = Array.from(
-    new Set([...(dynamicSemesters || []), ...configList.map((c) => c.semester)])
-  )
+  const semesterOptions = Array.from(new Set(configList.map((c) => c.semester)))
     .sort()
     .reverse()
-  const currentCfg = configList.find((c) => c.is_current)
   const [semester, setSemester] = useState<string | undefined>(undefined)
   useEffect(() => {
-    if (!semester && (currentCfg?.semester || dynamicSemesters?.[0])) {
-      setSemester(currentCfg?.semester || dynamicSemesters?.[0])
+    // 默认取管理员配置的当前学期（/semester-configs/current），无配置才回退最新已配置学期
+    if (!semester && (currentSemester?.semester || semesterOptions[0])) {
+      setSemester(currentSemester?.semester || semesterOptions[0])
     }
-  }, [currentCfg, dynamicSemesters, semester])
+  }, [currentSemester, semesterOptions, semester])
 
   // 教师选择（管理员/督导/具备查看本学院教师课表权限者可弹层选教师查看课表）
   const [selectedTeacher, setSelectedTeacher] = useState<{ id: number; name: string } | null>(null)
@@ -186,6 +209,8 @@ export default function Schedule() {
         course_name: course.course_name,
         classroom: course.classroom || undefined,
         class_time: classTime,
+        // 加入待评时固化课表信息（周次收敛到当前添加周/班级/应到人数/上课时间），详情/导出直接读这份快照
+        schedule: buildScheduleSnapshot(course, week),
       })
       setAddedIds((prev) => new Set(prev).add(key))
       qc.invalidateQueries({ queryKey: ['mobile-tasks'] })

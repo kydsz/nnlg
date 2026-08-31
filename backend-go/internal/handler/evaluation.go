@@ -323,6 +323,28 @@ func renderEvaluationPDF(data map[string]interface{}, uploadDir string) ([]byte,
 	if v, ok := data["is_anonymous"].(bool); ok {
 		detail.IsAnonymous = v
 	}
+	// 课表信息（与提交页一致）
+	if sch, ok := data["schedule"].(map[string]interface{}); ok {
+		scheduleRows := []struct {
+			label string
+			val   interface{}
+			unit  string
+		}{
+			{"上课时间", sch["class_time_text"], ""},
+			{"教室", sch["classroom"], ""},
+			{"班级", sch["class_info"], ""},
+			{"应到人数", sch["student_count"], "人"},
+			{"周次", sch["week_pattern"], ""},
+		}
+		for _, row := range scheduleRows {
+			if row.val == nil {
+				detail.ScheduleRows = append(detail.ScheduleRows, pdfgen.EvalInfoRow{Label: row.label, Value: "-"})
+				continue
+			}
+			val := fmt.Sprint(row.val) + row.unit
+			detail.ScheduleRows = append(detail.ScheduleRows, pdfgen.EvalInfoRow{Label: row.label, Value: val})
+		}
+	}
 	for _, g := range groups {
 		og := pdfgen.EvalDetailGroup{Name: g.Name, Score: g.Score, MaxScore: g.MaxScore}
 		for _, dim := range g.Dimensions {
@@ -389,6 +411,29 @@ th{background:#eef3fa}.meta td:first-child{width:120px;background:#f7f9fc;font-w
 		fmt.Fprintf(&b, "<tr><td>%s</td><td>%s</td></tr>", row.k, row.v)
 	}
 	b.WriteString(`</table>`)
+
+	// 课表信息（与提交页一致：上课时间/教室/班级/应到人数/周次）
+	if sch, ok := d["schedule"].(map[string]interface{}); ok {
+		b.WriteString(`<table class="meta">`)
+		rows := []struct{ k string; v interface{} }{
+			{"上课时间", sch["class_time_text"]},
+			{"教室", sch["classroom"]},
+			{"班级", sch["class_info"]},
+			{"应到人数", sch["student_count"]},
+			{"周次", sch["week_pattern"]},
+		}
+		for _, row := range rows {
+			val := "-"
+			if row.v != nil {
+				val = fmt.Sprint(row.v)
+				if row.k == "应到人数" {
+					val = val + "人"
+				}
+			}
+			fmt.Fprintf(&b, "<tr><td>%s</td><td>%s</td></tr>", row.k, val)
+		}
+		b.WriteString(`</table>`)
+	}
 
 	if groups, ok := d["dimension_groups"].([]service.ExportGroup); ok {
 		for _, g := range groups {

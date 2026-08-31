@@ -40,7 +40,7 @@
 | 学院管理员 | college\_admin      | 10                            | college | 管理本学院的用户、评教任务等                                                                                                                                     |
 | 学院管理员 | school\_admin       | -（向后兼容别名，与 college\_admin 同义） | college | 兼容旧数据的角色编码                                                                                                                                         |
 | 校级督导  | school\_supervisor  | 20                            | all     | 可跨学院督导评教                                                                                                                                           |
-| 督导老师  | supervisor          | 22                            | college | 通用督导（向后兼容）                                                                                                                                         |
+| 督导老师  | supervisor          | 22                            | college | 通用督导（向后兼容）；具备 `task:create`，可添加自己及负责学院教师的课程进待评任务（见 `task:create` 说明）                                                          |
 | 院级督导  | college\_supervisor | 25                            | college | 仅负责本学院督导                                                                                                                                           |
 | 教师    | teacher             | 50                            | self    | `data_scope = self`：仅能查看**自己**的评教记录和课表；**查看评教任务**不受此限制，教师可查看本学院全体教师的评教任务（见下方 `task:view` 说明）；具备 `task:create` 时可添加**自己及本学院其他教师**的课程进待评任务（见 `task:create` 说明）；具备 `schedule:view_college` 时可查看**本学院**其他教师的课表（见课程表说明） |
 
@@ -72,7 +72,7 @@
 >
 > **关于** **`data_scope = self`** **与"查看评教任务"的差异**：角色的 `data_scope` 字段只约束**个人数据**的范围，即评教记录、课表这类直接关联到"我"的数据（教师为 `self`，只能看自己的）。而**评教任务**的查看范围由 `task:view` 的数据过滤逻辑决定——它不直接用 `data_scope`，而是通过 `AccessibleCollegeIDs` 按「被评教师所属学院」过滤。因此教师即使 `data_scope = self`，查看评教任务时仍能看到**本学院全体教师**的任务。这两者并不冲突：`data_scope = self` 限制的是教师"查看自己评教记录/课表"，`task:view` 则允许教师"查看本学院全体教师的评教任务"。其余角色同理，任务数据范围始终由学院过滤逻辑（`AccessibleCollegeIDs` + `applyCollegeFilter`）而非 `data_scope` 决定。
 
-> `task:create`：创建评教任务。接口 `POST /tasks`（含批量 `POST /tasks/batch`）均需该权限。教师默认分配该权限后，可在移动端课表页将课程加入"待评课表"；后端 `checkTaskTargetScope` 教师分支天然限定**只能为本学院教师（含自己）创建任务**，无法跨学院操作。历史角色缺失 `task:create` 的由迁移 `004_add_task_create_to_teacher.sql` 自动补齐（幂等）。
+> `task:create`：创建评教任务。接口 `POST /tasks`（含批量 `POST /tasks/batch`）均需该权限。教师默认分配该权限后，可在移动端课表页将课程加入"待评课表"；后端 `checkTaskTargetScope` 教师分支天然限定**只能为本学院教师（含自己）创建任务**，无法跨学院操作。`supervisor`（督导老师）同样分配 `task:create`，可添加自己及负责学院教师的课程进待评任务（督导分支按负责学院限定）。历史角色缺失 `task:create` 的由迁移 `004_add_task_create_to_teacher.sql`（teacher）、`005_add_task_create_to_supervisor.sql`（supervisor）自动补齐（幂等）。
 
 > `task:delete`：删除任意评教任务；`task:delete_own`：仅能删除自己创建的评教任务。两者可并存，系统管理员恒可删任意。删除任务时其名下评教记录一并软删（数据保留、可恢复），确保任务删除后记录不再残留于记录列表/统计。
 

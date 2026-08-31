@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -14,9 +14,11 @@ import {
 } from 'antd-mobile'
 import { DeleteOutline } from 'antd-mobile-icons'
 import { taskApi, type TaskListParams } from '@/api/modules/tasks'
+import { scheduleApi } from '@/api/modules/schedule'
 import { useAuthStore } from '@/stores/auth'
-import type { Task } from '@/api/types'
-import { formatDate, formatClassPeriod } from '@/utils/format'
+import type { Task, SemesterConfig } from '@/api/types'
+import { formatDate, formatClassPeriod, formatSemester, defaultSemesterStart } from '@/utils/format'
+import dayjs from 'dayjs'
 
 type StatusFilter = '' | '1' | '2' | 'supervisor_yes' | 'supervisor_no'
 type CreatorFilter = '' | 'my_created' | 'other_created'
@@ -30,7 +32,38 @@ export default function Home() {
   const [keyword, setKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('')
   const [creatorFilter, setCreatorFilter] = useState<CreatorFilter>('')
+  const [semester, setSemester] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
+
+  // 学期：默认取管理员配置的当前学期；下拉可切换到其它学期
+  const { data: semesterConfigs } = useQuery({
+    queryKey: ['semester-configs'],
+    queryFn: () => scheduleApi.semesterConfigs(),
+  })
+  const { data: currentSemester } = useQuery({
+    queryKey: ['semester-current'],
+    queryFn: () => scheduleApi.currentSemester(),
+  })
+  const configList: SemesterConfig[] = semesterConfigs || []
+  const semesterOptions = useMemo(
+    () => Array.from(new Set(configList.map((c) => c.semester))).sort().reverse(),
+    [configList]
+  )
+  useEffect(() => {
+    if (!semester && (currentSemester?.semester || semesterOptions[0])) {
+      setSemester(currentSemester?.semester || semesterOptions[0])
+    }
+  }, [currentSemester, semesterOptions, semester])
+
+  // 当前所选学期的日期区间（start_date ~ end_date），用于过滤任务的上课时间
+  const selectedCfg = configList.find((c) => c.semester === semester)
+  const semesterRange = useMemo(() => {
+    if (!semester) return [] as [string, string] | []
+    const start = selectedCfg?.start_date || defaultSemesterStart(semester)
+    const weeks = selectedCfg?.weeks || 20
+    const end = dayjs(start).add(weeks * 7 - 1, 'day').format('YYYY-MM-DD')
+    return [start, end] as [string, string]
+  }, [semester, selectedCfg])
   const canDelete = (t: Task) =>
     hasPermission('task:delete') ||
     (hasPermission('task:delete_own') && userId != null && t.create_by === userId)
@@ -51,9 +84,13 @@ export default function Home() {
       } else if (creatorFilter === 'other_created' && userId != null) {
         params.create_by_not = userId
       }
+      if (semesterRange.length === 2) {
+        params.start_date = semesterRange[0]
+        params.end_date = semesterRange[1]
+      }
       return params
     },
-    [keyword, statusFilter, creatorFilter, userId]
+    [keyword, statusFilter, creatorFilter, userId, semesterRange]
   )
 
   const { data, isLoading, isError } = useQuery({
@@ -114,6 +151,20 @@ export default function Home() {
           onClear={resetAndReload}
         />
         <div style={{ display: 'flex', gap: 8, padding: '4px 12px', overflowX: 'auto' }}>
+          <select
+            value={semester || ''}
+            onChange={(e) => {
+              setSemester(e.target.value || undefined)
+              resetAndReload()
+            }}
+            style={selectStyle}
+          >
+            {semesterOptions.map((s) => (
+              <option key={s} value={s}>
+                {formatSemester(s)}
+              </option>
+            ))}
+          </select>
           <select
             value={statusFilter}
             onChange={(e) => {

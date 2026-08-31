@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -140,10 +142,15 @@ func (s *Evaluation) Submit(db *gorm.DB, viewer *model.User, p SubmitParams) (*m
 		return nil, err
 	}
 
+	// 落库角色：多角色用户按督导优先（持有督导角色即记为督导评教），否则用主角色
+	evaluatorRole := viewer.Role
+	if sup := viewer.SupervisorRole(); sup != "" {
+		evaluatorRole = sup
+	}
 	now := time.Now()
 	rec := model.EvaluationRecord{
 		TaskID: task.ID, EvaluatorID: IPtr(viewer.ID), EvaluatorName: viewer.Username,
-		EvaluatorRole: viewer.Role, IsAnonymous: p.IsAnonymous,
+		EvaluatorRole: evaluatorRole, IsAnonymous: p.IsAnonymous,
 		SubmitTime: model.LocalTimePtr(now),
 	}
 	raw, err := marshalJSON(p.DimensionValues)
@@ -159,7 +166,7 @@ func (s *Evaluation) Submit(db *gorm.DB, viewer *model.User, p SubmitParams) (*m
 		updates := map[string]interface{}{
 			"evaluation_count": gorm.Expr("evaluation_count + 1"),
 		}
-		if model.IsSupervisorRole(viewer.Role) {
+		if model.IsSupervisorRole(evaluatorRole) {
 			updates["has_supervisor_eval"] = true
 		}
 		if task.Status == model.TaskStatusPending {
@@ -399,6 +406,120 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 	return out, nil
 }
 
+// matchScheduleForTask 取评教任务对应的课表信息（上课时间/教室/班级/应到人数/周次）。
+// 优先使用"加入待评任务"时固化的快照（task.ScheduleSnapshot，与提交页展示一致）；
+// 历史任务无快照时，回退到被评教师当前学期课表现查（复用提交页同一套模糊匹配逻辑）。
+func matchScheduleForTask(db *gorm.DB, task *model.EvaluationTask) map[string]interface{} {
+	if len(task.ScheduleSnapshot) > 0 {
+		var snap struct {
+			ClassTimeText *string `json:"class_time_text"`
+			Classroom     *string `json:"classroom"`
+			ClassInfo     *string `json:"class_info"`
+			StudentCount  *int    `json:"student_count"`
+			WeekPattern   *string `json:"week_pattern"`
+		}
+		if err := json.Unmarshal(task.ScheduleSnapshot, &snap); err == nil {
+			return map[string]interface{}{
+				"class_time_text": ifNilStr(snap.ClassTimeText),
+				"classroom":       ifNilStr(snap.Classroom),
+				"class_info":      ifNilStr(snap.ClassInfo),
+				"student_count":   snap.StudentCount,
+				"week_pattern":    ifNilStr(snap.WeekPattern),
+			}
+		}
+	}
+
+	sch := NewSchedule().ByTeacher(db, task.TeacherID, "")
+	details, _ := sch["details"].([]map[string]interface{})
+	if len(details) == 0 {
+		return map[string]interface{}{
+			"class_time_text": nil, "classroom": nil, "class_info": nil,
+			"student_count": nil, "week_pattern": nil,
+		}
+	}
+	// 与前端一致：课程名互相包含优先，否则兜底第一条
+	var matched map[string]interface{}
+	for _, d := range details {
+		cn, _ := d["course_name"].(string)
+		if cn == task.CourseName ||
+			strings.Contains(task.CourseName, cn) ||
+			strings.Contains(cn, task.CourseName) {
+			matched = d
+			break
+		}
+	}
+	if matched == nil {
+		matched = details[0]
+	}
+
+	weekDay, _ := matched["week_day"].(*int8)
+	section, _ := matched["section"].(string)
+	classroom, _ := matched["classroom"].(string)
+	classInfo, _ := matched["class_info"].(string)
+	weekPattern, _ := matched["week_pattern"].(string)
+	studentCount := matched["student_count"]
+
+	// 上课时间文本：如 "周六 第5-6节"
+	classTimeText := ""
+	if weekDay != nil && *weekDay >= 1 && *weekDay <= 7 {
+		classTimeText = weekDayNames[int(*weekDay)-1]
+	}
+	if seg := formatSectionText(section); seg != "" {
+		if classTimeText != "" {
+			classTimeText += " "
+		}
+		classTimeText += seg
+	}
+	var ct interface{}
+	if classTimeText != "" {
+		ct = classTimeText
+	}
+	return map[string]interface{}{
+		"class_time_text": ct,
+		"classroom":       strOrNil(classroom),
+		"class_info":      strOrNil(classInfo),
+		"student_count":   studentCount,
+		"week_pattern":    strOrNil(weekPattern),
+	}
+}
+
+// ifNilStr 空字符串指针转 nil
+func ifNilStr(s *string) interface{} {
+	if s == nil || *s == "" {
+		return nil
+	}
+	return *s
+}
+
+// weekDayNames 周一到周日，对齐前端 WEEK_DAYS
+var weekDayNames = []string{"周一", "周二", "周三", "周四", "周五", "周六", "周日"}
+
+// formatSectionText 节次文本：如 section="05-06" -> "第5-6节"；单节 -> "第5节"；无 -> ""
+func formatSectionText(section string) string {
+	if section == "" {
+		return ""
+	}
+	re := regexp.MustCompile(`\d{2}`)
+	ms := re.FindAllString(section, -1)
+	if len(ms) == 0 {
+		return ""
+	}
+	first, _ := strconv.Atoi(ms[0])
+	last, _ := strconv.Atoi(ms[len(ms)-1])
+	if first == last {
+		return fmt.Sprintf("第%d节", first)
+	}
+	return fmt.Sprintf("第%d-%d节", first, last)
+}
+
+// strOrNil 空字符串转 nil
+func strOrNil(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 // GetDetail 详情（含维度 schema）
 func (s *Evaluation) GetDetail(db *gorm.DB, viewer *model.User, id int) (map[string]interface{}, error) {
 	var rec model.EvaluationRecord
@@ -450,6 +571,8 @@ func (s *Evaluation) GetDetail(db *gorm.DB, viewer *model.User, id int) (map[str
 	item["class_time"] = task.ClassTime
 	item["classroom"] = task.Classroom
 	item["task_status"] = task.Status
+	// 课表信息（上课时间/教室/班级/应到人数/周次）：与提交页一致，供详情完整展示
+	item["schedule"] = matchScheduleForTask(db, &task)
 	return item, nil
 }
 
@@ -785,6 +908,8 @@ func (s *Evaluation) ExportData(db *gorm.DB, viewer *model.User, id int) (map[st
 		"submit_time":         submitTime, "is_anonymous": rec.IsAnonymous,
 		"total_score": totalScore, "max_total_score": totalMax,
 		"dimension_groups": groupList,
+		// 课表信息：详情导出（PDF/HTML）完整展示班级/周次/应到人数等
+		"schedule": matchScheduleForTask(db, &task),
 	}, nil
 }
 

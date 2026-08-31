@@ -171,6 +171,32 @@ function RecordList({ type, userId }: { type: EvalType; userId: number }) {
               <List.Item extra={detail.is_anonymous ? '是' : '否'}>是否匿名</List.Item>
             </List>
 
+            {/* 课表信息（与提交页一致） */}
+            {detail.schedule && (
+              <>
+                <List
+                  style={{ marginTop: 12 }}
+                  header={<span style={{ fontSize: 14, fontWeight: 600 }}>课表信息</span>}
+                >
+                  <List.Item extra={detail.schedule.class_time_text || '-'}>
+                    上课时间
+                  </List.Item>
+                  <List.Item extra={detail.schedule.classroom || '-'}>教室</List.Item>
+                  <List.Item extra={detail.schedule.class_info || '-'}>班级</List.Item>
+                  <List.Item
+                    extra={
+                      detail.schedule.student_count != null
+                        ? `${detail.schedule.student_count}人`
+                        : '-'
+                    }
+                  >
+                    应到人数
+                  </List.Item>
+                  <List.Item extra={detail.schedule.week_pattern || '-'}>周次</List.Item>
+                </List>
+              </>
+            )}
+
             <EvalDetailBody detail={detail} />
 
             {type === 'sent' &&

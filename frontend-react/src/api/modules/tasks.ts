@@ -1,5 +1,5 @@
 import { request, requestBlob } from '../http'
-import type { PageData, Task } from '../types'
+import type { PageData, Task, EvalScheduleInfo } from '../types'
 
 export interface TaskListParams {
   page?: number
@@ -19,6 +19,8 @@ export interface TaskPayload {
   teacher_id: number
   classroom?: string
   class_time?: string
+  /** 加入待评时固化的课表信息快照 */
+  schedule?: EvalScheduleInfo
 }
 
 /** /tasks/batch 响应（对齐后端：created 为任务对象数组，created_count 为成功数） */

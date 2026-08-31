@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -159,6 +160,17 @@ type CreateTaskParams struct {
 	Classroom   *string          `json:"classroom"`
 	StartTime   *model.LocalTime `json:"start_time"`
 	EndTime     *model.LocalTime `json:"end_time"`
+	// 课表信息快照（加入待评时固化：上课时间/教室/班级/应到人数/周次）
+	ScheduleSnapshot *ScheduleSnapshot `json:"schedule"`
+}
+
+// ScheduleSnapshot 加入待评任务时固化的课表信息（与提交页展示一致）
+type ScheduleSnapshot struct {
+	ClassTimeText *string `json:"class_time_text"`
+	Classroom     *string `json:"classroom"`
+	ClassInfo     *string `json:"class_info"`
+	StudentCount  *int    `json:"student_count"`
+	WeekPattern   *string `json:"week_pattern"`
 }
 
 // Create 创建任务（含权限与去重校验）
@@ -202,6 +214,13 @@ func (s *Task) Create(db *gorm.DB, caller *model.User, p CreateTaskParams) (*mod
 		Status: model.TaskStatusPending, StartTime: p.StartTime, EndTime: p.EndTime,
 		CreateBy: IPtr(caller.ID),
 	}
+	// 加入待评时固化的课表信息快照（JSON 落库）
+	if p.ScheduleSnapshot != nil {
+		raw, err := json.Marshal(p.ScheduleSnapshot)
+		if err == nil {
+			t.ScheduleSnapshot = raw
+		}
+	}
 	if err := db.Create(&t).Error; err != nil {
 		return nil, err
 	}
@@ -239,6 +258,8 @@ type UpdateTaskParams struct {
 	StartTime  *model.LocalTime `json:"start_time"`
 	EndTime    *model.LocalTime `json:"end_time"`
 	Status     *int16           `json:"status"`
+	// 课表信息快照（编辑时随教室/时间一起可更新）
+	ScheduleSnapshot *ScheduleSnapshot `json:"schedule"`
 }
 
 // Update 编辑任务（状态机见需求文档 13.2）
@@ -292,6 +313,12 @@ func (s *Task) Update(db *gorm.DB, caller *model.User, id int, p UpdateTaskParam
 	if p.EndTime != nil {
 		updates["end_time"] = *p.EndTime
 		hasOther = true
+	}
+	if p.ScheduleSnapshot != nil {
+		if raw, err := json.Marshal(p.ScheduleSnapshot); err == nil {
+			updates["schedule_snapshot"] = raw
+			hasOther = true
+		}
 	}
 
 	// 状态流转
