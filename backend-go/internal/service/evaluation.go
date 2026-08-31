@@ -771,9 +771,14 @@ func (s *Evaluation) ExportData(db *gorm.DB, viewer *model.User, id int) (map[st
 	if rec.SubmitTime != nil {
 		submitTime = rec.SubmitTime.ToTime().Format("2006-01-02 15:04")
 	}
+	classTime := "-"
+	if task.ClassTime != nil {
+		classTime = task.ClassTime.ToTime().Format("2006-01-02 15:04")
+	}
 	return map[string]interface{}{
 		"id": rec.ID, "course_name": task.CourseName, "teacher_name": task.TeacherName,
 		"college_name": collegeName, "semester": nil,
+		"class_time": classTime,
 		"evaluator_name":      evaluatorName,
 		"evaluator_role_name": model.RoleName(rec.EvaluatorRole),
 		"submit_time":         submitTime, "is_anonymous": rec.IsAnonymous,

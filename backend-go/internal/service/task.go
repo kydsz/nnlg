@@ -231,50 +231,6 @@ func (s *Task) BatchCreate(db *gorm.DB, caller *model.User, items []CreateTaskPa
 	return res, nil
 }
 
-// CancelTask 取消任务（对齐旧端 cancel：404 -> 权限 -> 已评 400 -> 已取消 400 -> 删除记录 -> 状态置取消）
-func (s *Task) CancelTask(db *gorm.DB, caller *model.User, id int) (t *model.EvaluationTask, cancelled int, err error) {
-	t, err = s.Get(db, id)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	// 只有创建者或管理员可以取消
-	isCreator := t.CreateBy != nil && *t.CreateBy == caller.ID
-	isAdmin := caller.HasRole(model.RoleSystemAdmin) || caller.HasRole(model.RoleSchoolAdmin)
-	if !isAdmin {
-		teacher, terr := LoadTeacherUser(db, t.TeacherID)
-		if terr == nil && IsSupervisor(caller) && !CollegeInScope(caller, teacher.CollegeID) {
-			return nil, 0, errors.New("您只能操作自己负责学院的教师任务")
-		}
-		if !isCreator && !IsSupervisor(caller) && !IsAdminRole(caller) {
-			return nil, 0, errors.New("无权取消此任务")
-		}
-	}
-
-	// 已评的任务不能取消
-	if t.Status == model.TaskStatusEvaluated {
-		return nil, 0, errors.New("已评的任务不能取消")
-	}
-	// 已取消的任务不能重复取消
-	if t.Status == model.TaskStatusCancelled {
-		return nil, 0, errors.New("任务已取消")
-	}
-
-	// 统计并软删除关联评教记录（数据保留，可恢复）
-	var records []model.EvaluationRecord
-	db.Where("task_id = ? AND is_deleted = 0", id).Find(&records)
-	cancelled = len(records)
-	return t, cancelled, db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.EvaluationRecord{}).Where("task_id = ? AND is_deleted = 0", id).
-			Update("is_deleted", true).Error; err != nil {
-			return err
-		}
-		return tx.Model(t).Updates(map[string]interface{}{
-			"status": model.TaskStatusCancelled, "evaluation_count": 0, "has_supervisor_eval": false,
-		}).Error
-	})
-}
-
 // UpdateTaskParams 编辑参数
 type UpdateTaskParams struct {
 	CourseName *string          `json:"course_name"`
@@ -372,7 +328,7 @@ func (s *Task) Update(db *gorm.DB, caller *model.User, id int, p UpdateTaskParam
 	return s.Get(db, id)
 }
 
-// Delete 软删除
+// Delete 软删除（任务及名下评教记录一并软删，数据保留、可恢复）
 // 有 task:delete 权限可删任意；仅有 task:delete_own 权限仅能删除自己创建的任务
 func (s *Task) Delete(db *gorm.DB, caller *model.User, id int) error {
 	t, err := s.Get(db, id)
@@ -388,5 +344,13 @@ func (s *Task) Delete(db *gorm.DB, caller *model.User, id int) error {
 	} else {
 		return errors.New("无权删除评教任务")
 	}
-	return db.Model(t).Update("is_deleted", true).Error
+	// 同步软删该任务名下评教记录，避免任务删除后记录仍残留于记录列表/统计
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.EvaluationRecord{}).
+			Where("task_id = ? AND is_deleted = 0", id).
+			Update("is_deleted", true).Error; err != nil {
+			return err
+		}
+		return tx.Model(t).Update("is_deleted", true).Error
+	})
 }

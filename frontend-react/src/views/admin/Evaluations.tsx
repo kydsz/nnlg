@@ -237,6 +237,7 @@ export default function Evaluations() {
             <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="教师">{detail.teacher_name}</Descriptions.Item>
               <Descriptions.Item label="课程">{detail.course_name}</Descriptions.Item>
+              <Descriptions.Item label="上课时间">{formatDate(detail.class_time)}</Descriptions.Item>
               <Descriptions.Item label="评教人">{detail.evaluator_name}</Descriptions.Item>
               <Descriptions.Item label="评教角色">
                 {detail.evaluator_role_name || detail.evaluator_role || '-'}

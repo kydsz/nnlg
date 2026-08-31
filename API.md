@@ -34,10 +34,10 @@
 | 组织架构 | `org:view` / `campus:manage` / `college:manage` / `research_room:manage`                                                                      |
 | 角色管理 | `role:manage`                                                                                                                                 |
 | 评教维度 | `dimension:manage`                                                                                                                            |
-| 评教任务 | `task:view` / `task:create` / `task:update` / `task:delete` / `task:delete_own`                                                               |
+| 评教任务 | `task:view` / `task:create` / `task:update` / `task:delete` / `task:delete_own` |
 | 评教记录 | `evaluation:view` / `evaluation:create` / `evaluation:view_anonymous` / `evaluation:view_all` / `evaluation:delete` / `evaluation:delete_own` |
 | 统计报表 | `stats:view`                                                                                                                                  |
-| 课程表  | `schedule:view` / `schedule:view_college`                                                                                                    |
+| 课程表  | `schedule:view` / `schedule:view_college`                                                                                                     |
 | 数据同步 | `sync:execute`                                                                                                                                |
 
 ## 接口总览
@@ -106,7 +106,7 @@
 | POST   | /tasks/batch                                      | task:create                                          |
 | POST   | /tasks/export                                     | task:view                                            |
 | PUT    | /tasks/:id                                        | task:update                                          |
-| POST   | /tasks/:id/cancel                                 | task:update                                          |
+
 | DELETE | /tasks/:id                                        | task:delete（任意）或 task:delete\_own（仅自己创建）             |
 | GET    | /evaluations                                      | evaluation:view                                      |
 | POST   | /evaluations                                      | evaluation:create                                    |
@@ -690,11 +690,10 @@ POST /tasks/export
 
 `start_date` / `end_date` 与列表接口一致，按上课时间筛选；格式 `YYYY-MM-DD`。返回 XLSX 附件（`fields` 为空时使用默认列）。
 
-### 更新/取消/删除
+### 更新/删除
 
 ```http
 PUT    /tasks/{task_id}          # 更新（task:update，仅创建者或管理员）
-POST   /tasks/{task_id}/cancel   # 取消（task:update，返回 cancelled_records_count 级联取消记录数）
 DELETE /tasks/{task_id}          # 删除（task:delete 删任意；task:delete_own 仅删自己创建，软删除）
 ```
 

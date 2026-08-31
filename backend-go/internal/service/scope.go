@@ -145,3 +145,5 @@ func CanDeleteOwnTask(db *gorm.DB, u *model.User) bool {
 	}
 	return false
 }
+
+

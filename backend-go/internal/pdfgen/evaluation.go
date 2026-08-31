@@ -39,6 +39,7 @@ var (
 type EvalDetail struct {
 	CourseName, TeacherName, CollegeName string
 	EvaluatorName, EvaluatorRole, Submit string
+	ClassTime                            string
 	IsAnonymous                          bool
 	TotalScore, MaxTotalScore            float64
 	Groups                               []EvalDetailGroup
@@ -157,11 +158,11 @@ func (b *evalPainter) drawInfo(d EvalDetail) {
 	if d.IsAnonymous {
 		typ = "匿名"
 	}
-	labels := [9]string{"教师", "课程", "学院", "评教人", "评教角色", "提交时间", "总分", "是否匿名", ""}
+	labels := [9]string{"教师", "课程", "上课时间", "学院", "评教人", "评教角色", "提交时间", "总分", "是否匿名"}
 	values := [9]string{
-		orDash(d.TeacherName), orDash(d.CourseName), orDash(d.CollegeName),
-		orDash(d.EvaluatorName), orDash(d.EvaluatorRole), orDash(d.Submit),
-		scoreLabel, typ, "",
+		orDash(d.TeacherName), orDash(d.CourseName), orDash(d.ClassTime),
+		orDash(d.CollegeName), orDash(d.EvaluatorName), orDash(d.EvaluatorRole),
+		orDash(d.Submit), scoreLabel, typ,
 	}
 
 	const pad, rowH = 2.2, 6.2
@@ -195,7 +196,7 @@ func (b *evalPainter) drawInfo(d EvalDetail) {
 		b.setFont(9.5)
 		lw, _ := b.gp.MeasureTextWidth(label)
 		vx := x + pad + lw
-		if i == 6 { // 总分红色加粗显示
+		if i == 7 { // 总分红色加粗显示
 			b.text(vx, baseLine(y, rowH, 12), values[i], 12, colDanger)
 		} else {
 			b.text(vx, baseLine(y, rowH, 11), values[i], 11, colText)

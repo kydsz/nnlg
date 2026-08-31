@@ -283,23 +283,6 @@ func (h *Task) Update(c *gin.Context) {
 	response.OKMsg(c, "更新成功", taskUpdatePayload(t, teacher))
 }
 
-// Cancel 取消任务（兼容旧接口 POST /tasks/{id}/cancel）
-func (h *Task) Cancel(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
-	u := middleware.CurrentUser(c)
-	t, cancelled, err := h.svc.CancelTask(h.db, u, id)
-	if err != nil {
-		badReq(c, err.Error())
-		return
-	}
-	service.LogRecord(h.db, &u.ID, u.Username, "cancel", "task", &t.ID, "evaluation_task", nil)
-	response.OKMsg(c, "取消成功", gin.H{
-		"id": t.ID, "status": t.Status,
-		"status_name":             model.TaskStatusNames[t.Status],
-		"cancelled_records_count": cancelled,
-	})
-}
-
 // Delete 软删除任务
 func (h *Task) Delete(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))

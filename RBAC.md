@@ -74,7 +74,7 @@
 
 > `task:create`：创建评教任务。接口 `POST /tasks`（含批量 `POST /tasks/batch`）均需该权限。教师默认分配该权限后，可在移动端课表页将课程加入"待评课表"；后端 `checkTaskTargetScope` 教师分支天然限定**只能为本学院教师（含自己）创建任务**，无法跨学院操作。历史角色缺失 `task:create` 的由迁移 `004_add_task_create_to_teacher.sql` 自动补齐（幂等）。
 
-> `task:delete`：删除任意评教任务；`task:delete_own`：仅能删除自己创建的评教任务。两者可并存，系统管理员恒可删任意。
+> `task:delete`：删除任意评教任务；`task:delete_own`：仅能删除自己创建的评教任务。两者可并存，系统管理员恒可删任意。删除任务时其名下评教记录一并软删（数据保留、可恢复），确保任务删除后记录不再残留于记录列表/统计。
 
 ### 评教记录
 

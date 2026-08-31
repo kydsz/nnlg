@@ -125,21 +125,23 @@ export default function Schedule() {
     enabled: !!addedTeacherId,
   })
 
-  // 单元格"已添加"集合：本地 + 服务器任务（按 课程名+日期 匹配，不同周日期不同）
+  // 单元格"已添加"集合：本地 + 服务器任务（按 课程名+日期+起始节次时间 匹配，
+  // 同一天不同节次的同课程键不同，避免一处添加后锁死其它节次）
   const addedSet = useMemo(() => {
     const s = new Set<string>(addedIds)
     for (const t of addedTasksData?.list || []) {
       if (!t.class_time) continue
-      s.add(`${t.course_name}|${dayjs(t.class_time).format('YYYY-MM-DD')}`)
+      s.add(`${t.course_name}|${dayjs(t.class_time).format('YYYY-MM-DD HH:mm')}`)
     }
     return s
   }, [addedIds, addedTasksData])
 
-  // 课程任务键：包含具体上课日期，周次不同键即不同
-  const courseTaskKey = (course: CourseItem, weekNum: number): string => {
-    if (!startDate) return `${course.course_name}|w${weekNum}-d${course.week_day}`
+  // 课程任务键：包含具体上课日期 + 该节次的起始时间，不同节次/不同周键即不同
+  const courseTaskKey = (course: CourseItem, weekNum: number, slotIdx = 0): string => {
+    if (!startDate) return `${course.course_name}|w${weekNum}-d${course.week_day}-s${slotIdx}`
     const date = getDateForWeekAndDay(startDate, weekNum, Number(course.week_day))
-    return `${course.course_name}|${date.format('YYYY-MM-DD')}`
+    const startTime = TIME_SLOTS[slotIdx]?.time.split('-')[0] || '08:30'
+    return `${course.course_name}|${date.format('YYYY-MM-DD')} ${startTime}`
   }
 
   const details: CourseItem[] = scheduleData?.details || []
@@ -162,7 +164,8 @@ export default function Schedule() {
   const todayWeekDay = new Date().getDay() === 0 ? 7 : new Date().getDay()
 
   const addToTasks = async (course: CourseItem) => {
-    const key = courseTaskKey(course, week)
+    const slotIdx = detailCell?.slotIdx ?? 0
+    const key = courseTaskKey(course, week, slotIdx)
     if (addedSet.has(key)) return
     let teacherId: number | undefined
     if (selectedTeacher) teacherId = selectedTeacher.id
@@ -172,7 +175,6 @@ export default function Schedule() {
       Toast.show({ content: '无法获取教师信息', icon: 'fail' })
       return
     }
-    const slotIdx = detailCell?.slotIdx ?? 0
     const date = startDate
       ? getDateForWeekAndDay(startDate, week, Number(course.week_day))
       : null
@@ -381,7 +383,7 @@ export default function Schedule() {
               )}
             </div>
             {cellCourses(detailCell.weekDay, detailCell.slotIdx).map((c) => {
-              const key = courseTaskKey(c, week)
+              const key = courseTaskKey(c, week, detailCell.slotIdx)
               const added = addedSet.has(key)
               return (
                 <div key={key} className="course-detail-card">

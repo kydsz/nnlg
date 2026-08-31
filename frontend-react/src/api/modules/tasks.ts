@@ -43,7 +43,6 @@ export const taskApi = {
   update: (id: number, data: Partial<TaskPayload>) =>
     request<Task>({ url: `/tasks/${id}`, method: 'PUT', data }),
 
-  cancel: (id: number) => request<null>({ url: `/tasks/${id}/cancel`, method: 'POST' }),
 
   remove: (id: number) => request<null>({ url: `/tasks/${id}`, method: 'DELETE' }),
 

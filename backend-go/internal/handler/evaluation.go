@@ -315,6 +315,7 @@ func renderEvaluationPDF(data map[string]interface{}, uploadDir string) ([]byte,
 		CollegeName:   strOrEmpty(data["college_name"]),
 		EvaluatorName: strOrEmpty(data["evaluator_name"]),
 		EvaluatorRole: strOrEmpty(data["evaluator_role_name"]),
+		ClassTime:     strOrEmpty(data["class_time"]),
 		Submit:        strOrEmpty(data["submit_time"]),
 		TotalScore:    toFloat64Val(data["total_score"]),
 		MaxTotalScore: toFloat64Val(data["max_total_score"]),
@@ -375,6 +376,7 @@ th{background:#eef3fa}.meta td:first-child{width:120px;background:#f7f9fc;font-w
 	b.WriteString(`<table class="meta">`)
 	for _, row := range []struct{ k, v string }{
 		{"课程名称", fmt.Sprint(d["course_name"])},
+		{"上课时间", fmt.Sprint(d["class_time"])},
 		{"被评教师", fmt.Sprint(d["teacher_name"])},
 		{"所属学院", fmt.Sprint(d["college_name"])},
 		{"评教人", fmt.Sprint(d["evaluator_name"])},

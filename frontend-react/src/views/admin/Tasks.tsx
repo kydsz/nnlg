@@ -80,15 +80,6 @@ export default function Tasks() {
     onError: (e) => message.error(e.message),
   })
 
-  const cancelMut = useMutation({
-    mutationFn: (id: number) => taskApi.cancel(id),
-    onSuccess: () => {
-      message.success('已取消')
-      invalidate()
-    },
-    onError: (e) => message.error(e.message),
-  })
-
   const delMut = useMutation({
     mutationFn: (id: number) => taskApi.remove(id),
     onSuccess: () => {
@@ -148,11 +139,6 @@ export default function Tasks() {
           >
             编辑
           </Button>
-          {record.status === 1 && (
-            <Popconfirm title="确认取消该任务？" onConfirm={() => cancelMut.mutate(record.id)}>
-              <Button size="small">取消</Button>
-            </Popconfirm>
-          )}
           {canDeleteTask(record) && (
             <Popconfirm title="确认删除？" onConfirm={() => delMut.mutate(record.id)}>
               <Button size="small" danger>
