@@ -37,7 +37,7 @@
 | 评教任务 | `task:view` / `task:create` / `task:update` / `task:delete` / `task:delete_own`                                                               |
 | 评教记录 | `evaluation:view` / `evaluation:create` / `evaluation:view_anonymous` / `evaluation:view_all` / `evaluation:delete` / `evaluation:delete_own` |
 | 统计报表 | `stats:view`                                                                                                                                  |
-| 课程表  | `schedule:view`                                                                                                                               |
+| 课程表  | `schedule:view` / `schedule:view_college`                                                                                                    |
 | 数据同步 | `sync:execute`                                                                                                                                |
 
 ## 接口总览
@@ -660,7 +660,7 @@ POST /tasks
 | start\_time   | datetime | 否  | 开始时间            |
 | end\_time     | datetime | 否  | 结束时间            |
 
-**权限**: task:create。
+**权限**: task:create。教师默认分配该权限后可将自己及本学院其他教师的课程加入"待评课表"（后端按教师所属学院校验，无法跨学院操作）。
 
 ### 批量创建评教任务
 

@@ -60,6 +60,7 @@ var PermissionCatalog = []PermissionGroup{
 	}},
 	{Group: "课程表", Permissions: []PermissionItem{
 		{Code: "schedule:view", Name: "查看课程表"},
+		{Code: "schedule:view_college", Name: "查看本学院教师课表"},
 	}},
 	{Group: "数据同步", Permissions: []PermissionItem{
 		{Code: "sync:execute", Name: "执行数据同步"},

@@ -34,11 +34,14 @@ export default function Schedule() {
   const qc = useQueryClient()
   const user = useAuthStore((s) => s.user)
   const hasPermission = useAuthStore((s) => s.hasPermission)
-  // 能查看他人课表：管理员（user:view）或督导（schedule:view + 督导角色）；普通教师仅看本人课表
+  // 能查看他人课表：管理员（user:view）、督导（schedule:view + 督导角色），
+  // 或具备查看本学院教师课表权限（schedule:view_college，普通教师）；否则仅本人课表
   const SUPERVISOR_ROLES = ['supervisor', 'school_supervisor', 'college_supervisor']
   const isSupervisor = (user?.roles || []).some((r) => SUPERVISOR_ROLES.includes(r))
   const canViewOthers =
-    hasPermission('user:view') || (hasPermission('schedule:view') && isSupervisor)
+    hasPermission('user:view') ||
+    (hasPermission('schedule:view') && isSupervisor) ||
+    hasPermission('schedule:view_college')
   const userId = user?.id
 
   // 学期
@@ -64,23 +67,19 @@ export default function Schedule() {
     }
   }, [currentCfg, dynamicSemesters, semester])
 
-  // 教师选择（管理员/督导可弹层选教师查看课表）
+  // 教师选择（管理员/督导/具备查看本学院教师课表权限者可弹层选教师查看课表）
   const [selectedTeacher, setSelectedTeacher] = useState<{ id: number; name: string } | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
-  useEffect(() => {
-    if (canViewOthers) setPickerOpen(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canViewOthers])
 
-  // 课表数据：选了教师 → teacher/:id；否则本人 my-schedule
-  const targetTeacherId = selectedTeacher?.id ?? (canViewOthers ? undefined : userId)
+  // 课表数据：默认加载自己的课表；选了教师后再加载该教师的课表
+  const targetTeacherId = selectedTeacher?.id ?? userId
   const { data: scheduleData, isLoading } = useQuery({
     queryKey: ['schedule', 'mobile', targetTeacherId, semester],
     queryFn: () =>
-      targetTeacherId
-        ? scheduleApi.byTeacher(targetTeacherId, semester)
+      selectedTeacher
+        ? scheduleApi.byTeacher(selectedTeacher.id, semester)
         : scheduleApi.mySchedule(semester),
-    enabled: !!semester && (targetTeacherId != null || !canViewOthers),
+    enabled: !!semester && (selectedTeacher != null || userId != null),
   })
 
   // 起始日：API → localStorage → 默认值
