@@ -45,6 +45,7 @@ var PermissionCatalog = []PermissionGroup{
 		{Code: "task:create", Name: "创建评教任务"},
 		{Code: "task:update", Name: "编辑评教任务"},
 		{Code: "task:delete", Name: "删除评教任务"},
+		{Code: "task:delete_own", Name: "仅删除自己的评教任务"},
 	}},
 	{Group: "评教记录", Permissions: []PermissionItem{
 		{Code: "evaluation:view", Name: "查看评教记录"},
@@ -52,6 +53,7 @@ var PermissionCatalog = []PermissionGroup{
 		{Code: "evaluation:view_anonymous", Name: "查看匿名评教详情"},
 		{Code: "evaluation:view_all", Name: "查看他人评教详情"},
 		{Code: "evaluation:delete", Name: "删除评教记录"},
+		{Code: "evaluation:delete_own", Name: "仅删除自己的评教记录"},
 	}},
 	{Group: "统计报表", Permissions: []PermissionItem{
 		{Code: "stats:view", Name: "查看统计报表"},

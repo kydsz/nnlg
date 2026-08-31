@@ -25,7 +25,11 @@ import { useAuthStore } from '@/stores/auth'
 export default function Evaluations() {
   const { message } = App.useApp()
   const qc = useQueryClient()
-  const canDelete = useAuthStore((s) => s.hasPermission('evaluation:delete'))
+  const userId = useAuthStore((s) => s.user?.id)
+  const canDeleteAny = useAuthStore((s) => s.hasPermission('evaluation:delete'))
+  const canDeleteOwn = useAuthStore((s) => s.hasPermission('evaluation:delete_own'))
+  const canDeleteRecord = (r: EvaluationRecord) =>
+    canDeleteAny || (canDeleteOwn && userId != null && r.evaluator_id === userId)
   const [params, setParams] = useState<{ page: number; page_size: number; keyword?: string; teacher_id?: number }>({ page: 1, page_size: 20 })
   const [keyword, setKeyword] = useState('')
   const [detailId, setDetailId] = useState<number | null>(null)
@@ -106,7 +110,7 @@ export default function Evaluations() {
       width: 210,
       render: (_, record) => (
         <Space>
-          {canDelete && (
+          {canDeleteAny && (
             <Button size="small" icon={<EditOutlined />} onClick={() => setEditId(record.id)}>
               编辑
             </Button>
@@ -114,7 +118,7 @@ export default function Evaluations() {
           <Button size="small" onClick={() => setDetailId(record.id)}>
             详情
           </Button>
-          {canDelete && (
+          {canDeleteRecord(record) && (
             <Popconfirm
               title="确认删除该评教记录？"
               description="删除后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化，且该操作不可恢复。"
@@ -183,7 +187,7 @@ export default function Evaluations() {
         extra={
           detail && (
             <Space>
-              {canDelete && (
+              {canDeleteAny && (
                 <Button
                   size="small"
                   icon={<EditOutlined />}
@@ -210,7 +214,7 @@ export default function Evaluations() {
               >
                 导出
               </Button>
-              {canDelete && (
+              {canDeleteRecord(detail) && (
                 <Popconfirm
                   title="确认删除该评教记录？"
                   description="删除后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化，且该操作不可恢复。"

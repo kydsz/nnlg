@@ -373,10 +373,20 @@ func (s *Task) Update(db *gorm.DB, caller *model.User, id int, p UpdateTaskParam
 }
 
 // Delete 软删除
-func (s *Task) Delete(db *gorm.DB, id int) error {
+// 有 task:delete 权限可删任意；仅有 task:delete_own 权限仅能删除自己创建的任务
+func (s *Task) Delete(db *gorm.DB, caller *model.User, id int) error {
 	t, err := s.Get(db, id)
 	if err != nil {
 		return err
+	}
+	if CanDeleteTask(db, caller) {
+		// 放行，允许删除任意任务
+	} else if CanDeleteOwnTask(db, caller) {
+		if t.CreateBy == nil || *t.CreateBy != caller.ID {
+			return errors.New("只能删除自己创建的评教任务")
+		}
+	} else {
+		return errors.New("无权删除评教任务")
 	}
 	return db.Model(t).Update("is_deleted", true).Error
 }

@@ -530,7 +530,12 @@ func (s *Evaluation) Delete(db *gorm.DB, viewer *model.User, id int) (*model.Eva
 		return nil, errors.New("评教记录不存在")
 	}
 	if !CanDeleteEvaluation(db, viewer) {
-		return nil, errors.New("无权删除评教记录")
+		if !CanDeleteOwnEvaluation(db, viewer) {
+			return nil, errors.New("无权删除评教记录")
+		}
+		if rec.EvaluatorID == nil || *rec.EvaluatorID != viewer.ID {
+			return nil, errors.New("只能删除自己提交的评教记录")
+		}
 	}
 	if err := db.Model(&model.EvaluationRecord{}).Where("id = ?", id).Update("is_deleted", true).Error; err != nil {
 		return nil, err

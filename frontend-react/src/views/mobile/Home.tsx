@@ -31,7 +31,9 @@ export default function Home() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('')
   const [creatorFilter, setCreatorFilter] = useState<CreatorFilter>('')
   const [page, setPage] = useState(1)
-  const canDelete = hasPermission('task:delete')
+  const canDelete = (t: Task) =>
+    hasPermission('task:delete') ||
+    (hasPermission('task:delete_own') && userId != null && t.create_by === userId)
 
   const buildParams = useCallback(
     (p: number): TaskListParams => {
@@ -158,7 +160,7 @@ export default function Home() {
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div style={{ fontWeight: 600, fontSize: 15 }}>{t.course_name}</div>
-                  {canDelete && (
+                  {canDelete(t) && (
                     <Button
                       size="mini"
                       color="danger"

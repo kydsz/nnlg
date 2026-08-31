@@ -173,7 +173,8 @@ function RecordList({ type, userId }: { type: EvalType; userId: number }) {
 
             <EvalDetailBody detail={detail} />
 
-            {type === 'sent' && hasPermission('evaluation:delete') && (
+            {type === 'sent' &&
+              (hasPermission('evaluation:delete') || hasPermission('evaluation:delete_own')) && (
               <Button
                 block
                 color="danger"

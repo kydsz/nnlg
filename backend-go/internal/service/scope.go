@@ -98,7 +98,7 @@ func CanViewOthersEvaluation(db *gorm.DB, u *model.User) bool {
 	return false
 }
 
-// CanDeleteEvaluation 是否可删除评教记录
+// CanDeleteEvaluation 是否可删除任意评教记录
 // 系统管理员恒可；其他角色需被分配 evaluation:delete 权限（评教人本人不再默认可删，避免抹掉已提交评教影响接收人数据）
 func CanDeleteEvaluation(db *gorm.DB, u *model.User) bool {
 	if u.HasRole(model.RoleSystemAdmin) {
@@ -106,6 +106,40 @@ func CanDeleteEvaluation(db *gorm.DB, u *model.User) bool {
 	}
 	for _, p := range u.Permissions(db) {
 		if p == "evaluation:delete" {
+			return true
+		}
+	}
+	return false
+}
+
+// CanDeleteOwnEvaluation 是否可删除自己提交的评教记录（evaluation:delete_own）
+func CanDeleteOwnEvaluation(db *gorm.DB, u *model.User) bool {
+	for _, p := range u.Permissions(db) {
+		if p == "evaluation:delete_own" {
+			return true
+		}
+	}
+	return false
+}
+
+// CanDeleteTask 是否可删除任意评教任务
+// 系统管理员恒可；其他角色需被分配 task:delete 权限
+func CanDeleteTask(db *gorm.DB, u *model.User) bool {
+	if u.HasRole(model.RoleSystemAdmin) {
+		return true
+	}
+	for _, p := range u.Permissions(db) {
+		if p == "task:delete" {
+			return true
+		}
+	}
+	return false
+}
+
+// CanDeleteOwnTask 是否可删除自己创建的评教任务（task:delete_own）
+func CanDeleteOwnTask(db *gorm.DB, u *model.User) bool {
+	for _, p := range u.Permissions(db) {
+		if p == "task:delete_own" {
 			return true
 		}
 	}

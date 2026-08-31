@@ -136,7 +136,7 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		tasks.POST("/export", middleware.RequirePermission(db, "task:view"), taskH.Export)
 		tasks.PUT("/:id", middleware.RequirePermission(db, "task:update"), taskH.Update)
 		tasks.POST("/:id/cancel", middleware.RequirePermission(db, "task:update"), taskH.Cancel)
-		tasks.DELETE("/:id", middleware.RequirePermission(db, "task:delete"), taskH.Delete)
+		tasks.DELETE("/:id", middleware.RequireAnyPermission(db, "task:delete", "task:delete_own"), taskH.Delete)
 	}
 
 	// 评教记录

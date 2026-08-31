@@ -39,7 +39,7 @@
 | 校级督导 | school_supervisor | 20 | all | 可跨学院督导评教 |
 | 督导老师 | supervisor | 22 | college | 通用督导（向后兼容） |
 | 院级督导 | college_supervisor | 25 | college | 仅负责本学院督导 |
-| 教师 | teacher | 50 | self | 查看自己的评教记录和课表 |
+| 教师 | teacher | 50 | self | 查看自己的评教记录和课表；可查看本学院全体教师的评教任务 |
 
 > 说明：`school_admin` 是兼容旧数据的角色编码，显示名同为"学院管理员"，与 `college_admin` 等价处理；具体优先级以 `migration_rbac_roles.sql` 初始化数据为准。
 
@@ -58,12 +58,18 @@
 - dimension:manage
 
 ### 评教任务
-- task:view / task:create / task:update / task:delete
+- task:view / task:create / task:update / task:delete / task:delete_own
+
+> `task:view`：查看评教任务列表/详情/导出。`teacher` / `supervisor` / `college_supervisor` 等内置角色默认分配该权限；教师按「被评教师所属学院」查看本学院全体教师的评教任务，督导按「负责学院 / 教研室」查看，管理员按「学院」查看，系统管理员 / 校级督导为全校。历史数据缺失 `task:view` 的角色由迁移 `002_add_task_view_to_builtin_roles.sql` 自动补齐（幂等）。
+
+> `task:delete`：删除任意评教任务；`task:delete_own`：仅能删除自己创建的评教任务。两者可并存，系统管理员恒可删任意。
 
 ### 评教记录
-- evaluation:view / evaluation:create / evaluation:view_anonymous / evaluation:view_all
+- evaluation:view / evaluation:create / evaluation:view_anonymous / evaluation:view_all / evaluation:delete / evaluation:delete_own
 
 > `evaluation:view_all`：查看他人评教记录（含匿名详情）的权限码，由系统管理员在角色管理中按需分配；分配后督导等角色可按其学院数据范围查看他人评教记录/详情/导出。
+
+> `evaluation:delete`：删除任意评教记录；`evaluation:delete_own`：仅能删除评教人本人提交的记录。两者可并存，系统管理员恒可删任意。
 
 ### 统计报表
 - stats:view

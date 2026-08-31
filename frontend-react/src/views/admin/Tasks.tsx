@@ -24,10 +24,16 @@ import type { Task, User } from '@/api/types'
 import { taskStatusInfo, formatDate } from '@/utils/format'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
+import { useAuthStore } from '@/stores/auth'
 
 export default function Tasks() {
   const { message } = App.useApp()
   const qc = useQueryClient()
+  const userId = useAuthStore((s) => s.user?.id)
+  const canDeleteAny = useAuthStore((s) => s.hasPermission('task:delete'))
+  const canDeleteOwn = useAuthStore((s) => s.hasPermission('task:delete_own'))
+  const canDeleteTask = (r: Task) =>
+    canDeleteAny || (canDeleteOwn && userId != null && r.create_by === userId)
   const [params, setParams] = useState<{
     page: number
     page_size: number
@@ -147,11 +153,13 @@ export default function Tasks() {
               <Button size="small">取消</Button>
             </Popconfirm>
           )}
-          <Popconfirm title="确认删除？" onConfirm={() => delMut.mutate(record.id)}>
-            <Button size="small" danger>
-              删除
-            </Button>
-          </Popconfirm>
+          {canDeleteTask(record) && (
+            <Popconfirm title="确认删除？" onConfirm={() => delMut.mutate(record.id)}>
+              <Button size="small" danger>
+                删除
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },

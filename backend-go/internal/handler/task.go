@@ -304,7 +304,7 @@ func (h *Task) Cancel(c *gin.Context) {
 func (h *Task) Delete(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	u := middleware.CurrentUser(c)
-	if err := h.svc.Delete(h.db, id); err != nil {
+	if err := h.svc.Delete(h.db, u, id); err != nil {
 		badReq(c, err.Error())
 		return
 	}
