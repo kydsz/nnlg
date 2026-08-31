@@ -19,6 +19,11 @@ export interface SubmitPayload {
   is_anonymous?: boolean
 }
 
+export interface UpdatePayload {
+  dimension_values: Record<string, unknown>
+  is_anonymous?: boolean
+}
+
 export const evaluationApi = {
   list: (params: EvaluationListParams) =>
     request<PageData<EvaluationRecord>>({ url: '/evaluations', method: 'GET', params }),
@@ -54,4 +59,7 @@ export const evaluationApi = {
     requestBlob({ url: `/evaluations/${id}/export`, method: 'GET', params: { format } }),
 
   remove: (id: number) => request<null>({ url: `/evaluations/${id}`, method: 'DELETE' }),
+
+  update: (id: number, data: UpdatePayload) =>
+    request<EvaluationRecord>({ url: `/evaluations/${id}`, method: 'PUT', data }),
 }

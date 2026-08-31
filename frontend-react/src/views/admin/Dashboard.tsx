@@ -1,17 +1,19 @@
 import { useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Card, Col, Row, Statistic, Spin, Tag } from 'antd'
+import { Card, Col, Row, Statistic, Spin, Tag, DatePicker } from 'antd'
 import {
   TeamOutlined,
   FileTextOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
 } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import { statsApi } from '@/api/modules/stats'
 import { scheduleApi } from '@/api/modules/schedule'
 import { useAuthStore } from '@/stores/auth'
 import { roleNamesStr } from '@/utils/roleNames'
 import { formatSemester } from '@/utils/format'
+import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
 import { useNavigate } from 'react-router-dom'
 import type { ECharts } from 'echarts'
 
@@ -30,9 +32,10 @@ export default function Dashboard() {
   const donutRef = useRef<HTMLDivElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
 
+  const { effective: dates, onRange } = useSemesterRangePicker()
   const { data, isLoading } = useQuery({
-    queryKey: ['stats', 'overview'],
-    queryFn: () => statsApi.overview(),
+    queryKey: ['stats', 'overview', dates],
+    queryFn: () => statsApi.overview({ start_date: dates[0], end_date: dates[1] }),
   })
   const { data: currentSemester } = useQuery({
     queryKey: ['current-semester'],
@@ -109,15 +112,32 @@ export default function Dashboard() {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <h3 className="page-title" style={{ marginBottom: 4 }}>
-          你好，{user?.username}
-        </h3>
-        <Tag color="blue">{roleNamesStr(user?.roles)}</Tag>
-        <Tag style={{ marginLeft: 8 }}>
-          当前学期：{currentSemester ? formatSemester(currentSemester.semester) : '未设置'}
-        </Tag>
-        <Tag color="green">系统状态正常</Tag>
+      <div
+        style={{
+          marginBottom: 16,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          flexWrap: 'wrap',
+          gap: 8,
+        }}
+      >
+        <div>
+          <h3 className="page-title" style={{ marginBottom: 4 }}>
+            你好，{user?.username}
+          </h3>
+          <Tag color="blue">{roleNamesStr(user?.roles)}</Tag>
+          <Tag style={{ marginLeft: 8 }}>
+            当前学期：{currentSemester ? formatSemester(currentSemester.semester) : '未设置'}
+          </Tag>
+          <Tag color="green">系统状态正常</Tag>
+        </div>
+        <DatePicker.RangePicker
+          value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
+          onChange={(v) =>
+            onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
+          }
+        />
       </div>
 
       <Row gutter={[16, 16]}>

@@ -136,31 +136,8 @@ func (s *Evaluation) Submit(db *gorm.DB, viewer *model.User, p SubmitParams) (*m
 	}
 
 	// 维度校验
-	var dims []model.EvaluationDimension
-	if err := db.Where("status = 1").Find(&dims).Error; err != nil {
+	if _, err := validateDimensionValues(db, p.DimensionValues); err != nil {
 		return nil, err
-	}
-	total := 0.0
-	for _, d := range dims {
-		v, ok := p.DimensionValues[d.Code]
-		if (!ok || v == nil) && d.IsRequired {
-			return nil, fmt.Errorf("维度 %s 为必填项", d.Name)
-		}
-		if !ok || v == nil {
-			continue
-		}
-		if d.FieldType == model.FieldScore {
-			f, valid := toFloat(v)
-			if !valid {
-				return nil, fmt.Errorf("维度 %s 的分值必须为数字", d.Name)
-			}
-			max, hasMax := fieldConfigNum(d.FieldConfig, "max_score")
-			min, hasMin := fieldConfigNum(d.FieldConfig, "min_score")
-			if (hasMax && f > max) || (hasMin && f < min) {
-				return nil, fmt.Errorf("维度 %s 分值越界（范围 %g-%g）", d.Name, min, max)
-			}
-			total += f
-		}
 	}
 
 	now := time.Now()
@@ -194,6 +171,38 @@ func (s *Evaluation) Submit(db *gorm.DB, viewer *model.User, p SubmitParams) (*m
 		return nil, err
 	}
 	return &rec, nil
+}
+
+// validateDimensionValues 校验维度值（必填/类型/分值范围），Submit 与 Update 共用
+// 返回 score 维度累计分值
+func validateDimensionValues(db *gorm.DB, values map[string]interface{}) (float64, error) {
+	var dims []model.EvaluationDimension
+	if err := db.Where("status = 1").Find(&dims).Error; err != nil {
+		return 0, err
+	}
+	total := 0.0
+	for _, d := range dims {
+		v, ok := values[d.Code]
+		if (!ok || v == nil) && d.IsRequired {
+			return 0, fmt.Errorf("维度 %s 为必填项", d.Name)
+		}
+		if !ok || v == nil {
+			continue
+		}
+		if d.FieldType == model.FieldScore {
+			f, valid := toFloat(v)
+			if !valid {
+				return 0, fmt.Errorf("维度 %s 的分值必须为数字", d.Name)
+			}
+			max, hasMax := fieldConfigNum(d.FieldConfig, "max_score")
+			min, hasMin := fieldConfigNum(d.FieldConfig, "min_score")
+			if (hasMax && f > max) || (hasMin && f < min) {
+				return 0, fmt.Errorf("维度 %s 分值越界（范围 %g-%g）", d.Name, min, max)
+			}
+			total += f
+		}
+	}
+	return total, nil
 }
 
 // EvaluationFilters 记录查询筛选
@@ -526,6 +535,42 @@ func (s *Evaluation) Delete(db *gorm.DB, viewer *model.User, id int) (*model.Eva
 	if err := db.Model(&model.EvaluationRecord{}).Where("id = ?", id).Update("is_deleted", true).Error; err != nil {
 		return nil, err
 	}
+	return &rec, nil
+}
+
+// UpdateParams 修改评教记录参数（仅维度值与匿名标记可改；评教人/角色/提交时间/任务关联不可改）
+type UpdateParams struct {
+	DimensionValues map[string]interface{} `json:"dimension_values"`
+	IsAnonymous     bool                   `json:"is_anonymous"`
+}
+
+// Update 修改评教记录（权限与删除一致：仅系统管理员或被分配 evaluation:delete 权限的角色可操作）
+func (s *Evaluation) Update(db *gorm.DB, viewer *model.User, id int, p UpdateParams) (*model.EvaluationRecord, error) {
+	var rec model.EvaluationRecord
+	if err := db.Where("id = ? AND is_deleted = 0", id).First(&rec).Error; err != nil {
+		return nil, errors.New("评教记录不存在")
+	}
+	if !CanDeleteEvaluation(db, viewer) {
+		return nil, errors.New("无权修改评教记录")
+	}
+	if len(p.DimensionValues) == 0 {
+		return nil, errors.New("dimension_values 不能为空")
+	}
+	if _, err := validateDimensionValues(db, p.DimensionValues); err != nil {
+		return nil, err
+	}
+	raw, err := marshalJSON(p.DimensionValues)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Model(&model.EvaluationRecord{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"dimension_values": raw,
+		"is_anonymous":     p.IsAnonymous,
+	}).Error; err != nil {
+		return nil, err
+	}
+	rec.DimensionValues = raw
+	rec.IsAnonymous = p.IsAnonymous
 	return &rec, nil
 }
 

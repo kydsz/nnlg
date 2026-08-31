@@ -198,6 +198,9 @@ export interface DimensionSchemaGroup {
     name: string
     field_type?: string
     group_name?: string
+    field_config?: Record<string, unknown>
+    is_required?: boolean
+    max_score?: number
     [key: string]: unknown
   }[]
 }

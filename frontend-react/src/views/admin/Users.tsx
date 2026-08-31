@@ -34,6 +34,7 @@ export default function Users() {
   const qc = useQueryClient()
   const [params, setParams] = useState<UserListParams>({ page: 1, page_size: 20 })
   const [keyword, setKeyword] = useState('')
+  const [sortState, setSortState] = useState<{ field?: string; order?: 'ascend' | 'descend' }>({})
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<User | null>(null)
   const [scopeUser, setScopeUser] = useState<User | null>(null)
@@ -133,9 +134,28 @@ export default function Users() {
   })
 
   const columns: ColumnsType<User> = [
-    { title: '工号', dataIndex: 'user_no', width: 110 },
-    { title: '姓名', dataIndex: 'username', width: 110 },
-    { title: '学院', dataIndex: 'college_name', width: 140, render: (v) => v || '-' },
+    {
+      title: '工号',
+      dataIndex: 'user_no',
+      width: 110,
+      sorter: true,
+      sortOrder: sortState.field === 'user_no' ? sortState.order : null,
+    },
+    {
+      title: '姓名',
+      dataIndex: 'username',
+      width: 110,
+      sorter: true,
+      sortOrder: sortState.field === 'username' ? sortState.order : null,
+    },
+    {
+      title: '学院',
+      dataIndex: 'college_name',
+      width: 140,
+      sorter: true,
+      sortOrder: sortState.field === 'college_name' ? sortState.order : null,
+      render: (v) => v || '-',
+    },
     {
       title: '角色',
       dataIndex: 'roles',
@@ -264,6 +284,16 @@ export default function Users() {
         rowSelection={{
           selectedRowKeys: selectedIds,
           onChange: setSelectedIds,
+        }}
+        onChange={(_p, _f, sorter, extra) => {
+          // 仅排序触发时处理排序；换页/筛选变化由 pagination.onChange 单独处理，避免把页码重置回 1
+          if (extra?.action !== 'sort') return
+          const s = Array.isArray(sorter) ? sorter[0] : sorter
+          const field = (s?.field as string) || undefined
+          const order =
+            s?.order === 'ascend' ? 'asc' : s?.order === 'descend' ? 'desc' : undefined
+          setSortState(field && order ? { field, order: s!.order as 'ascend' | 'descend' } : {})
+          setParams((p) => ({ ...p, page: 1, order_by: field, order }))
         }}
         pagination={{
           current: params.page,

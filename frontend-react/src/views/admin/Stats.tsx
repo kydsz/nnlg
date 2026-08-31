@@ -15,6 +15,9 @@ export default function Stats() {
   return (
     <div>
       <h3 className="page-title">统计分析</h3>
+      <div style={{ marginBottom: 12, fontSize: 12, color: '#8c8c8c' }}>
+        统计口径：按评教任务的「上课时间」（class_time）归属所选时间段汇总；未选择时间段时默认取当前学期。评教记录的「提交时间」仅作展示，不参与统计筛选，因此各页签同一时间段下数据一致。
+      </div>
       <Tabs
         items={[
           { key: 'teachers', label: '教师统计', children: <TeacherStatsTab /> },

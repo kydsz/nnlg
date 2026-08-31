@@ -239,6 +239,39 @@ func (h *Evaluation) Delete(c *gin.Context) {
 	response.OKMsg(c, "删除成功", nil)
 }
 
+// Update 修改评教记录（仅系统管理员或被分配 evaluation:delete 权限的角色；仅维度值与匿名标记可改）
+func (h *Evaluation) Update(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		badReq(c, "无效的记录 ID")
+		return
+	}
+	var p service.UpdateParams
+	if err := c.ShouldBindJSON(&p); err != nil {
+		badReq(c, "请求参数错误")
+		return
+	}
+	u := middleware.CurrentUser(c)
+	rec, err := h.svc.Update(h.db, u, id, p)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	var t model.EvaluationTask
+	content := map[string]interface{}{"is_anonymous": rec.IsAnonymous}
+	if err := h.db.Where("id = ?", rec.TaskID).First(&t).Error; err == nil {
+		content["teacher_id"] = t.TeacherID
+		content["teacher_name"] = t.TeacherName
+		content["course_name"] = t.CourseName
+	}
+	service.LogRecord(h.db, &u.ID, u.Username, "update", "evaluation", &rec.ID, "evaluation_record", content)
+	response.OKMsg(c, "更新成功", gin.H{
+		"id":           rec.ID,
+		"is_anonymous": rec.IsAnonymous,
+		"total_score":  h.svc.TotalScoreOf(h.db, rec),
+	})
+}
+
 // Export 单条记录导出：format=pdf 返回 PDF 文件；默认返回可打印 HTML
 func (h *Evaluation) Export(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))

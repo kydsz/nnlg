@@ -14,6 +14,8 @@ import {
   Badge,
   Popconfirm,
   Table,
+  Tooltip,
+  Tag,
 } from 'antd'
 import {
   SyncOutlined,
@@ -125,37 +127,82 @@ export default function DataSync() {
         }
       />
 
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="课表同步入口说明"
+        description={
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            <li>
+              <Tag color="green">推荐</Tag>「按学院批量同步课表」—— 按学院逐个老师同步，没课的老师也能同步，带进度条，适合整批刷新。
+            </li>
+            <li>
+              <Tag color="green">推荐</Tag>「选择教师同步课表」—— 只同步你勾选的老师，同样带进度条，适合单独更新某几位老师。
+            </li>
+            <li>
+              <Tag color="green">推荐</Tag>「同步单位+教师」等—— 同步院系/单位、教师档案，是基础数据，一般优先同步。
+            </li>
+            <li>
+              <Tag color="orange">旧方式</Tag>「同步课表」「教务系统抓取课表」—— 整页抓取按姓名匹配，易漏没课老师、无进度，且同名教师会匹配错，建议用推荐的方式代替。
+            </li>
+            <li>
+              「一键全量同步」「工号异常清理」—— 前者是整套全量刷新（含旧方式课表），后者用于定位异常工号。
+            </li>
+          </ul>
+        }
+      />
+
       <Card title="同步操作" style={{ marginBottom: 16 }}>
         <Space wrap>
-          <Button
-            type="primary"
-            icon={<SyncOutlined />}
-            loading={allMut.isPending}
-            onClick={() => allMut.mutate()}
-          >
-            一键全量同步
-          </Button>
-          <Button loading={unitsTeachersMut.isPending} onClick={() => unitsTeachersMut.mutate()}>
-            同步单位+教师
-          </Button>
-          <Button loading={collegesMut.isPending} onClick={() => collegesMut.mutate()}>
-            仅同步单位
-          </Button>
-          <Button loading={teachersMut.isPending} onClick={() => teachersMut.mutate()}>
-            仅同步教师
-          </Button>
-          <Button loading={scheduleMut.isPending} onClick={() => scheduleMut.mutate()}>
-            同步课表
-          </Button>
-          <Button icon={<SyncOutlined />} onClick={() => setCrawlOpen(true)}>
-            教务系统抓取课表
-          </Button>
-          <Button icon={<UserOutlined />} onClick={() => setLlsykbOpen(true)}>
-            选择教师同步课表
-          </Button>
-          <Button icon={<TeamOutlined />} onClick={() => setBatchOpen(true)}>
-            按学院批量同步课表
-          </Button>
+          <Tooltip title="推荐：按学院逐个老师同步，覆盖没课老师，带进度条，适合整批刷新">
+            <Button
+              type="primary"
+              icon={<TeamOutlined />}
+              onClick={() => setBatchOpen(true)}
+            >
+              按学院批量同步课表（推荐）
+            </Button>
+          </Tooltip>
+          <Tooltip title="推荐：只同步你选中的老师，后台运行并显示进度条，适合单独更新某几位老师">
+            <Button type="primary" icon={<UserOutlined />} onClick={() => setLlsykbOpen(true)}>
+              选择教师同步课表（推荐）
+            </Button>
+          </Tooltip>
+          <Popconfirm title="确认同步单位+教师？" onConfirm={() => unitsTeachersMut.mutate()}>
+            <Button type="primary" loading={unitsTeachersMut.isPending}>
+              同步单位+教师
+            </Button>
+          </Popconfirm>
+          <Popconfirm title="确认仅同步单位？" onConfirm={() => collegesMut.mutate()}>
+            <Button type="primary" loading={collegesMut.isPending}>
+              仅同步单位
+            </Button>
+          </Popconfirm>
+          <Popconfirm title="确认仅同步教师？" onConfirm={() => teachersMut.mutate()}>
+            <Button type="primary" loading={teachersMut.isPending}>
+              仅同步教师
+            </Button>
+          </Popconfirm>
+          <Tooltip title="旧方式：整页抓取按姓名匹配，易漏没课老师、无进度，同名教师易匹配错，建议用推荐的方式代替">
+            <Popconfirm
+              title="确认同步课表？"
+              description="旧方式同步，易漏没课老师且同名教师易匹配错，建议改用「按学院批量同步课表（推荐）」"
+              onConfirm={() => scheduleMut.mutate()}
+            >
+              <Button loading={scheduleMut.isPending}>同步课表</Button>
+            </Popconfirm>
+          </Tooltip>
+          <Tooltip title="旧方式：整页抓取按姓名匹配，易漏没课老师、无进度，同名教师易匹配错，建议用推荐的方式代替">
+            <Button icon={<SyncOutlined />} onClick={() => setCrawlOpen(true)}>
+              教务系统抓取课表
+            </Button>
+          </Tooltip>
+          <Popconfirm title="确认一键全量同步？" description="将同步单位、教师档案和课表，耗时较长" onConfirm={() => allMut.mutate()}>
+            <Button icon={<SyncOutlined />} loading={allMut.isPending}>
+              一键全量同步
+            </Button>
+          </Popconfirm>
           <Badge count={invalidResult ? Number((invalidResult as { count?: number }).count || 0) : 0} size="small">
             <Button icon={<ScanOutlined />} loading={scanMut.isPending} onClick={() => scanMut.mutate()}>
               工号异常清理
@@ -220,8 +267,8 @@ export default function DataSync() {
       )}
 
       <CrawlModal open={crawlOpen} onClose={() => setCrawlOpen(false)} />
-      <LlsykbSelectModal open={llsykbOpen} onClose={() => setLlsykbOpen(false)} />
-      <LlsykbBatchModal open={batchOpen} onClose={() => setBatchOpen(false)} />
+      <LlsykbSelectModal open={llsykbOpen} onClose={() => setLlsykbOpen(false)} onRecord={addSyncHistory} />
+      <LlsykbBatchModal open={batchOpen} onClose={() => setBatchOpen(false)} onRecord={addSyncHistory} />
     </div>
   )
 }
@@ -283,13 +330,22 @@ function InvalidUsersPanel({
   )
 }
 
-/** 选择教师同步课表（llsykb：按工号同步所选教师） */
-function LlsykbSelectModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** 选择教师同步课表：选中教师 → 异步后台任务 + 3 秒轮询进度 */
+function LlsykbSelectModal({
+  open,
+  onClose,
+  onRecord,
+}: {
+  open: boolean
+  onClose: () => void
+  onRecord: (action: string, status: string, msg: string) => void
+}) {
   const { message } = App.useApp()
   const qc = useQueryClient()
   const [semester, setSemester] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
   const [selectedNos, setSelectedNos] = useState<string[]>([])
+  const [taskId, setTaskId] = useState<string | null>(null)
 
   const { data: currentSemester } = useQuery({
     queryKey: ['current-semester'],
@@ -311,33 +367,73 @@ function LlsykbSelectModal({ open, onClose }: { open: boolean; onClose: () => vo
     if (open && currentSemester) setSemester(currentSemester.semester)
   }, [open, currentSemester])
 
-  const syncMut = useMutation({
-    mutationFn: () => syncApi.syncLlsykb(semester!, selectedNos),
-    onSuccess: () => {
-      message.success('所选教师课表同步成功')
+  const startMut = useMutation({
+    mutationFn: () => syncApi.llsykbBatch(semester!, undefined, selectedNos),
+    onSuccess: (res) => {
+      message.success('同步任务已启动')
+      setTaskId(res.task_id)
+    },
+    onError: (e) => {
+      message.error(e.message)
+      onRecord('选择教师同步课表', 'failed', e.message)
+    },
+  })
+
+  // 3 秒轮询进度：按已处理教师数/总教师数计算
+  const { data: progress } = useQuery({
+    queryKey: ['llsykb-progress', taskId],
+    queryFn: () => syncApi.llsykbProgress(taskId!),
+    refetchInterval: 3000,
+    enabled: !!taskId,
+  })
+
+  const status = (progress as { status?: string } | undefined)?.status
+  useEffect(() => {
+    if (status === 'completed' || status === 'success') {
+      message.success('所选教师课表同步完成')
+      onRecord('选择教师同步课表', 'success', `所选教师课表同步完成（${selectedNos.length} 人）`)
       qc.invalidateQueries({ queryKey: ['semesters'] })
       qc.invalidateQueries({ queryKey: ['schedule'] })
+      setTaskId(null)
       onClose()
-    },
-    onError: (e) => message.error(e.message),
-  })
+    } else if (status === 'failed') {
+      const reason = (progress as { error?: string } | undefined)?.error || '同步失败'
+      message.error(reason)
+      onRecord('选择教师同步课表', 'failed', reason)
+      setTaskId(null)
+    }
+  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const percent = Number((progress as { percent?: number } | undefined)?.percent || 0)
 
   return (
     <Modal
       title="选择教师同步课表"
       open={open}
-      onCancel={onClose}
+      onCancel={() => {
+        setTaskId(null)
+        onClose()
+      }}
       width={640}
       footer={[
-        <Button key="cancel" onClick={onClose}>
-          取消
+        <Button
+          key="close"
+          onClick={() => {
+            if (taskId) {
+              setTaskId(null) // 任务仍后台运行，仅隐藏进度
+            } else {
+              onClose()
+            }
+          }}
+        >
+          {taskId ? '隐藏' : '取消'}
         </Button>,
         <Button
           key="ok"
           type="primary"
-          loading={syncMut.isPending}
-          disabled={selectedNos.length === 0}
-          onClick={() => syncMut.mutate()}
+          loading={startMut.isPending}
+          disabled={selectedNos.length === 0 || !!taskId}
+          onClick={() => startMut.mutate()}
         >
           同步所选（{selectedNos.length}）
         </Button>,
@@ -375,12 +471,26 @@ function LlsykbSelectModal({ open, onClose }: { open: boolean; onClose: () => vo
           { title: '学院', dataIndex: 'college_name', render: (v) => v || '-' },
         ]}
       />
+      {taskId && (
+        <div style={{ marginTop: 8 }}>
+          <Progress percent={percent} status="active" />
+          <div style={{ color: '#999', fontSize: 12 }}>任务 {taskId}，每 3 秒刷新进度</div>
+        </div>
+      )}
     </Modal>
   )
 }
 
 /** 按学院批量同步（后台任务 + 3 秒轮询进度） */
-function LlsykbBatchModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+function LlsykbBatchModal({
+  open,
+  onClose,
+  onRecord,
+}: {
+  open: boolean
+  onClose: () => void
+  onRecord: (action: string, status: string, msg: string) => void
+}) {
   const { message } = App.useApp()
   const qc = useQueryClient()
   const [semester, setSemester] = useState<string | undefined>()
@@ -412,10 +522,13 @@ function LlsykbBatchModal({ open, onClose }: { open: boolean; onClose: () => voi
       message.success('批量同步任务已启动')
       setTaskId(res.task_id)
     },
-    onError: (e) => message.error(e.message),
+    onError: (e) => {
+      message.error(e.message)
+      onRecord('按学院批量同步课表', 'failed', e.message)
+    },
   })
 
-  // 3 秒轮询进度
+  // 3 秒轮询进度：后台任务按「已处理用户数/总用户数」计算 percent，逐个教师完成时回推 completed
   const { data: progress } = useQuery({
     queryKey: ['llsykb-progress', taskId],
     queryFn: () => syncApi.llsykbProgress(taskId!),
@@ -427,11 +540,15 @@ function LlsykbBatchModal({ open, onClose }: { open: boolean; onClose: () => voi
   useEffect(() => {
     if (status === 'completed' || status === 'success') {
       message.success('批量同步完成')
+      onRecord('按学院批量同步课表', 'success', '批量同步完成')
       qc.invalidateQueries({ queryKey: ['semesters'] })
       qc.invalidateQueries({ queryKey: ['schedule'] })
       setTaskId(null)
+      onClose()
     } else if (status === 'failed') {
-      message.error('批量同步失败')
+      const reason = (progress as { error?: string } | undefined)?.error || '批量同步失败'
+      message.error(reason)
+      onRecord('按学院批量同步课表', 'failed', reason)
       setTaskId(null)
     }
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -447,7 +564,16 @@ function LlsykbBatchModal({ open, onClose }: { open: boolean; onClose: () => voi
         onClose()
       }}
       footer={[
-        <Button key="close" onClick={() => setTaskId(null)}>
+        <Button
+          key="close"
+          onClick={() => {
+            if (taskId) {
+              setTaskId(null) // 任务仍后台运行，仅隐藏进度
+            } else {
+              onClose() // 无任务时取消并关闭弹窗
+            }
+          }}
+        >
           {taskId ? '隐藏' : '取消'}
         </Button>,
         <Button
@@ -515,6 +641,7 @@ function CrawlModal({ open, onClose }: { open: boolean; onClose: () => void }) {
     onError: (e) => message.error(e.message),
   })
 
+  // 旧方式：整页抓取，易漏没课老师、无进度，建议用「按学院批量同步课表（推荐）」
   return (
     <Modal
       title="教务系统抓取课表"
@@ -524,11 +651,19 @@ function CrawlModal({ open, onClose }: { open: boolean; onClose: () => void }) {
       confirmLoading={crawlMut.isPending}
     >
       <Form form={form} layout="vertical" onFinish={(v) => crawlMut.mutate(v)}>
-        <Form.Item name="username" label="教务系统用户名" rules={[{ required: true }]}>
-          <Input />
+        <Form.Item
+          name="username"
+          label="教务系统用户名"
+          tooltip="留空则使用 .env 配置的 JWXT_USERNAME"
+        >
+          <Input placeholder="留空使用系统配置账号" />
         </Form.Item>
-        <Form.Item name="password" label="教务系统密码" rules={[{ required: true }]}>
-          <Input.Password />
+        <Form.Item
+          name="password"
+          label="教务系统密码"
+          tooltip="留空则使用 .env 配置的 JWXT_PASSWORD"
+        >
+          <Input.Password placeholder="留空使用系统配置账号" />
         </Form.Item>
         <Form.Item name="semester" label="学期" rules={[{ required: true }]}>
           <Select

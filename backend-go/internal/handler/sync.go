@@ -193,6 +193,9 @@ func (h *Sync) SyncAll(c *gin.Context) {
 }
 
 // SyncCourseSchedule 同步课表
+// 说明：底层调用 SyncCourses（queryzkb_teacher.jsp 按院系整页 + 姓名匹配），
+// 与 /sync/llsykb/batch 结果同源但覆盖/精确度不如 SyncByTeacherNos，无逐人进度。
+// 建议前端统一改走按学院批量同步，本接口保留用于兼容旧端。
 func (h *Sync) SyncCourseSchedule(c *gin.Context) {
 	var p struct {
 		Semester string `json:"semester"`
@@ -213,6 +216,7 @@ func (h *Sync) SyncTeachersStatus(c *gin.Context) {
 }
 
 // CrawlCourseSchedule 爬取课表（支持请求自带教务系统凭据）
+// 说明：底层调用 SyncCourses，与 SyncByTeacherNos 结果同源；倾向用批量同步替代，保留用于兼容旧端。
 func (h *Sync) CrawlCourseSchedule(c *gin.Context) {
 	var p struct {
 		Semester    string `json:"semester"`
@@ -343,12 +347,15 @@ func (h *Sync) SyncLlsykb(c *gin.Context) {
 }
 
 // SyncLlsykbBatch 批量同步教师课表（后台任务 + 进度追踪）
+// 推荐入口：基于 SyncByTeacherNos 按工号逐人查询，遍历真实用户表（可带 college_id 过滤），
+// 可覆盖无课教师、按用户数推进度。课表同步建议统一走本接口。
 func (h *Sync) SyncLlsykbBatch(c *gin.Context) {
 	cleanupExpiredProgress()
 
 	var p struct {
-		Xnxq01id  string `json:"xnxq01id"`
-		CollegeID *int   `json:"college_id"`
+		Xnxq01id   string   `json:"xnxq01id"`
+		CollegeID  *int     `json:"college_id"`
+		TeacherNos []string `json:"teacher_nos"`
 	}
 	if err := c.ShouldBindJSON(&p); err != nil {
 		badReq(c, "请求参数错误")
@@ -358,25 +365,30 @@ func (h *Sync) SyncLlsykbBatch(c *gin.Context) {
 		p.Xnxq01id = h.currentSemesterCodeStr()
 	}
 
-	// 查询在职人员工号（不限角色）
-	q := h.db.Model(&model.User{}).Where("status = 1")
-	if p.CollegeID != nil {
-		q = q.Where("college_id = ?", *p.CollegeID)
+	// 显式指定 teacher_nos 时直接用（选择教师同步）；否则按学院过滤在职人员工号（不限角色）
+	var teacherNos []string
+	scope := "all"
+	if len(p.TeacherNos) > 0 {
+		teacherNos = p.TeacherNos
+		scope = fmt.Sprintf("teachers:%d", len(teacherNos))
+	} else {
+		q := h.db.Model(&model.User{}).Where("status = 1")
+		if p.CollegeID != nil {
+			q = q.Where("college_id = ?", *p.CollegeID)
+		}
+		var users []model.User
+		q.Select("id, user_no, username").Find(&users)
+		teacherNos = make([]string, 0, len(users))
+		for _, u := range users {
+			teacherNos = append(teacherNos, u.UserNo)
+		}
+		if p.CollegeID != nil {
+			scope = fmt.Sprintf("college:%d", *p.CollegeID)
+		}
 	}
-	var users []model.User
-	q.Select("id, user_no, username").Find(&users)
-	if len(users) == 0 {
+	if len(teacherNos) == 0 {
 		badReq(c, "未找到符合条件的教师记录")
 		return
-	}
-	teacherNos := make([]string, 0, len(users))
-	for _, u := range users {
-		teacherNos = append(teacherNos, u.UserNo)
-	}
-
-	scope := "all"
-	if p.CollegeID != nil {
-		scope = fmt.Sprintf("college:%d", *p.CollegeID)
 	}
 	taskID := uuid.NewString()[:16]
 	initProgress(taskID, len(teacherNos), p.Xnxq01id, scope)
@@ -569,6 +581,8 @@ func requireSyncSystemAdmin(c *gin.Context) bool {
 // ---------- /crawl/*（对齐旧端 crawl.py） ----------
 
 // CrawlTimetable 同步爬取课表并导入（query 参数 semester/username/password）
+// 说明：底层调用 SyncCourses（按院系整页），与按学院批量同步（/sync/llsykb/batch）结果同源，
+// 建议以批量同步为主入口，本接口保留用于兼容旧端 crawl.py。
 func (h *Sync) CrawlTimetable(c *gin.Context) {
 	if !requireSyncAdmin(c) {
 		return
@@ -599,6 +613,7 @@ func (h *Sync) CrawlTimetablePreview(c *gin.Context) {
 }
 
 // CrawlTimetableAsync 后台爬取课表
+// 说明：同 CrawlTimetable，底层为 SyncCourses，建议由按学院批量同步替代。
 func (h *Sync) CrawlTimetableAsync(c *gin.Context) {
 	if !requireSyncAdmin(c) {
 		return

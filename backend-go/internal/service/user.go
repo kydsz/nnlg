@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"backend-go/internal/model"
@@ -22,6 +23,16 @@ type UserParams struct {
 	Status         *int
 	NoCollege      bool
 	NoResearchRoom bool
+	OrderBy        string // 排序字段（user_no/username/college_name，白名单过滤）
+	OrderDir       string // asc/desc，默认 asc（工号从小到大）
+}
+
+// sortDir 排序方向白名单：仅 asc/desc，其余默认 asc
+func sortDir(dir string) string {
+	if strings.ToLower(dir) == "desc" {
+		return "DESC"
+	}
+	return "ASC"
 }
 
 // User 用户相关业务逻辑
@@ -72,13 +83,24 @@ func (s *User) List(db *gorm.DB, p UserParams) ([]model.User, int64, error) {
 
 	var users []model.User
 	offset := (p.Page - 1) * p.PageSize
+	// 白名单排序（防注入）：工号/姓名/学院名；学院名需关联学院表，空学院排最后
+	switch p.OrderBy {
+	case "user_no":
+		q = q.Order("`user`.`user_no` " + sortDir(p.OrderDir) + ", `user`.`id` DESC")
+	case "username":
+		q = q.Order("`user`.`username` " + sortDir(p.OrderDir) + ", `user`.`id` DESC")
+	case "college_name":
+		q = q.Joins("LEFT JOIN college c ON c.id = `user`.`college_id`").
+			Order("c.name IS NULL ASC, c.name " + sortDir(p.OrderDir) + ", `user`.`id` DESC")
+	default:
+		q = q.Order("id DESC")
+	}
 	err := q.Session(&gorm.Session{}).
 		Preload("UserRoles").
 		Preload("UserColleges.College").
 		Preload("UserRooms.ResearchRoom.College").
 		Preload("College").
 		Preload("ResearchRoom").
-		Order("id DESC").
 		Offset(offset).Limit(p.PageSize).
 		Find(&users).Error
 	return users, total, err

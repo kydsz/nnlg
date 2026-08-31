@@ -261,6 +261,10 @@ func firstMeaningfulText(root *html.Node) string {
 }
 
 // SyncByTeacherNos 按工号列表同步课表（llsykb，逐人查询 + 分批入库）
+//
+// 说明：llsykb_kb.jsp 逐人按工号查询，遍历真实用户表、TeacherID 直接绑定用户，
+// 可覆盖无课教师、无姓名匹配歧义、可逐人回推进度（回调 cb）。推荐作为课表同步主入口。
+// 按学院批量同步（/sync/llsykb/batch）即经由本函数实现。
 func (b *BaseSync) SyncByTeacherNos(db *gorm.DB, semester string, teacherNos []string,
 	cb func(no, name string, ok bool, reason string)) map[string]interface{} {
 
@@ -361,6 +365,9 @@ func (b *BaseSync) SyncByTeacherNos(db *gorm.DB, semester string, teacherNos []s
 			})
 		}
 		pending = append(pending, ts)
+		if cb != nil {
+			cb(tid, info.username, true, "success")
+		}
 		if len(pending) >= flushEvery {
 			flush()
 		}

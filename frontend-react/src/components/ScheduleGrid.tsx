@@ -145,6 +145,7 @@ export default function ScheduleGrid({ courses, loading, meta, onCellClick }: Pr
             <tr key={slot.label}>
               <td style={{ ...tdStyle, fontSize: 12, background: '#fafafa' }}>
                 <div>{slot.label}</div>
+                <div style={{ opacity: 0.7 }}>{slot.time}</div>
               </td>
               {WEEK_DAYS.map((_, colIdx) => {
                 const weekDay = colIdx + 1

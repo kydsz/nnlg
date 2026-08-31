@@ -893,6 +893,8 @@ POST /crawl/llsykb                                          # 单教师 llsykb �
 
 未传 `start_date` / `end_date` 时，统计默认按当前学期区间汇总（开学日 ~ 开学日 + weeks×7 天，weeks 为学期配置的每学期周数）。
 
+**统计口径说明**：`/stats` 下所有接口的时间筛选统一按**评教任务的上课时间（`class_time`）**归属时间段，而非评教记录的提交时间（`submit_time`）。原因：`class_time` 位于任务表（`evaluation_task`），任务级指标（总任务/已评/待评）只能基于任务时间；记录级指标（评教记录数、明细）通过 `task_id` 关联任务后同样按上课时间过滤，从而保证各统计页与导出在相同时间段下数据一致。听课明细响应中保留的 `submit_time` 字段仅作展示，不参与统计筛选。
+
 ### 当前学期
 
 ```http
@@ -904,10 +906,10 @@ GET /stats/current-semester
 ### 系统概览
 
 ```http
-GET /stats/overview?semester=2024-2025-1
+GET /stats/overview?semester=2024-2025-1&start_date=2026-08-31&end_date=2027-01-18
 ```
 
-`semester` 可选，按学期过滤数据。
+`semester` 可选，按学期过滤数据；`start_date` / `end_date` 格式 `YYYY-MM-DD`，按上课时间（`class_time`）筛选。未传日期时默认按当前学期区间汇总（与其他统计接口口径一致）。同时传 `semester` 与日期时以日期区间为准。
 
 **响应示例**:
 

@@ -36,7 +36,8 @@ export const statsApi = {
   currentSemester: () =>
     request<SemesterInfo>({ url: '/stats/current-semester', method: 'GET' }),
 
-  overview: () => request<OverviewStats>({ url: '/stats/overview', method: 'GET' }),
+  overview: (params?: RecordQuery) =>
+    request<OverviewStats>({ url: '/stats/overview', method: 'GET', params }),
 
   teachers: (params?: RecordQuery) =>
     request<PageData<TeacherStat>>({ url: '/stats/teachers', method: 'GET', params }),

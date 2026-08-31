@@ -38,6 +38,8 @@ func (h *User) List(c *gin.Context) {
 		ResearchRoomID: c.Query("research_room_id"),
 		NoCollege:      c.Query("no_college") == "true" || c.Query("no_college") == "1",
 		NoResearchRoom: c.Query("no_research_room") == "true" || c.Query("no_research_room") == "1",
+		OrderBy:        c.Query("order_by"),
+		OrderDir:       c.Query("order"),
 	}
 	if v, ok := c.GetQuery("status"); ok {
 		if s, err := strconv.Atoi(v); err == nil {

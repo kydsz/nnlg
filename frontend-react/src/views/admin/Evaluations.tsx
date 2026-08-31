@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Table, Button, Space, App, Popconfirm, Tag, Drawer, Input, Descriptions, DatePicker, Image } from 'antd'
-import { DownloadOutlined, PrinterOutlined, SearchOutlined } from '@ant-design/icons'
+import { Table, Button, Space, App, Popconfirm, Tag, Drawer, Input, Descriptions, DatePicker, Image, Slider, InputNumber, Radio, Checkbox, Switch, Spin } from 'antd'
+import { DownloadOutlined, PrinterOutlined, SearchOutlined, EditOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import type { ColumnsType } from 'antd/es/table'
-import { evaluationApi } from '@/api/modules/evaluations'
+import { evaluationApi, type UpdatePayload } from '@/api/modules/evaluations'
 import { statsApi } from '@/api/modules/stats'
 import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
 import { downloadBlob, exportFilename } from '@/utils/download'
@@ -29,6 +29,7 @@ export default function Evaluations() {
   const [params, setParams] = useState<{ page: number; page_size: number; keyword?: string; teacher_id?: number }>({ page: 1, page_size: 20 })
   const [keyword, setKeyword] = useState('')
   const [detailId, setDetailId] = useState<number | null>(null)
+  const [editId, setEditId] = useState<number | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
   // 默认日期区间：当前学期（开学日 ~ 开学日+20周）
   const { effective: dates, onRange } = useSemesterRangePicker()
@@ -45,6 +46,13 @@ export default function Evaluations() {
     enabled: detailId != null,
   })
   const detail = detailQ.data ?? null
+
+  // 编辑表单数据：复用详情接口（含分组 schema 与当前维度值）
+  const editQ = useQuery({
+    queryKey: ['eval-edit', editId],
+    queryFn: () => evaluationApi.detail(editId!),
+    enabled: editId != null,
+  })
 
   const pdfMut = useMutation({
     mutationFn: (id: number) => evaluationApi.exportRecord(id, 'pdf'),
@@ -95,9 +103,14 @@ export default function Evaluations() {
     },
     {
       title: '操作',
-      width: 130,
+      width: 210,
       render: (_, record) => (
         <Space>
+          {canDelete && (
+            <Button size="small" icon={<EditOutlined />} onClick={() => setEditId(record.id)}>
+              编辑
+            </Button>
+          )}
           <Button size="small" onClick={() => setDetailId(record.id)}>
             详情
           </Button>
@@ -170,6 +183,18 @@ export default function Evaluations() {
         extra={
           detail && (
             <Space>
+              {canDelete && (
+                <Button
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={() => {
+                    setDetailId(null)
+                    setEditId(detail.id)
+                  }}
+                >
+                  编辑
+                </Button>
+              )}
               <Button
                 size="small"
                 icon={<PrinterOutlined />}
@@ -251,6 +276,22 @@ export default function Evaluations() {
         )}
       </Drawer>
 
+      {/* 编辑评教 */}
+      <Drawer
+        title="编辑评教"
+        open={editId != null}
+        onClose={() => setEditId(null)}
+        width={560}
+      >
+        {editQ.isLoading || !editQ.data ? (
+          <div style={{ textAlign: 'center', padding: 40 }}>
+            <Spin />
+          </div>
+        ) : (
+          <EvaluationEditForm evalData={editQ.data} onClose={() => setEditId(null)} />
+        )}
+      </Drawer>
+
       <ExportFieldSelector
         open={exportOpen}
         onCancel={() => setExportOpen(false)}
@@ -296,4 +337,255 @@ function ValueRender({
     )
   }
   return <span>{displayValue || formatValueText(value)}</span>
+}
+
+/* ═══ 编辑评教表单 ═══ */
+
+interface EditDim {
+  code: string
+  name: string
+  field_type?: string
+  field_config?: Record<string, unknown>
+  is_required?: boolean
+  group_name?: string
+  [key: string]: unknown
+}
+
+/** 单选/多选选项归一化 */
+const choiceOptions = (cfg: Record<string, unknown>) => {
+  const opts = Array.isArray(cfg.options) ? cfg.options : []
+  return opts.map((o) => {
+    const rec = o as { label?: unknown; value?: unknown } | string
+    if (typeof rec !== 'object' || rec === null) return { label: String(rec), value: String(rec) }
+    const label = String(rec.label ?? rec.value ?? '')
+    const value = rec.value ?? rec.label ?? ''
+    return { label, value: String(value) }
+  })
+}
+
+const toNum = (v: unknown, fallback: number) => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : fallback
+}
+
+/** 编辑评教表单：按维度 schema 动态渲染控件；image/file 维度只读保留现有附件 */
+function EvaluationEditForm({
+  evalData,
+  onClose,
+}: {
+  evalData: EvaluationRecord
+  onClose: () => void
+}) {
+  const { message } = App.useApp()
+  const qc = useQueryClient()
+  const dims = useMemo<EditDim[]>(
+    () =>
+      (evalData.dimension_groups || []).flatMap((g) =>
+        (g.dimensions || []).map((d) => ({
+          ...d,
+          group_name: g.name || g.group_name || '',
+        }))
+      ),
+    [evalData]
+  )
+  const [values, setValues] = useState<Record<string, unknown>>(() => ({
+    ...(evalData.dimension_values || {}),
+  }))
+  const [isAnonymous, setIsAnonymous] = useState(!!evalData.is_anonymous)
+
+  const editMut = useMutation({
+    mutationFn: (data: UpdatePayload) => evaluationApi.update(evalData.id, data),
+    onSuccess: () => {
+      message.success('修改成功')
+      qc.invalidateQueries({ queryKey: ['evaluations'] })
+      qc.invalidateQueries({ queryKey: ['eval-detail'] })
+      qc.invalidateQueries({ queryKey: ['eval-edit'] })
+      onClose()
+    },
+    onError: (e) => message.error(e.message),
+  })
+
+  const handleSave = () => {
+    for (const d of dims) {
+      if (!d.is_required) continue
+      const v = values[d.code]
+      if (
+        v === undefined ||
+        v === null ||
+        v === '' ||
+        (Array.isArray(v) && v.length === 0)
+      ) {
+        message.error(`请填写「${d.name}」`)
+        return
+      }
+    }
+    editMut.mutate({ dimension_values: values, is_anonymous: isAnonymous })
+  }
+
+  return (
+    <div>
+      <Descriptions column={1} size="small" bordered style={{ marginBottom: 16 }}>
+        <Descriptions.Item label="教师">{evalData.teacher_name}</Descriptions.Item>
+        <Descriptions.Item label="课程">{evalData.course_name}</Descriptions.Item>
+        <Descriptions.Item label="评教人">{evalData.evaluator_name}</Descriptions.Item>
+        <Descriptions.Item label="提交时间">{formatDate(evalData.submit_time)}</Descriptions.Item>
+      </Descriptions>
+
+      {dims.map((d) => (
+        <div key={d.code} style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            {d.group_name && (
+              <span style={{ color: '#999', fontWeight: 400, marginRight: 6 }}>{d.group_name}</span>
+            )}
+            {d.name}
+            {d.is_required && <span style={{ color: '#ff4d4f' }}> *</span>}
+          </div>
+          <EditDimControl
+            dim={d}
+            value={values[d.code]}
+            onChange={(v) => setValues((prev) => ({ ...prev, [d.code]: v }))}
+          />
+        </div>
+      ))}
+
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '12px 0',
+          borderTop: '1px solid #f0f0f0',
+        }}
+      >
+        <span>匿名评教</span>
+        <Switch checked={isAnonymous} onChange={setIsAnonymous} />
+      </div>
+
+      <div style={{ textAlign: 'right', marginTop: 16 }}>
+        <Space>
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" loading={editMut.isPending} onClick={handleSave}>
+            保存
+          </Button>
+        </Space>
+      </div>
+    </div>
+  )
+}
+
+/** 单个维度编辑控件 */
+function EditDimControl({
+  dim,
+  value,
+  onChange,
+}: {
+  dim: EditDim
+  value: unknown
+  onChange: (v: unknown) => void
+}) {
+  const cfg = dim.field_config || {}
+  switch (dim.field_type) {
+    case 'score': {
+      const min = toNum(cfg.min_score, 0)
+      const max = toNum(cfg.max_score, 20)
+      const cur = typeof value === 'number' ? value : max
+      return (
+        <>
+          <Slider
+            min={min}
+            max={max}
+            step={toNum(cfg.step, 1)}
+            value={cur}
+            onChange={(v) => onChange(v)}
+          />
+          <div style={{ textAlign: 'right', color: '#104186', fontSize: 13 }}>{cur} 分</div>
+        </>
+      )
+    }
+    case 'single_choice':
+      return (
+        <Radio.Group
+          value={value == null ? undefined : String(value)}
+          options={choiceOptions(cfg)}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )
+    case 'multiple_choice':
+      return (
+        <Checkbox.Group
+          value={(Array.isArray(value) ? value : value != null ? [value] : []) as (string | number)[]}
+          options={choiceOptions(cfg)}
+          onChange={(v) => onChange(v)}
+        />
+      )
+    case 'text':
+    case 'rich_text':
+      return (
+        <Input.TextArea
+          rows={3}
+          value={typeof value === 'string' ? value : ''}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="请输入"
+        />
+      )
+    case 'number': {
+      const min = typeof cfg.min === 'number' ? cfg.min : undefined
+      const max = typeof cfg.max === 'number' ? cfg.max : undefined
+      return (
+        <InputNumber
+          style={{ width: '100%' }}
+          min={min}
+          max={max}
+          value={typeof value === 'number' ? value : undefined}
+          onChange={(v) => onChange(v ?? undefined)}
+        />
+      )
+    }
+    case 'date':
+      return (
+        <DatePicker
+          value={typeof value === 'string' && value ? dayjs(value) : undefined}
+          onChange={(d) => onChange(d ? d.format('YYYY-MM-DD') : undefined)}
+        />
+      )
+    case 'image':
+    case 'file':
+      return <ReadonlyFiles value={value} />
+    default:
+      return (
+        <Input
+          value={typeof value === 'string' ? value : ''}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )
+  }
+}
+
+/** 只读展示现有附件（编辑时不做增删） */
+function ReadonlyFiles({ value }: { value: unknown }) {
+  if (isImageArray(value)) {
+    return (
+      <Image.PreviewGroup>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {(value as string[]).map((u) => (
+            <Image key={u} src={u} width={64} height={64} style={{ objectFit: 'cover' }} />
+          ))}
+        </div>
+      </Image.PreviewGroup>
+    )
+  }
+  if (isFileArray(value)) {
+    return (
+      <div>
+        {(value as string[]).map((u) => (
+          <div key={u}>
+            <a href={u} target="_blank" rel="noreferrer" download={getFileNameFromUrl(u)}>
+              {getFileNameFromUrl(u)}
+            </a>
+          </div>
+        ))}
+      </div>
+    )
+  }
+  return <span style={{ color: '#999' }}>无附件</span>
 }

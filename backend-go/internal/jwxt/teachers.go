@@ -53,7 +53,7 @@ func (b *BaseSync) SyncTeachers(db *gorm.DB, defaultPassword string) (map[string
 		})
 	}
 	if len(teachers) == 0 {
-		return map[string]interface{}{"success": true, "total": 0, "new": 0, "updated": 0, "errors": 0}, nil
+		return map[string]interface{}{"success": true, "total": 0, "new": 0, "updated": 0, "skipped": 0, "errors": 0}, nil
 	}
 
 	defaultHash, err := pwd.Hash(defaultPassword)
@@ -69,7 +69,7 @@ func (b *BaseSync) SyncTeachers(db *gorm.DB, defaultPassword string) (map[string
 		collegeMap[c.Name] = c.ID
 	}
 
-	newCount, updateCount, errCount := 0, 0, 0
+	newCount, skipCount, errCount := 0, 0, 0
 	for _, t := range teachers {
 		func() {
 			defer func() {
@@ -81,29 +81,14 @@ func (b *BaseSync) SyncTeachers(db *gorm.DB, defaultPassword string) (map[string
 
 			var u model.User
 			exists := db.Where("user_no = ?", t.UserNo).First(&u).Error == nil
-			now := time.Now()
 			status := int16(0)
 			if t.Status == "在职" {
 				status = 1
 			}
 
 			if exists {
-				updates := map[string]interface{}{
-					"username": t.Username, "role": "teacher", "status": status, "update_time": now,
-				}
-				if err := db.Model(&model.User{}).Where("id = ?", u.ID).Updates(updates).Error; err != nil {
-					errCount++
-					return
-				}
-				ensureTeacherRole(db, u.ID)
-				if t.Department != "" {
-					collegeID, deptErr := resolveCollegeID(db, collegeMap, t.Department)
-					if deptErr == nil {
-						db.Model(&model.User{}).Where("id = ?", u.ID).Update("college_id", collegeID)
-						ensureUserCollege(db, u.ID, collegeID)
-					}
-				}
-				updateCount++
+				// 已存在教师不覆盖：跳过更新，仅计数，保护本地已修改的配置
+				skipCount++
 			} else {
 				nu := model.User{
 					UserNo: t.UserNo, Username: t.Username, Password: defaultHash,
@@ -126,10 +111,10 @@ func (b *BaseSync) SyncTeachers(db *gorm.DB, defaultPassword string) (map[string
 		}()
 	}
 
-	log.Printf("[jwxt] 教师导入完成 | 新增: %d | 更新: %d | 错误: %d", newCount, updateCount, errCount)
+	log.Printf("[jwxt] 教师导入完成 | 新增: %d | 跳过(已存在未覆盖): %d | 错误: %d", newCount, skipCount, errCount)
 	return map[string]interface{}{
 		"success": true, "total": len(teachers),
-		"new": newCount, "updated": updateCount, "errors": errCount,
+		"new": newCount, "updated": 0, "skipped": skipCount, "errors": errCount,
 	}, nil
 }
 

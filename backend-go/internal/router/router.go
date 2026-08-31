@@ -149,6 +149,7 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		evaluations.GET("/:id", middleware.RequirePermission(db, "evaluation:view"), evalH.Detail)
 		evaluations.GET("/:id/export", middleware.RequirePermission(db, "evaluation:view"), evalH.Export)
 		evaluations.DELETE("/:id", authMW, evalH.Delete)
+		evaluations.PUT("/:id", authMW, evalH.Update)
 	}
 
 	// 文件访问（兼容旧端 /files 路径）

@@ -53,10 +53,10 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 		rq = rq.Where("r.evaluator_role IN ?", f.EvaluatorRoles)
 	}
 	if f.Start != nil {
-		rq = rq.Where("r.submit_time >= ?", *f.Start)
+		rq = rq.Where("t.class_time >= ?", *f.Start)
 	}
 	if f.End != nil {
-		rq = rq.Where("r.submit_time < ?", *f.End)
+		rq = rq.Where("t.class_time < ?", *f.End)
 	}
 	var teacherIDs []int
 	rq.Distinct().Pluck("t.teacher_id", &teacherIDs)
@@ -98,7 +98,14 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 	out := make([]TeacherStatItem, 0, len(teachers))
 	for _, t := range teachers {
 		var tasks []model.EvaluationTask
-		db.Where("teacher_id = ?", t.ID).Find(&tasks)
+		tq := db.Where("teacher_id = ?", t.ID)
+		if f.Start != nil {
+			tq = tq.Where("class_time >= ?", *f.Start)
+		}
+		if f.End != nil {
+			tq = tq.Where("class_time < ?", *f.End)
+		}
+		tq.Find(&tasks)
 		taskIDs := make([]int, 0, len(tasks))
 		for _, tk := range tasks {
 			taskIDs = append(taskIDs, tk.ID)
@@ -109,12 +116,6 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 			recq := db.Where("task_id IN ? AND is_deleted = 0", taskIDs)
 			if len(f.EvaluatorRoles) > 0 {
 				recq = recq.Where("evaluator_role IN ?", f.EvaluatorRoles)
-			}
-			if f.Start != nil {
-				recq = recq.Where("submit_time >= ?", *f.Start)
-			}
-			if f.End != nil {
-				recq = recq.Where("submit_time < ?", *f.End)
 			}
 			recq.Find(&records)
 		}
@@ -151,12 +152,14 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 }
 
 // Overview 首页大盘（返回结构与旧端一致：users/organization/tasks/evaluations 嵌套）
-// semester 为空时取当前学期；tasks/evaluations 按学期 class_time 范围统计（对齐 CollegeStats 口径）
-func (s *Stats) Overview(db *gorm.DB, viewer *model.User, semester string) (map[string]interface{}, error) {
-	if semester == "" {
-		semester, _ = currentSemesterOf(db)
+// 未传 start/end 时取当前学期（semester 为空则按配置/日期推断）；tasks/evaluations 按学期 class_time 范围统计（对齐 CollegeStats 口径）
+func (s *Stats) Overview(db *gorm.DB, viewer *model.User, semester string, start, end *time.Time) (map[string]interface{}, error) {
+	if start == nil && end == nil {
+		if semester == "" {
+			semester, _ = currentSemesterOf(db)
+		}
+		start, end = semesterRangeOf(db, semester)
 	}
-	start, end := semesterRangeOf(db, semester)
 
 	// 数据范围
 	scope := AccessibleCollegeIDs(viewer)
@@ -911,12 +914,12 @@ func (s *Stats) SupervisorStats(db *gorm.DB, viewer *model.User, f PersonStatsFi
 		sp := &supervisors[i]
 		recq := db.Model(&model.EvaluationRecord{}).
 			Joins("JOIN evaluation_task t ON t.id = evaluation_record.task_id").
-			Where("evaluator_id = ? AND evaluation_record.submit_time IS NOT NULL AND evaluation_record.is_deleted = 0", sp.ID)
+			Where("evaluator_id = ? AND evaluation_record.is_deleted = 0", sp.ID)
 		if f.Start != nil {
-			recq = recq.Where("evaluation_record.submit_time >= ?", *f.Start)
+			recq = recq.Where("t.class_time >= ?", *f.Start)
 		}
 		if f.End != nil {
-			recq = recq.Where("evaluation_record.submit_time < ?", *f.End)
+			recq = recq.Where("t.class_time < ?", *f.End)
 		}
 		var recs []model.EvaluationRecord
 		recq.Find(&recs)
@@ -963,7 +966,7 @@ func (s *Stats) EvaluatorStats(db *gorm.DB, viewer *model.User, f PersonStatsFil
 	// 有提交记录的评教人 ID（按范围过滤）
 	idq := db.Table("evaluation_record AS r").
 		Joins("JOIN evaluation_task t ON t.id = r.task_id").
-		Where("r.submit_time IS NOT NULL AND r.is_deleted = 0")
+		Where("r.is_deleted = 0")
 	if scope != nil {
 		if len(scope) == 0 {
 			return []map[string]interface{}{}, 0, nil
@@ -971,10 +974,10 @@ func (s *Stats) EvaluatorStats(db *gorm.DB, viewer *model.User, f PersonStatsFil
 		idq = idq.Where("t.teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)", scope)
 	}
 	if f.Start != nil {
-		idq = idq.Where("r.submit_time >= ?", *f.Start)
+		idq = idq.Where("t.class_time >= ?", *f.Start)
 	}
 	if f.End != nil {
-		idq = idq.Where("r.submit_time < ?", *f.End)
+		idq = idq.Where("t.class_time < ?", *f.End)
 	}
 	if len(evaluatorRoles) > 0 {
 		idq = idq.Where("r.evaluator_role IN ?", evaluatorRoles)
@@ -1004,15 +1007,15 @@ func (s *Stats) EvaluatorStats(db *gorm.DB, viewer *model.User, f PersonStatsFil
 		ev := &evaluators[i]
 		recq := db.Model(&model.EvaluationRecord{}).
 			Joins("JOIN evaluation_task t ON t.id = evaluation_record.task_id").
-			Where("evaluator_id = ? AND evaluation_record.submit_time IS NOT NULL AND evaluation_record.is_deleted = 0", ev.ID)
+			Where("evaluator_id = ? AND evaluation_record.is_deleted = 0", ev.ID)
 		if scope != nil {
 			recq = recq.Where("t.teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)", scope)
 		}
 		if f.Start != nil {
-			recq = recq.Where("evaluation_record.submit_time >= ?", *f.Start)
+			recq = recq.Where("t.class_time >= ?", *f.Start)
 		}
 		if f.End != nil {
-			recq = recq.Where("evaluation_record.submit_time < ?", *f.End)
+			recq = recq.Where("t.class_time < ?", *f.End)
 		}
 		if len(evaluatorRoles) > 0 {
 			recq = recq.Where("evaluation_record.evaluator_role IN ?", evaluatorRoles)
@@ -1184,7 +1187,7 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 	q := db.Table("evaluation_record AS r").
 		Joins("JOIN evaluation_task t ON t.id = r.task_id").
 		Joins("JOIN `user` u ON u.id = t.teacher_id").
-		Where("r.submit_time IS NOT NULL AND r.is_deleted = 0")
+		Where("r.is_deleted = 0")
 	if isPureTeacher {
 		q = q.Where("(t.teacher_id = ? OR r.evaluator_id = ?)", viewer.ID, viewer.ID)
 	} else if CanViewOthersEvaluation(db, viewer) {
@@ -1216,10 +1219,10 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 		q = q.Where("r.evaluator_role IN ?", f.EvaluatorRoles)
 	}
 	if f.Start != nil {
-		q = q.Where("r.submit_time >= ?", *f.Start)
+		q = q.Where("t.class_time >= ?", *f.Start)
 	}
 	if f.End != nil {
-		q = q.Where("r.submit_time < ?", *f.End)
+		q = q.Where("t.class_time < ?", *f.End)
 	}
 
 	var total int64
@@ -1229,7 +1232,7 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 	var recs []model.EvaluationRecord
 	if err := q.Session(&gorm.Session{}).
 		Select("r.*").
-		Order("r.submit_time DESC").
+		Order("t.class_time DESC").
 		Offset((f.Page - 1) * f.PageSize).Limit(f.PageSize).
 		Scan(&recs).Error; err != nil {
 		return nil, 0, err
@@ -1466,10 +1469,10 @@ func (s *Stats) TeacherEvaluationSummary(db *gorm.DB, viewer *model.User, f Summ
 
 	applyTime := func(q *gorm.DB) *gorm.DB {
 		if f.Start != nil {
-			q = q.Where("submit_time >= ?", *f.Start)
+			q = q.Where("t.class_time >= ?", *f.Start)
 		}
 		if f.End != nil {
-			q = q.Where("submit_time < ?", *f.End)
+			q = q.Where("t.class_time < ?", *f.End)
 		}
 		return q
 	}
@@ -1477,12 +1480,15 @@ func (s *Stats) TeacherEvaluationSummary(db *gorm.DB, viewer *model.User, f Summ
 	// 批量取评出的记录
 	givenBy := map[int][]model.EvaluationRecord{}
 	if len(userIDs) > 0 {
-		gq := applyTime(db.Where("evaluator_id IN ? AND submit_time IS NOT NULL AND is_deleted = 0", userIDs))
+		gq := db.Table("evaluation_record AS r").
+			Joins("JOIN evaluation_task t ON t.id = r.task_id").
+			Where("r.evaluator_id IN ? AND r.is_deleted = 0", userIDs)
+		gq = applyTime(gq)
 		if len(f.EvaluatorRoles) > 0 {
-			gq = gq.Where("evaluator_role IN ?", f.EvaluatorRoles)
+			gq = gq.Where("r.evaluator_role IN ?", f.EvaluatorRoles)
 		}
 		var given []model.EvaluationRecord
-		gq.Find(&given)
+		gq.Select("r.*").Scan(&given)
 		for _, r := range given {
 			if r.EvaluatorID != nil {
 				givenBy[*r.EvaluatorID] = append(givenBy[*r.EvaluatorID], r)
@@ -1503,12 +1509,15 @@ func (s *Stats) TeacherEvaluationSummary(db *gorm.DB, viewer *model.User, f Summ
 	}
 	receivedBy := map[int][]model.EvaluationRecord{}
 	if len(allTaskIDs) > 0 {
-		rq := applyTime(db.Where("task_id IN ? AND submit_time IS NOT NULL AND is_deleted = 0", allTaskIDs))
+		rq := db.Table("evaluation_record AS r").
+			Joins("JOIN evaluation_task t ON t.id = r.task_id").
+			Where("r.task_id IN ? AND r.is_deleted = 0", allTaskIDs)
+		rq = applyTime(rq)
 		if len(f.EvaluatorRoles) > 0 {
-			rq = rq.Where("evaluator_role IN ?", f.EvaluatorRoles)
+			rq = rq.Where("r.evaluator_role IN ?", f.EvaluatorRoles)
 		}
 		var recs []model.EvaluationRecord
-		rq.Find(&recs)
+		rq.Select("r.*").Scan(&recs)
 		taskTeacher := map[int]int{}
 		for _, t := range tasksBy {
 			for _, tt := range t {

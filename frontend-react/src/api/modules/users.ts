@@ -9,6 +9,8 @@ export interface UserListParams {
   college_id?: string | number
   research_room_id?: number
   status?: number
+  order_by?: string
+  order?: 'asc' | 'desc'
 }
 
 export interface UserPayload {

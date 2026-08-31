@@ -60,6 +60,11 @@ type SyncOptions struct {
 }
 
 // SyncCourses 同步课程表（指定教师 > 指定院系 > 按院系分批全量）
+//
+// 说明：走 queryzkb_teacher.jsp / goQueryZKbByTeacher 按院系整页抓取，用「教师姓名(+院系)」匹配系统用户。
+// 与 SyncByTeacherNos（llsykb_kb.jsp 逐人按工号查询）最终都调用 SaveSchedules 写入同一张课表。
+// 缺陷：无法覆盖无课教师、存在同名匹配歧义（unmatched_teachers）、没有逐人进度。
+// 建议：以 SyncByTeacherNos 作为课表同步主入口，本函数仅保留用于兼容旧端/整页抓取。
 func (b *BaseSync) SyncCourses(db *gorm.DB, opt SyncOptions) (map[string]interface{}, error) {
 	semester := opt.Semester
 	if semester == "" {
@@ -141,10 +146,10 @@ func (b *BaseSync) SyncCourses(db *gorm.DB, opt SyncOptions) (map[string]interfa
 		if len(schedules) > 0 {
 			saveStats, err := SaveSchedules(db, schedules, semester, crawlTime, college.ID)
 			if err == nil {
-				totals["new_teachers"] += int(saveStats["new_teachers"].(float64))
-				totals["updated_teachers"] += int(saveStats["updated_teachers"].(float64))
-				totals["unchanged_teachers"] += int(saveStats["unchanged_teachers"].(float64))
-				totals["unmatched_teachers"] += int(saveStats["unmatched_teachers"].(float64))
+				totals["new_teachers"] += saveStats["new_teachers"].(int)
+				totals["updated_teachers"] += saveStats["updated_teachers"].(int)
+				totals["unchanged_teachers"] += saveStats["unchanged_teachers"].(int)
+				totals["unmatched_teachers"] += saveStats["unmatched_teachers"].(int)
 			}
 		}
 		totals["total_teachers"] += stats.TotalTeachers
