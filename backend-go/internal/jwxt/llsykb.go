@@ -36,6 +36,16 @@ var sectionMap = map[string]string{
 	"第二大节": "0304",
 	"第三大节": "0506",
 	"第四大节": "0708",
+	"第五大节": "0910",
+	"第六大节": "1112",
+}
+
+// bigSectionRe 兜底：行标签带额外文字（如"第五大节(晚)"）时按「第X大节」推断
+var bigSectionRe = regexp.MustCompile(`第([一二三四五六])大节`)
+
+var numeralSlot = map[string]string{
+	"一": "0102", "二": "0304", "三": "0506",
+	"四": "0708", "五": "0910", "六": "1112",
 }
 
 // QueryLlsykb 查询教师个人课表（llsykb_kb.jsp）
@@ -47,19 +57,19 @@ func (b *BaseSync) QueryLlsykb(semester, teacherID string) (string, error) {
 	}
 
 	form := url.Values{
-		"type":         {"jg0101"},
-		"isview":       {"1"},
-		"zc":           {""},
-		"yxx":          {""},
-		"teacherID":    {teacherID},
-		"teacherIDmc":  {""},
-		"jg0101id":     {teacherID},
-		"jg0101mc":     {""},
-		"jszc":         {""},
-		"sfFD":         {"1"},
-		"sfBZ":         {"1"},
-		"xsfl":         {"1"},
-		"xnxq01id":     {semester},
+		"type":        {"jg0101"},
+		"isview":      {"1"},
+		"zc":          {""},
+		"yxx":         {""},
+		"teacherID":   {teacherID},
+		"teacherIDmc": {""},
+		"jg0101id":    {teacherID},
+		"jg0101mc":    {""},
+		"jszc":        {""},
+		"sfFD":        {"1"},
+		"sfBZ":        {"1"},
+		"xsfl":        {"1"},
+		"xnxq01id":    {semester},
 	}
 	llsykbURL := b.Auth.BaseURLGL + "/jiaowu/pkgl/llsykb/llsykb_kb.jsp"
 	return b.Auth.PostFormText(llsykbURL, form, refererURL, 60*time.Second)
@@ -97,6 +107,12 @@ func ParseLlsykbHTML(content string) []LlsykbRecord {
 		sectionText := strings.ReplaceAll(textOf(cells[0]), "\u00a0", "")
 		sectionText = strings.TrimSpace(sectionText)
 		section, ok := sectionMap[sectionText]
+		if !ok {
+			if m := bigSectionRe.FindStringSubmatch(sectionText); m != nil {
+				section = numeralSlot[m[1]]
+				ok = true
+			}
+		}
 		if !ok {
 			continue
 		}
