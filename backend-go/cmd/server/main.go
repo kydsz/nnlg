@@ -46,7 +46,10 @@ func main() {
 				// 幂等兜底：消费前校验（防 Redis 幂等键异常导致重复落库）。
 				// 校验失败（如已被其它消费者落库/任务取消/权限变化）视为已处理，直接确认。
 				var viewer model.User
-				if err := d.First(&viewer, msg.UserID).Error; err != nil {
+				// 需预加载关联：角色判定（IsSupervisor/SupervisorRole）依赖 user_role，
+				// 学院范围校验（AccessibleCollegeIDs）依赖 user_college；漏加载会把
+				// 多角色督导（主角色 teacher）的评教误记为教师同行评教，督导已评标志不置位。
+				if err := d.Preload("UserRoles").Preload("UserColleges").First(&viewer, msg.UserID).Error; err != nil {
 					log.Printf("[consumer] 用户不存在 uid=%d, 确认消息", msg.UserID)
 					ackIDs = append(ackIDs, msg.MsgID)
 					continue
