@@ -28,6 +28,7 @@ type TaskFilters struct {
 	CreateBy          *int
 	CreateByNot       *int
 	Start, End        *time.Time // 按上课时间（class_time）筛选学期区间
+	OrderBy, OrderDir string     // 排序字段白名单（id/class_time）与方向（asc/desc）
 	Page, PageSize    int
 }
 
@@ -106,8 +107,16 @@ func (s *Task) List(db *gorm.DB, caller *model.User, f TaskFilters) ([]model.Eva
 		return nil, 0, err
 	}
 	var tasks []model.EvaluationTask
+	// 排序白名单：仅允许 id / class_time（class_time 为空的排最后），其余回落 id DESC
+	switch f.OrderBy {
+	case "id":
+		q = q.Order("id " + sortDir(f.OrderDir))
+	case "class_time":
+		q = q.Order("class_time IS NULL ASC, class_time " + sortDir(f.OrderDir) + ", id DESC")
+	default:
+		q = q.Order("id DESC")
+	}
 	err = q.Session(&gorm.Session{}).
-		Order("id DESC").
 		Offset((f.Page - 1) * f.PageSize).Limit(f.PageSize).
 		Find(&tasks).Error
 	return tasks, total, err

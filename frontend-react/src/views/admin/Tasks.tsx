@@ -41,10 +41,13 @@ export default function Tasks() {
     status?: number
     start_date?: string
     end_date?: string
+    order_by?: string
+    order?: 'asc' | 'desc'
   }>({
     page: 1,
     page_size: 20,
   })
+  const [sortState, setSortState] = useState<{ field?: string; order?: 'ascend' | 'descend' }>({})
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebounce(search, 300)
   const [modalOpen, setModalOpen] = useState(false)
@@ -98,7 +101,13 @@ export default function Tasks() {
   })
 
   const columns: ColumnsType<Task> = [
-    { title: 'ID', dataIndex: 'id', width: 70 },
+    {
+      title: 'ID',
+      dataIndex: 'id',
+      width: 70,
+      sorter: true,
+      sortOrder: sortState.field === 'id' ? sortState.order : null,
+    },
     { title: '课程', dataIndex: 'course_name' },
     { title: '教师', dataIndex: 'teacher_name', width: 110 },
     { title: '学院', dataIndex: 'teacher_college_name', width: 140, render: (v) => v || '-' },
@@ -108,6 +117,8 @@ export default function Tasks() {
       dataIndex: 'class_time',
       width: 160,
       render: (v: string) => formatDate(v),
+      sorter: true,
+      sortOrder: sortState.field === 'class_time' ? sortState.order : null,
     },
     {
       title: '状态',
@@ -227,6 +238,16 @@ export default function Tasks() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.list}
+        onChange={(_p, _f, sorter, extra) => {
+          // 仅排序触发时处理排序；换页由 pagination.onChange 单独处理，避免把页码重置回 1
+          if (extra?.action !== 'sort') return
+          const s = Array.isArray(sorter) ? sorter[0] : sorter
+          const field = (s?.field as string) || undefined
+          const order =
+            s?.order === 'ascend' ? 'asc' : s?.order === 'descend' ? 'desc' : undefined
+          setSortState(field && order ? { field, order: s!.order as 'ascend' | 'descend' } : {})
+          setParams((p) => ({ ...p, page: 1, order_by: field, order }))
+        }}
         pagination={{
           current: params.page,
           pageSize: params.page_size,

@@ -32,6 +32,7 @@ func (h *Task) List(c *gin.Context) {
 		Keyword: c.Query("keyword"), Status: qInt16(c, "status"), TeacherID: qInt(c, "teacher_id"),
 		HasSupervisorEval: qBool(c, "has_supervisor_eval"), CreateBy: qInt(c, "create_by"),
 		CreateByNot: qInt(c, "create_by_not"), Page: page, PageSize: pageSize,
+		OrderBy: c.Query("order_by"), OrderDir: c.Query("order"),
 	}
 	if v := c.Query("college_id"); v != "" {
 		f.CollegeIDs = splitIntsHandler(v)

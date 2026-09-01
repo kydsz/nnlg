@@ -12,6 +12,8 @@ export interface TaskListParams {
   create_by_not?: number
   start_date?: string
   end_date?: string
+  order_by?: string
+  order?: 'asc' | 'desc'
 }
 
 export interface TaskPayload {
