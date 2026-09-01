@@ -92,6 +92,8 @@ func (s *User) List(db *gorm.DB, p UserParams) ([]model.User, int64, error) {
 	case "college_name":
 		q = q.Joins("LEFT JOIN college c ON c.id = `user`.`college_id`").
 			Order("c.name IS NULL ASC, c.name " + sortDir(p.OrderDir) + ", `user`.`id` DESC")
+	case "last_login_time":
+		q = q.Order("last_login_time IS NULL ASC, last_login_time " + sortDir(p.OrderDir) + ", `user`.`id` DESC")
 	default:
 		q = q.Order("id DESC")
 	}

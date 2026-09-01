@@ -187,6 +187,8 @@ export default function Users() {
       title: '最后登录',
       dataIndex: 'last_login_time',
       width: 160,
+      sorter: true,
+      sortOrder: sortState.field === 'last_login_time' ? sortState.order : null,
       render: (v: string) => formatDate(v),
     },
     {
