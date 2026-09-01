@@ -112,7 +112,7 @@ export default function Evaluation() {
     const dimsArr = dims || []
     const rateDim = dimsArr.find((d) => d.code === 'attendance_rate' && d.field_type === 'number')
     if (!rateDim) return
-    const exp = values['expected_count']
+    const exp = values['expected_count'] ?? displaySchedule?.student_count
     const act = values['actual_count']
     if (typeof exp !== 'number' || typeof act !== 'number' || !Number.isFinite(exp) || !Number.isFinite(act) || exp <= 0 || act < 0) return
     const cfg = rateDim.field_config || {}
@@ -124,7 +124,7 @@ export default function Evaluation() {
       lastAutoRate.current = rate
       setValues((prev) => ({ ...prev, [rateDim.code]: rate }))
     }
-  }, [dims, values])
+  }, [dims, values, displaySchedule])
 
   const scoreDims = (dims || []).filter(
     (d) => d.field_type === 'score' && values[d.code] != null
