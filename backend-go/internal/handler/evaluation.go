@@ -142,6 +142,7 @@ func (h *Evaluation) List(c *gin.Context) {
 		Keyword: c.Query("keyword"), EvaluatorName: c.Query("evaluator_name"),
 		EvaluatorRole: c.Query("evaluator_role"), CollegeID: c.Query("college_id"),
 		TeacherName: c.Query("teacher_name"), Type: c.Query("type"),
+		OrderBy: c.Query("order_by"), OrderDir: c.Query("order"),
 		Page: page, PageSize: pageSize,
 	}
 	var err error

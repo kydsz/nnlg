@@ -317,6 +317,8 @@ type EvaluationFilters struct {
 	TeacherName    string
 	Type           string // received / sent / 空
 	Start, End     *time.Time
+	OrderBy        string // 排序字段（白名单：id / class_time / submit_time）
+	OrderDir       string // asc / desc
 	Page, PageSize int
 }
 
@@ -420,8 +422,17 @@ func (s *Evaluation) List(db *gorm.DB, viewer *model.User, f EvaluationFilters) 
 	}
 
 	var recs []model.EvaluationRecord
+	switch f.OrderBy {
+	case "id":
+		q = q.Order("r.id " + sortDir(f.OrderDir))
+	case "class_time":
+		q = q.Order("t.class_time IS NULL ASC, t.class_time " + sortDir(f.OrderDir) + ", r.id DESC")
+	case "submit_time":
+		q = q.Order("r.submit_time IS NULL ASC, r.submit_time " + sortDir(f.OrderDir) + ", r.id DESC")
+	default:
+		q = q.Order("t.class_time DESC, r.id DESC")
+	}
 	err = q.Session(&gorm.Session{}).Select("r.*").
-		Order("t.class_time DESC, r.id DESC").
 		Offset((f.Page - 1) * f.PageSize).Limit(f.PageSize).
 		Scan(&recs).Error
 	if err != nil {

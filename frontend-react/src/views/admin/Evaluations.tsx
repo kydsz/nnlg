@@ -30,8 +30,9 @@ export default function Evaluations() {
   const canDeleteOwn = useAuthStore((s) => s.hasPermission('evaluation:delete_own'))
   const canDeleteRecord = (r: EvaluationRecord) =>
     canDeleteAny || (canDeleteOwn && userId != null && r.evaluator_id === userId)
-  const [params, setParams] = useState<{ page: number; page_size: number; keyword?: string; teacher_id?: number }>({ page: 1, page_size: 20 })
+  const [params, setParams] = useState<{ page: number; page_size: number; keyword?: string; teacher_id?: number; order_by?: string; order?: 'asc' | 'desc' }>({ page: 1, page_size: 20 })
   const [keyword, setKeyword] = useState('')
+  const [sortState, setSortState] = useState<{ field?: string; order?: 'ascend' | 'descend' }>({})
   const [detailId, setDetailId] = useState<number | null>(null)
   const [editId, setEditId] = useState<number | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
@@ -82,7 +83,13 @@ export default function Evaluations() {
   })
 
   const columns: ColumnsType<EvaluationRecord> = [
-    { title: 'ID', dataIndex: 'id', width: 70 },
+    {
+      title: 'ID',
+      dataIndex: 'id',
+      width: 70,
+      sorter: true,
+      sortOrder: sortState.field === 'id' ? sortState.order : null,
+    },
     { title: '教师', dataIndex: 'teacher_name', width: 100 },
     { title: '课程', dataIndex: 'course_name' },
     {
@@ -90,6 +97,8 @@ export default function Evaluations() {
       dataIndex: 'class_time',
       width: 150,
       render: (v) => formatDate(v),
+      sorter: true,
+      sortOrder: sortState.field === 'class_time' ? sortState.order : null,
     },
     { title: '学院', dataIndex: 'college_name', width: 130, render: (v) => v || '-' },
     { title: '评教人', dataIndex: 'evaluator_name', width: 100 },
@@ -110,6 +119,8 @@ export default function Evaluations() {
       dataIndex: 'submit_time',
       width: 160,
       render: (v: string) => formatDate(v),
+      sorter: true,
+      sortOrder: sortState.field === 'submit_time' ? sortState.order : null,
     },
     {
       title: '操作',
@@ -175,6 +186,15 @@ export default function Evaluations() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.list}
+        onChange={(_p, _f, sorter, extra) => {
+          if (extra?.action !== 'sort') return
+          const s = Array.isArray(sorter) ? sorter[0] : sorter
+          const field = (s?.field as string) || undefined
+          const order =
+            s?.order === 'ascend' ? 'asc' : s?.order === 'descend' ? 'desc' : undefined
+          setSortState(field && order ? { field, order: s!.order as 'ascend' | 'descend' } : {})
+          setParams((p) => ({ ...p, page: 1, order_by: field, order }))
+        }}
         pagination={{
           current: params.page,
           pageSize: params.page_size,

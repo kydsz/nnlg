@@ -11,6 +11,8 @@ export interface EvaluationListParams {
   keyword?: string
   start_date?: string
   end_date?: string
+  order_by?: string
+  order?: 'asc' | 'desc'
 }
 
 export interface SubmitPayload {
