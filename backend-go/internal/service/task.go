@@ -47,7 +47,9 @@ func (s *Task) buildQuery(db *gorm.DB, f TaskFilters, caller *model.User) (*gorm
 	q := db.Model(&model.EvaluationTask{}).Where("is_deleted = 0")
 
 	if f.Keyword != "" {
-		q = q.Where("course_name LIKE ?", "%"+f.Keyword+"%")
+		// 同时匹配课程名与被评教师姓名（teacher_name 为建任务时冗余的快照字段）
+		kw := "%" + f.Keyword + "%"
+		q = q.Where("course_name LIKE ? OR teacher_name LIKE ?", kw, kw)
 	}
 	if f.Status != nil {
 		q = q.Where("status = ?", *f.Status)
