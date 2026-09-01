@@ -335,7 +335,11 @@ function DimensionInput({
               max={max}
               step={Number(cfg.step ?? 1)}
               value={typeof value === 'number' ? value : fallback}
-              onChange={(v) => onChange(Array.isArray(v) ? v[0] : v)}
+              onChange={(v) => {
+                // 浮点步进可能产生长小数（如 5.1000000000000005），统一保留一位
+                const n = Array.isArray(v) ? v[0] : v
+                onChange(Math.round(n * 10) / 10)
+              }}
             />
             <div style={{ textAlign: 'right', color: '#104186', fontSize: 13, marginTop: 4 }}>
               {typeof value === 'number' ? value : fallback} 分

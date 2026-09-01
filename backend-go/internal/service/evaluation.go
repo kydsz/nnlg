@@ -70,7 +70,9 @@ func totalScoreOfValues(raw json.RawMessage, scoreCodes map[string]bool) *float6
 			}
 		}
 	}
-	return &total
+	// 浮点累加可能产生误差（如 17.299999999999997），统一保留两位小数
+	t := round2(total)
+	return &t
 }
 
 // totalMaxScoreOfSchema 启用 score 维度的满分合计（列表/详情展示"满分"用）

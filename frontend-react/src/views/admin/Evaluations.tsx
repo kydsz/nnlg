@@ -531,7 +531,11 @@ function EditDimControl({
             max={max}
             step={toNum(cfg.step, 1)}
             value={cur}
-            onChange={(v) => onChange(v)}
+            onChange={(v) => {
+              // 浮点步进可能产生长小数（如 5.1000000000000005），统一保留一位
+              const n = Array.isArray(v) ? v[0] : v
+              onChange(Math.round(n * 10) / 10)
+            }}
           />
           <div style={{ textAlign: 'right', color: '#104186', fontSize: 13 }}>{cur} 分</div>
         </>
