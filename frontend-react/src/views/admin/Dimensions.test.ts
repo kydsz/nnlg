@@ -91,9 +91,10 @@ describe('configSummary', () => {
     ).toBe('选项：教学大纲、教学方法')
   })
 
-  it('评分类型展示分值与步长', () => {
-    expect(configSummary({ min_score: 0, max_score: 20, step: 1 })).toBe(
-      '分值：0 ~ 20；步长：1'
+  it('评分类型展示分值，默认步长 1 不展示', () => {
+    expect(configSummary({ min_score: 0, max_score: 20, step: 1 })).toBe('分值：0 ~ 20')
+    expect(configSummary({ min_score: 0, max_score: 20, step: 0.5 })).toBe(
+      '分值：0 ~ 20；步长：0.5'
     )
   })
 
