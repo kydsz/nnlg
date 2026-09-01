@@ -130,7 +130,7 @@ export default function Tasks() {
       },
     },
     { title: '评教数', dataIndex: 'evaluation_count', width: 80 },
-    { title: '创建人', dataIndex: 'create_by_name', width: 100 },
+    { title: '创建人', dataIndex: 'create_by_name', width: 100, render: (v: string) => v || '-' },
     {
       title: '操作',
       width: 200,
