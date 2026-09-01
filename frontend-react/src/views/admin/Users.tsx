@@ -253,6 +253,16 @@ export default function Users() {
           options={collegeOptions}
           onChange={(v) => setParams((p) => ({ ...p, page: 1, college_id: v }))}
         />
+        <Select
+          allowClear
+          placeholder="状态"
+          style={{ width: 120 }}
+          options={[
+            { label: '启用', value: 1 },
+            { label: '禁用', value: 0 },
+          ]}
+          onChange={(v) => setParams((p) => ({ ...p, page: 1, status: v }))}
+        />
         <Button
           type="primary"
           icon={<PlusOutlined />}
