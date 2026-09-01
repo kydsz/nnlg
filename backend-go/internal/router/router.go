@@ -36,6 +36,7 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	auth := api.Group("/auth")
 	{
 		auth.POST("/login", authH.Login)
+		auth.POST("/refresh", authH.Refresh)
 		auth.POST("/logout", authH.Logout)
 		auth.GET("/me", authMW, authH.Me)
 		auth.POST("/password", authMW, authH.ChangePassword)

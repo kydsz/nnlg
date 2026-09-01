@@ -27,6 +27,15 @@ func cacheKey(api string, c *gin.Context) string {
 	return cache.GetClient().KeyPrefix() + "stats:" + api + ":" + strconv.Itoa(uid) + ":" + hex.EncodeToString(h[:])
 }
 
+// invalidateUserAuth 主动失效用户快照（用户基础信息/角色/学院/教研室变更后调用）。
+func invalidateUserAuth(c *gin.Context, uid int) { cache.InvalidateUserAuth(c.Request.Context(), uid) }
+
+// invalidateUserSession 撤销用户全部会话（登出/禁用/改密/删除），并失效快照。
+func invalidateUserSession(c *gin.Context, uid int) { cache.IncrSessionEpoch(c.Request.Context(), uid) }
+
+// invalidateDimensionCache 主动失效启用维度缓存（维度增删改/排序后调用）。
+func invalidateDimensionCache(c *gin.Context) { cache.InvalidateDimensionCache(c.Request.Context()) }
+
 // cachedJSON 统一缓存包装：命中缓存直接返回并写响应；未命中调用 gen 生成 data 后回写缓存。
 // gen 返回的 data 会作为响应 Body.Data 输出。Redis 未启用时自动降级直查。
 func cachedJSON(c *gin.Context, api string, gen func() (interface{}, error)) {

@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
+	"backend-go/internal/cache"
 	"backend-go/internal/model"
 
 	"gorm.io/gorm"
@@ -122,11 +124,11 @@ func (s *Task) Get(db *gorm.DB, id int) (*model.EvaluationTask, error) {
 
 // LoadTeacherUser 加载被评教师（含学院）
 func LoadTeacherUser(db *gorm.DB, id int) (*model.User, error) {
-	var u model.User
-	if err := db.Preload("College").First(&u, id).Error; err != nil {
+	u, err := cache.LoadUser(context.Background(), db, id)
+	if err != nil {
 		return nil, errors.New("被评教师不存在")
 	}
-	return &u, nil
+	return u, nil
 }
 
 // checkTaskTargetScope 校验 caller 对目标教师所在学院的操作权

@@ -7,6 +7,8 @@ export const authApi = {
 
   logout: () => request<null>({ url: '/auth/logout', method: 'POST' }),
 
+  refresh: () => request<LoginResult>({ url: '/auth/refresh', method: 'POST' }),
+
   me: () => request<UserInfo>({ url: '/auth/me', method: 'GET' }),
 
   changePassword: (data: { old_password: string; new_password: string }) =>

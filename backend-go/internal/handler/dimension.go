@@ -46,6 +46,7 @@ func (h *Dimension) GroupCreate(c *gin.Context) {
 	}
 	h.log(c, "create", "dimension_group", &g.ID)
 	// 响应字段对齐旧端（无 code）
+	invalidateDimensionCache(c)
 	response.OKMsg(c, "创建成功", gin.H{
 		"id": g.ID, "name": g.Name, "sort_order": g.SortOrder, "status": g.Status,
 		"create_time": g.CreateTime,
@@ -63,6 +64,7 @@ func (h *Dimension) GroupSort(c *gin.Context) {
 		serverErr(c, "排序更新失败")
 		return
 	}
+	invalidateDimensionCache(c)
 	response.OKMsg(c, "排序更新成功", nil)
 }
 
@@ -81,6 +83,7 @@ func (h *Dimension) GroupUpdate(c *gin.Context) {
 	}
 	h.log(c, "update", "dimension_group", &g.ID)
 	// 响应字段对齐旧端（无 code，含 update_time）
+	invalidateDimensionCache(c)
 	response.OKMsg(c, "更新成功", gin.H{
 		"id": g.ID, "name": g.Name, "sort_order": g.SortOrder, "status": g.Status,
 		"update_time": g.UpdateTime,
@@ -95,6 +98,7 @@ func (h *Dimension) GroupDelete(c *gin.Context) {
 		return
 	}
 	h.log(c, "delete", "dimension_group", &id)
+	invalidateDimensionCache(c)
 	response.OKMsg(c, "删除成功", nil)
 }
 
@@ -135,6 +139,7 @@ func (h *Dimension) DimSort(c *gin.Context) {
 		serverErr(c, "排序更新失败")
 		return
 	}
+	invalidateDimensionCache(c)
 	response.OKMsg(c, "排序更新成功", nil)
 }
 
@@ -168,6 +173,7 @@ func (h *Dimension) DimCreate(c *gin.Context) {
 		return
 	}
 	h.log(c, "create", "evaluation_dimension", &d.ID)
+	invalidateDimensionCache(c)
 	response.OKMsg(c, "创建成功", service.DimItem(d))
 }
 
@@ -188,6 +194,7 @@ func (h *Dimension) DimUpdate(c *gin.Context) {
 	resp := service.DimItem(d)
 	delete(resp, "create_time")
 	resp["update_time"] = d.UpdateTime
+	invalidateDimensionCache(c)
 	response.OKMsg(c, "更新成功", resp)
 }
 
@@ -199,6 +206,7 @@ func (h *Dimension) DimDelete(c *gin.Context) {
 		return
 	}
 	h.log(c, "delete", "evaluation_dimension", &id)
+	invalidateDimensionCache(c)
 	response.OKMsg(c, "删除成功", nil)
 }
 

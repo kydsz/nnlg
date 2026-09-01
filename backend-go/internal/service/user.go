@@ -432,7 +432,7 @@ func (s *User) UpdateStatus(db *gorm.DB, caller *model.User, id, status int) (*m
 }
 
 // BatchStatus 批量启用/禁用（系统管理员账号一律跳过）
-func (s *User) BatchStatus(db *gorm.DB, caller *model.User, ids []int, status int) (success, failed int) {
+func (s *User) BatchStatus(db *gorm.DB, caller *model.User, ids []int, status int) (success, failed int, changed []int) {
 	for _, id := range ids {
 		u, err := s.GetByID(db, id)
 		if err != nil || id == caller.ID || s.isAdminUser(db, u) {
@@ -444,6 +444,7 @@ func (s *User) BatchStatus(db *gorm.DB, caller *model.User, ids []int, status in
 			continue
 		}
 		success++
+		changed = append(changed, id)
 	}
 	return
 }
@@ -637,9 +638,9 @@ func (s *User) UpdateSupervisorScope(db *gorm.DB, caller *model.User, userID int
 
 // ScopeResult 督导负责范围
 type ScopeResult struct {
-	CollegeIDs []int                      `json:"supervisor_college_ids"`
-	RoomIDs    []int                      `json:"supervisor_research_room_ids"`
-	Colleges   []model.UserCollegeInfo    `json:"colleges"`
+	CollegeIDs []int                        `json:"supervisor_college_ids"`
+	RoomIDs    []int                        `json:"supervisor_research_room_ids"`
+	Colleges   []model.UserCollegeInfo      `json:"colleges"`
 	Rooms      []model.UserResearchRoomInfo `json:"research_rooms"`
 }
 

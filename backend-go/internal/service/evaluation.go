@@ -75,10 +75,11 @@ func totalScoreOfValues(raw json.RawMessage, scoreCodes map[string]bool) *float6
 
 // totalMaxScoreOfSchema 启用 score 维度的满分合计（列表/详情展示"满分"用）
 func totalMaxScoreOfSchema(db *gorm.DB) float64 {
-	var dims []model.EvaluationDimension
-	db.Where("status = 1 AND field_type = ?", model.FieldScore).Find(&dims)
 	total := 0.0
-	for _, d := range dims {
+	for _, d := range loadActiveDimensions(db) {
+		if d.FieldType != model.FieldScore {
+			continue
+		}
 		if max, ok := fieldConfigNum(d.FieldConfig, "max_score"); ok {
 			total += max
 		}
@@ -236,7 +237,7 @@ func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
 		}
 		// 2) 按 task 聚合计数与状态
 		type agg struct {
-			count     int
+			count      int
 			supervisor bool
 			pending    bool // 原任务状态为待评，需置已评
 		}
@@ -276,10 +277,7 @@ func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
 // validateDimensionValues 校验维度值（必填/类型/分值范围），Submit 与 Update 共用
 // 返回 score 维度累计分值
 func validateDimensionValues(db *gorm.DB, values map[string]interface{}) (float64, error) {
-	var dims []model.EvaluationDimension
-	if err := db.Where("status = 1").Find(&dims).Error; err != nil {
-		return 0, err
-	}
+	dims := loadActiveDimensions(db)
 	total := 0.0
 	for _, d := range dims {
 		v, ok := values[d.Code]
@@ -471,7 +469,7 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 		item := map[string]interface{}{
 			"id": r.ID, "task_id": r.TaskID, "is_anonymous": r.IsAnonymous,
 			"evaluator_role": r.EvaluatorRole, "evaluator_role_name": model.RoleName(r.EvaluatorRole),
-			"total_score": totalScoreOfValues(r.DimensionValues, scoreCodes),
+			"total_score":     totalScoreOfValues(r.DimensionValues, scoreCodes),
 			"max_total_score": maxTotal, "submit_time": r.SubmitTime,
 		}
 		if ok {
@@ -530,19 +528,20 @@ func matchScheduleForTask(db *gorm.DB, task *model.EvaluationTask) map[string]in
 			"student_count": nil, "week_pattern": nil,
 		}
 	}
-	// 与前端一致：课程名互相包含优先，否则兜底第一条
+	// 与前端一致：仅课程名完全相等才匹配，匹配不上不兜底，返回空课表信息
 	var matched map[string]interface{}
 	for _, d := range details {
 		cn, _ := d["course_name"].(string)
-		if cn == task.CourseName ||
-			strings.Contains(task.CourseName, cn) ||
-			strings.Contains(cn, task.CourseName) {
+		if cn == task.CourseName {
 			matched = d
 			break
 		}
 	}
 	if matched == nil {
-		matched = details[0]
+		return map[string]interface{}{
+			"class_time_text": nil, "classroom": nil, "class_info": nil,
+			"student_count": nil, "week_pattern": nil,
+		}
 	}
 
 	weekDay, _ := matched["week_day"].(*int8)
@@ -798,11 +797,11 @@ func (s *Evaluation) Update(db *gorm.DB, viewer *model.User, id int, p UpdatePar
 
 // FileDimMap 文件类维度（image/file）编码 -> 维度
 func (s *Evaluation) FileDimMap(db *gorm.DB) map[string]model.EvaluationDimension {
-	var dims []model.EvaluationDimension
-	db.Where("status = 1 AND field_type IN ?", []string{model.FieldImage, model.FieldFile}).Find(&dims)
 	m := map[string]model.EvaluationDimension{}
-	for _, d := range dims {
-		m[d.Code] = d
+	for _, d := range loadActiveDimensions(db) {
+		if d.FieldType == model.FieldImage || d.FieldType == model.FieldFile {
+			m[d.Code] = d
+		}
 	}
 	return m
 }
@@ -995,7 +994,7 @@ func (s *Evaluation) ExportData(db *gorm.DB, viewer *model.User, id int) (map[st
 	return map[string]interface{}{
 		"id": rec.ID, "course_name": task.CourseName, "teacher_name": task.TeacherName,
 		"college_name": collegeName, "semester": nil,
-		"class_time": classTime,
+		"class_time":          classTime,
 		"evaluator_name":      evaluatorName,
 		"evaluator_role_name": model.RoleName(rec.EvaluatorRole),
 		"submit_time":         submitTime, "is_anonymous": rec.IsAnonymous,

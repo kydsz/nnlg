@@ -116,6 +116,10 @@ func (h *User) Update(c *gin.Context) {
 		return
 	}
 	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", &u.ID, "user", nil)
+	invalidateUserAuth(c, id)
+	if (p.Status != nil && *p.Status == 0) || (p.Password != nil && *p.Password != "") {
+		invalidateUserSession(c, id)
+	}
 	response.OKMsg(c, "更新成功", userDetailItem(u))
 }
 
@@ -132,6 +136,7 @@ func (h *User) Delete(c *gin.Context) {
 		return
 	}
 	service.LogRecord(h.db, &caller.ID, caller.Username, "delete", "user", &id, "user", nil)
+	invalidateUserSession(c, id)
 	response.OKMsg(c, "删除成功", nil)
 }
 
@@ -152,6 +157,7 @@ func (h *User) UpdateMyResearchRoom(c *gin.Context) {
 	}
 	service.LogRecord(h.db, &u.ID, u.Username, "update", "user", &u.ID, "user",
 		map[string]interface{}{"action": "update_my_research_room", "research_room_id": p.ResearchRoomID})
+	invalidateUserAuth(c, u.ID)
 	// 旧端 message："教研室设置成功"
 	response.OKMsg(c, "教研室设置成功", gin.H{
 		"research_room_id":   p.ResearchRoomID,
@@ -177,6 +183,10 @@ func (h *User) UpdateStatus(c *gin.Context) {
 	}
 	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", &id, "user",
 		map[string]interface{}{"action": "toggle_status", "status": status})
+	invalidateUserAuth(c, id)
+	if status == 0 {
+		invalidateUserSession(c, id)
+	}
 	response.OKMsg(c, "操作成功", userDetailItem(u))
 }
 
@@ -195,9 +205,15 @@ func (h *User) BatchStatus(c *gin.Context) {
 		return
 	}
 	caller := middleware.CurrentUser(c)
-	success, failed := h.svc.BatchStatus(h.db, caller, p.IDs, *p.Status)
+	success, failed, changed := h.svc.BatchStatus(h.db, caller, p.IDs, *p.Status)
 	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", nil, "user",
 		map[string]interface{}{"action": "batch_status", "ids": p.IDs, "status": *p.Status})
+	for _, uid := range changed {
+		invalidateUserAuth(c, uid)
+		if *p.Status == 0 {
+			invalidateUserSession(c, uid)
+		}
+	}
 	response.OK(c, gin.H{"success": success, "failed": failed, "total": len(p.IDs)})
 }
 
@@ -214,6 +230,7 @@ func (h *User) AddRole(c *gin.Context) {
 	}
 	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", &id, "user",
 		map[string]interface{}{"action": "add_role", "role": role})
+	invalidateUserAuth(c, id)
 	response.OKMsg(c, "添加成功", gin.H{"user_id": id, "role": role, "role_name": model.RoleName(role)})
 }
 
@@ -230,6 +247,7 @@ func (h *User) RemoveRole(c *gin.Context) {
 	}
 	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", &id, "user",
 		map[string]interface{}{"action": "remove_role", "role": role})
+	invalidateUserAuth(c, id)
 	response.OKMsg(c, "移除成功", nil)
 }
 
@@ -246,6 +264,7 @@ func (h *User) AddCollege(c *gin.Context) {
 	}
 	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", &id, "user",
 		map[string]interface{}{"action": "add_college", "college_id": cid})
+	invalidateUserAuth(c, id)
 	response.OKMsg(c, "添加成功", gin.H{"user_id": id, "college_id": cid})
 }
 
@@ -262,6 +281,7 @@ func (h *User) RemoveCollege(c *gin.Context) {
 	}
 	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", &id, "user",
 		map[string]interface{}{"action": "remove_college", "college_id": cid})
+	invalidateUserAuth(c, id)
 	response.OKMsg(c, "移除成功", nil)
 }
 
@@ -278,6 +298,7 @@ func (h *User) AddRoom(c *gin.Context) {
 	}
 	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", &id, "user",
 		map[string]interface{}{"action": "add_research_room", "research_room_id": rid})
+	invalidateUserAuth(c, id)
 	response.OKMsg(c, "添加成功", gin.H{"user_id": id, "research_room_id": rid})
 }
 
@@ -294,6 +315,7 @@ func (h *User) RemoveRoom(c *gin.Context) {
 	}
 	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", &id, "user",
 		map[string]interface{}{"action": "remove_research_room", "research_room_id": rid})
+	invalidateUserAuth(c, id)
 	response.OKMsg(c, "移除成功", nil)
 }
 
@@ -350,6 +372,7 @@ func (h *User) UpdateSupervisorScope(c *gin.Context) {
 		serverErr(c, "更新负责范围失败")
 		return
 	}
+	invalidateUserAuth(c, id)
 	response.OKMsg(c, "更新成功", userDetailItem(u))
 }
 
@@ -426,20 +449,20 @@ func userListItem(u *model.User) gin.H {
 // userDetailItem 组装用户详情项（字段与旧端 _build_user_detail_response 一致）
 func userDetailItem(u *model.User) gin.H {
 	return gin.H{
-		"id":                         u.ID,
-		"user_no":                    u.UserNo,
-		"username":                   u.Username,
-		"role":                       u.Role,
-		"role_name":                  model.RoleName(u.Role),
-		"roles":                      userRolesInfo(u),
-		"status":                     u.Status,
-		"college_id":                 u.CollegeID,
-		"research_room_id":           u.ResearchRoomID,
-		"supervisor_colleges":        userCollegeInfos(u),
-		"supervisor_research_rooms":  userRoomInfos(u),
-		"last_login_time":            u.LastLoginTime,
-		"create_time":                u.CreateTime,
-		"update_time":                u.UpdateTime,
+		"id":                        u.ID,
+		"user_no":                   u.UserNo,
+		"username":                  u.Username,
+		"role":                      u.Role,
+		"role_name":                 model.RoleName(u.Role),
+		"roles":                     userRolesInfo(u),
+		"status":                    u.Status,
+		"college_id":                u.CollegeID,
+		"research_room_id":          u.ResearchRoomID,
+		"supervisor_colleges":       userCollegeInfos(u),
+		"supervisor_research_rooms": userRoomInfos(u),
+		"last_login_time":           u.LastLoginTime,
+		"create_time":               u.CreateTime,
+		"update_time":               u.UpdateTime,
 	}
 }
 

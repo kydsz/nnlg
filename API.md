@@ -48,6 +48,7 @@
 | 方法     | 路径                                                | 权限                                                   |
 | ------ | ------------------------------------------------- | ---------------------------------------------------- |
 | POST   | /auth/login                                       | 公开                                                   |
+| POST   | /auth/refresh                                     | 公开                                                   |
 | POST   | /auth/logout                                      | -                                                    |
 | GET    | /auth/me                                          | -                                                    |
 | POST   | /auth/password                                    | -                                                    |
@@ -157,7 +158,7 @@ POST /auth/login
 | user\_no | string | 是  | 工号 |
 | password | string | 是  | 密码 |
 
-登录成功后将 JWT 写入 HttpOnly Cookie（`token`，path=`/api/v1`，SameSite=Lax，浏览器自动携带），响应体不含 access\_token：
+登录成功后写入两个 HttpOnly Cookie：`token`（access\_token，30 分钟）与 `refresh_token`（7 天，path=`/api/v1`，SameSite=Lax，生产环境 Secure），响应体同时返回 access\_token：
 
 **响应示例**:
 
@@ -166,6 +167,7 @@ POST /auth/login
   "code": 200,
   "message": "登录成功",
   "data": {
+    "access_token": "<jwt>",
     "token_type": "bearer",
     "user": {
       "id": 1,
@@ -189,13 +191,23 @@ POST /auth/login
 }
 ```
 
+### 刷新令牌
+
+```http
+POST /auth/refresh
+```
+
+读取 `refresh_token` Cookie，校验签名/类型/会话 epoch 后签发新的 access_token（并轮换 refresh_token）。
+响应体：`{ "access_token": "<jwt>", "token_type": "bearer", "user": {...} }`。
+`refresh_token` 已失效 / 会话已撤销（登出、禁用、改密）时返回 401。
+
 ### 退出登录
 
 ```http
 POST /auth/logout
 ```
 
-清除登录 Cookie 并返回成功。
+清除两个登录 Cookie，并撤销该用户全部会话（refresh_token 立即失效）。
 
 ### 获取当前用户信息
 
@@ -218,6 +230,8 @@ POST /auth/password
 | ------------- | ------ | -- | --- |
 | old\_password | string | 是  | 旧密码 |
 | new\_password | string | 是  | 新密码 |
+
+修改成功后该用户全部会话失效（access_token 与 refresh_token 均需重新登录）。
 
 **响应示例**:
 

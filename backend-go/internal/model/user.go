@@ -19,11 +19,14 @@ type User struct {
 	MustChangePassword bool       `gorm:"column:must_change_password" json:"must_change_password"`
 	LastLoginTime      *LocalTime `gorm:"column:last_login_time" json:"last_login_time"`
 
-	UserRoles       []UserRole       `gorm:"foreignKey:UserID" json:"-"`
-	UserColleges    []UserCollege    `gorm:"foreignKey:UserID" json:"-"`
-	UserRooms       []UserRoom       `gorm:"foreignKey:UserID" json:"-"`
-	College         *College         `gorm:"foreignKey:CollegeID" json:"-"`
-	ResearchRoom    *ResearchRoom    `gorm:"foreignKey:ResearchRoomID" json:"-"`
+	// Perms 已解析权限缓存（来自用户快照，避免每次鉴权回源查询角色表）；gorm:"-" 不落库
+	Perms []string `gorm:"-" json:"-"`
+
+	UserRoles    []UserRole    `gorm:"foreignKey:UserID" json:"-"`
+	UserColleges []UserCollege `gorm:"foreignKey:UserID" json:"-"`
+	UserRooms    []UserRoom    `gorm:"foreignKey:UserID" json:"-"`
+	College      *College      `gorm:"foreignKey:CollegeID" json:"-"`
+	ResearchRoom *ResearchRoom `gorm:"foreignKey:ResearchRoomID" json:"-"`
 }
 
 func (User) TableName() string { return "user" }
@@ -75,6 +78,9 @@ func (u *User) SupervisorRole() string {
 
 // Permissions 用户全部权限（角色表 permissions 字段的并集）
 func (u *User) Permissions(db *gorm.DB) []string {
+	if u.Perms != nil {
+		return u.Perms
+	}
 	codes := u.RoleCodes()
 	if len(codes) == 0 {
 		return nil

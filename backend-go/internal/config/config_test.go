@@ -11,7 +11,7 @@ func isolateEnv(t *testing.T) {
 	for _, k := range []string{
 		"APP_NAME", "APP_VERSION", "DEBUG", "PORT",
 		"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
-		"SECRET_KEY", "ACCESS_TOKEN_EXPIRE_MINUTES", "COOKIE_SECURE", "UPLOAD_DIR",
+		"SECRET_KEY", "ACCESS_TOKEN_EXPIRE_MINUTES", "REFRESH_TOKEN_EXPIRE_DAYS", "COOKIE_SECURE", "UPLOAD_DIR",
 		"CORS_ORIGINS",
 	} {
 		t.Setenv(k, "")
@@ -43,8 +43,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Port != "8000" {
 		t.Fatalf("默认端口应为 8000, 实际 %s", cfg.Port)
 	}
-	if cfg.TokenExpireMinutes != 1440 {
-		t.Fatalf("默认过期时间应为 1440, 实际 %d", cfg.TokenExpireMinutes)
+	if cfg.TokenExpireMinutes != 30 {
+		t.Fatalf("默认过期时间应为 30, 实际 %d", cfg.TokenExpireMinutes)
 	}
 	if cfg.Debug {
 		t.Fatal("默认 Debug 应为 false")

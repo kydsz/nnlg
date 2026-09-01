@@ -345,12 +345,11 @@ func teachersWithCourses(db *gorm.DB, teacherIDs []int, semester string) map[int
 
 // scoreDimCodeSet 启用的 score 维度编码集合
 func scoreDimCodeSet(db *gorm.DB) map[string]bool {
-	var codes []string
-	db.Model(&model.EvaluationDimension{}).Where("status = 1 AND field_type = ?", model.FieldScore).
-		Pluck("code", &codes)
 	m := map[string]bool{}
-	for _, c := range codes {
-		m[c] = true
+	for _, d := range loadActiveDimensions(db) {
+		if d.FieldType == model.FieldScore {
+			m[d.Code] = true
+		}
 	}
 	return m
 }
@@ -806,7 +805,7 @@ func (s *Stats) CampusStatsList(db *gorm.DB, viewer *model.User, start, end *tim
 			"teacher_count": len(courseIDs),
 			"total_tasks":   total, "evaluated_tasks": evaluated, "pending_tasks": pending,
 			"total_evaluations": evaluations, "coverage_rate": coverage,
-			"evaluation_rate":   evalRate,
+			"evaluation_rate": evalRate,
 		})
 	}
 	return list, int64(len(campuses)), nil

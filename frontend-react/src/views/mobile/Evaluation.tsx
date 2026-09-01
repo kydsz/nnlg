@@ -77,14 +77,7 @@ export default function Evaluation() {
   const matchedCourse: CourseItem | null = useMemo(() => {
     const details = schedule?.details || []
     if (!task || details.length === 0) return null
-    return (
-      details.find(
-        (d) =>
-          d.course_name === task.course_name ||
-          task.course_name.includes(d.course_name) ||
-          d.course_name.includes(task.course_name)
-      ) || details[0]
-    )
+    return details.find((d) => d.course_name === task.course_name) || null
   }, [schedule, task])
 
   // 展示用的课表信息：快照优先，兜底实时课表（历史/PC 端任务无快照）
@@ -100,17 +93,18 @@ export default function Evaluation() {
     }
   }, [snapshot, matchedCourse])
 
-  // 应到人数预填：课表匹配到 student_count 时，自动填入「应到人数」维度（未填写时）
+  // 应到人数预填：优先用「加入待评时固化的快照」（与顶部展示一致），无快照才回退实时课表匹配
+  const prefilledCount = snapshot?.student_count ?? matchedCourse?.student_count
   useEffect(() => {
-    if (!dims || dims.length === 0 || !matchedCourse?.student_count) return
+    if (!dims || dims.length === 0 || !prefilledCount) return
     setValues((prev) => {
       const dim = dims.find((d) => d.code === 'expected_count' && d.field_type === 'number')
       if (!dim) return prev
       const cur = prev[dim.code]
       if (cur !== undefined && cur !== null && cur !== '') return prev
-      return { ...prev, [dim.code]: matchedCourse.student_count }
+      return { ...prev, [dim.code]: prefilledCount }
     })
-  }, [dims, matchedCourse])
+  }, [dims, prefilledCount])
 
   // 出勤率自动计算：实到人数 ÷ 应到人数 × 100，保留一位小数（用户手动修改后不再覆盖）
   const lastAutoRate = useRef<number | null>(null)
