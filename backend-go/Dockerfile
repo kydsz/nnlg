@@ -16,12 +16,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -ldflags="-s -w" -o /app/serve
 # ---------- 运行阶段 ----------
 FROM alpine:3.20
 
-# 时区对齐旧端（python:slim 默认 UTC）：DB 时间按 UTC 原样读写
+# 时区设为东八区：time.Now() 取到的提交时间为北京时间，与前端展示一致
+# （DSN 为 loc=Local，DB 读写均按进程本地时间；历史上按 UTC 落库的旧记录需 +8h 迁移）
 # font-wqy-zenhei：PDF 导出中文字体（community 仓库，装到 /usr/share/fonts/wqy-zenhei/）
 RUN echo 'https://dl-cdn.alpinelinux.org/alpine/v3.20/community' >> /etc/apk/repositories \
     && apk add --no-cache tzdata ca-certificates font-wqy-zenhei \
-    && cp /usr/share/zoneinfo/UTC /etc/localtime \
-    && echo "UTC" > /etc/timezone
+    && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo "Asia/Shanghai" > /etc/timezone
+
+ENV TZ=Asia/Shanghai
 
 WORKDIR /app
 COPY --from=builder /app/server .
