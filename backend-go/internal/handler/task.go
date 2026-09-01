@@ -70,7 +70,8 @@ func (h *Task) List(c *gin.Context) {
 	}
 	if len(ids) > 0 {
 		var users []model.User
-		h.db.Select("id, username").Where("id IN ?", keysOf(ids)).Scan(&users)
+		// 注意：必须用 Find 而非 Scan——model.User 含指针字段，Scan + Select 组合会报 unsupported data type
+		h.db.Select("id, username").Where("id IN ?", keysOf(ids)).Find(&users)
 		for _, uu := range users {
 			creatorNames[uu.ID] = uu.Username
 		}
