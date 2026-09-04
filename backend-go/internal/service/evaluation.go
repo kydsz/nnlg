@@ -182,6 +182,11 @@ func (s *Evaluation) PersistSubmit(db *gorm.DB, task model.EvaluationTask, evalu
 		if err := tx.Create(&rec).Error; err != nil {
 			return err
 		}
+		// 提交成功即清掉同一任务同一评教人的草稿（需重填则重新暂存）
+		if err := tx.Where("task_id = ? AND evaluator_id = ?", task.ID, viewer.ID).
+			Delete(&model.EvaluationDraft{}).Error; err != nil {
+			return err
+		}
 		updates := map[string]interface{}{
 			"evaluation_count": gorm.Expr("evaluation_count + 1"),
 		}
@@ -236,6 +241,13 @@ func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
 		}
 		if err := tx.Create(&recs).Error; err != nil {
 			return err
+		}
+		// 提交成功即清掉同一任务同一评教人的草稿（需重填则重新暂存）；按 item 逐个删，量小
+		for _, it := range items {
+			if err := tx.Where("task_id = ? AND evaluator_id = ?", it.Task.ID, it.Viewer.ID).
+				Delete(&model.EvaluationDraft{}).Error; err != nil {
+				return err
+			}
 		}
 		// 2) 按 task 聚合计数与状态
 		type agg struct {

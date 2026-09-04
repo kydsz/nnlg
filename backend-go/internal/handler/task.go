@@ -60,6 +60,24 @@ func (h *Task) List(c *gin.Context) {
 	u := middleware.CurrentUser(c)
 	summaries, evaluated := h.evalSvc.SummariesForTasks(h.db, u, tasks)
 
+	// 收集本页任务下当前用户是否有草稿，便于列表展示"暂存中"标记
+	draftSet := map[int]bool{}
+	{
+		ids := make([]int, 0, len(tasks))
+		for _, t := range tasks {
+			ids = append(ids, t.ID)
+		}
+		if len(ids) > 0 {
+			var draftTaskIDs []int
+			h.db.Model(&model.EvaluationDraft{}).
+				Where("task_id IN ? AND evaluator_id = ?", ids, u.ID).
+				Pluck("task_id", &draftTaskIDs)
+			for _, tid := range draftTaskIDs {
+				draftSet[tid] = true
+			}
+		}
+	}
+
 	// 创建者姓名
 	creatorNames := map[int]string{}
 	ids := map[int]bool{}
@@ -100,6 +118,7 @@ func (h *Task) List(c *gin.Context) {
 			"create_by": t.CreateBy, "create_by_name": createByName,
 			"create_time":            FTime(t.CreateTime),
 			"current_user_evaluated": evaluated[t.ID],
+			"has_draft":              draftSet[t.ID],
 			"evaluation_records":     summary,
 		})
 	}

@@ -16,7 +16,7 @@ import {
   ImageViewer,
   SpinLoading,
 } from 'antd-mobile'
-import { evaluationApi, type SubmitPayload } from '@/api/modules/evaluations'
+import { evaluationApi, type SubmitPayload, type DraftPayload } from '@/api/modules/evaluations'
 import { taskApi } from '@/api/modules/tasks'
 import { dimensionApi } from '@/api/modules/dimensions'
 import { uploadApi } from '@/api/modules/upload'
@@ -41,6 +41,25 @@ export default function Evaluation() {
     queryFn: () => taskApi.get(taskId),
     enabled: !!taskId,
   })
+
+  // 我本人的暂存草稿
+  const { data: draftData } = useQuery({
+    queryKey: ['evaluation-draft', taskId],
+    queryFn: () => evaluationApi.getDraft(taskId),
+    enabled: !!taskId && !!task && !taskLoading,
+    retry: false,
+  })
+
+  // 恢复草稿：草稿值优先于默认初始化，用 ref 防重复提示
+  const draftRestored = useRef(false)
+  useEffect(() => {
+    const d = draftData?.draft
+    if (!d || draftRestored.current) return
+    draftRestored.current = true
+    setValues((prev) => ({ ...prev, ...(d.dimension_values || {}) }))
+    setIsAnonymous(d.is_anonymous)
+    Toast.show({ content: '已恢复上次暂存内容' })
+  }, [draftData])
 
   // 维度
   const { data: dims } = useQuery({
@@ -144,9 +163,20 @@ export default function Evaluation() {
       Toast.show({ content: '评教成功', icon: 'success' })
       qc.invalidateQueries({ queryKey: ['mobile-tasks'] })
       qc.invalidateQueries({ queryKey: ['evaluations'] })
+      qc.setQueryData(['evaluation-draft', taskId], { draft: null })
       navigate('/mobile/home', { replace: true })
     },
     onError: (e) => Toast.show({ content: e instanceof Error ? e.message : '提交评教失败', icon: 'fail' }),
+  })
+
+  const saveDraftMut = useMutation({
+    mutationFn: (payload: DraftPayload) => evaluationApi.saveDraft(payload),
+    onSuccess: () => {
+      Toast.clear()
+      Toast.show({ content: '暂存成功', icon: 'success' })
+      qc.invalidateQueries({ queryKey: ['mobile-tasks'] })
+    },
+    onError: (e) => Toast.show({ content: e instanceof Error ? e.message : '暂存失败', icon: 'fail' }),
   })
 
   const validate = (): string | null => {
@@ -180,6 +210,11 @@ export default function Evaluation() {
         })
       },
     })
+  }
+
+  // 暂存：不校验必填项，保存当前进度
+  const handleSaveDraft = () => {
+    saveDraftMut.mutate({ task_id: taskId, dimension_values: values, is_anonymous: isAnonymous })
   }
 
   if (taskLoading) {
@@ -268,17 +303,31 @@ export default function Evaluation() {
           </div>
         </Card>
 
-        <Button
-          block
-          color="primary"
-          size="large"
-          shape="rounded"
-          style={{ marginBottom: 24 }}
-          loading={submitMut.isPending}
-          onClick={handleSubmit}
-        >
-          提交评教
-        </Button>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
+            <Button
+              block
+              color="default"
+              fill="outline"
+              size="large"
+              shape="rounded"
+              style={{ flex: 1 }}
+              loading={saveDraftMut.isPending}
+              onClick={handleSaveDraft}
+            >
+              暂存
+            </Button>
+            <Button
+              block
+              color="primary"
+              size="large"
+              shape="rounded"
+              style={{ flex: 2 }}
+              loading={submitMut.isPending}
+              onClick={handleSubmit}
+            >
+              提交评教
+            </Button>
+          </div>
       </div>
 
       {/* 公式编辑器 */}

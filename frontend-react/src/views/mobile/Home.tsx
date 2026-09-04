@@ -237,6 +237,7 @@ export default function Home() {
                   <Tag color={t.has_supervisor_eval ? 'success' : 'default'} fill="outline">
                     {t.has_supervisor_eval ? '督导已评' : '督导未评'}
                   </Tag>
+                  {t.has_draft && <Tag color="danger" fill="outline">有草稿</Tag>}
                 </div>
                 <div style={{ color: '#999', fontSize: 12, marginTop: 8 }}>
                   {period && (

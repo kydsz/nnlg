@@ -167,6 +167,71 @@ func (h *Evaluation) List(c *gin.Context) {
 	response.OK(c, gin.H{"list": list, "total": total, "page": page, "page_size": pageSize})
 }
 
+// GetMyDraft 查询我的评教草稿（暂存进度恢复用）
+func (h *Evaluation) GetMyDraft(c *gin.Context) {
+	taskID := qInt(c, "task_id")
+	if taskID == nil {
+		badReq(c, "task_id 为必填")
+		return
+	}
+	u := middleware.CurrentUser(c)
+	draft, err := h.svc.GetMyDraft(h.db, u, *taskID)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	var draftOrNil interface{}
+	if draft != nil {
+		values := map[string]interface{}{}
+		if len(draft.DimensionValues) > 0 {
+			_ = json.Unmarshal(draft.DimensionValues, &values)
+		}
+		draftOrNil = gin.H{
+			"id": draft.ID, "task_id": draft.TaskID, "is_anonymous": draft.IsAnonymous,
+			"evaluator_id": draft.EvaluatorID, "evaluator_name": draft.EvaluatorName,
+			"update_time": FTime(draft.UpdateTime), "dimension_values": values,
+		}
+	}
+	response.OK(c, gin.H{"draft": draftOrNil})
+}
+
+// SaveMyDraft upsert 保存评教草稿
+func (h *Evaluation) SaveMyDraft(c *gin.Context) {
+	var p service.SaveDraftParams
+	if err := c.ShouldBindJSON(&p); err != nil {
+		badReq(c, "请求参数错误")
+		return
+	}
+	if p.TaskID == 0 {
+		badReq(c, "task_id 为必填")
+		return
+	}
+	u := middleware.CurrentUser(c)
+	draft, err := h.svc.SaveDraft(h.db, u, p)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	response.OKMsg(c, "暂存成功", gin.H{
+		"id": draft.ID, "task_id": draft.TaskID, "update_time": FTime(draft.UpdateTime),
+	})
+}
+
+// DeleteMyDraft 丢弃我的评教草稿
+func (h *Evaluation) DeleteMyDraft(c *gin.Context) {
+	taskID := qInt(c, "task_id")
+	if taskID == nil {
+		badReq(c, "task_id 为必填")
+		return
+	}
+	u := middleware.CurrentUser(c)
+	if err := h.svc.DeleteMyDraft(h.db, u, *taskID); err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	response.OKMsg(c, "已删除", nil)
+}
+
 // Detail 记录详情
 func (h *Evaluation) Detail(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
