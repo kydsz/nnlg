@@ -1356,6 +1356,10 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 		if v, ok := values["listening_content"]; ok && v != nil {
 			listenContent = fmt.Sprint(v)
 		}
+		opinion := ""
+		if v, ok := values["TEI"]; ok && v != nil {
+			opinion = fmt.Sprint(v)
+		}
 		list = append(list, map[string]interface{}{
 			"record_id": r.ID, "teacher_name": teacher.Username, "teacher_user_no": teacher.UserNo,
 			"course_name": task.CourseName, "class_time": classTime, "classroom": task.Classroom,
@@ -1369,6 +1373,7 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 			"evaluator_name":    evaluatorName,
 			"evaluator_role":    model.RoleName(r.EvaluatorRole),
 			"listening_content": listenContent, "attendance_rate": attendanceRate,
+			"TEI": opinion,
 			"total_score": totalScore, "max_total_score": maxTotal,
 			"submit_time": ftimePtr(r.SubmitTime),
 		})
