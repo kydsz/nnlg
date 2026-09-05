@@ -1180,6 +1180,14 @@ func studentCountFor(db *gorm.DB, teacherID int, courseName string) (int, bool) 
 	return ParseStudentCount(matched.ClassInfo)
 }
 
+// textValue 取文本维度作答（缺失或空返回空串）
+func textValue(values map[string]interface{}, code string) string {
+	if v, ok := values[code]; ok && v != nil {
+		return fmt.Sprint(v)
+	}
+	return ""
+}
+
 // EvaluationRecordsStats 评教记录合并统计（分页）
 func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f RecordStatsFilters) ([]map[string]interface{}, int64, error) {
 	// 未指定日期时，默认按当前学期汇总
@@ -1352,14 +1360,8 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 		if task.ClassTime != nil {
 			classTime = task.ClassTime.ToTime().Format("2006-01-02 15:04:05")
 		}
-		listenContent := ""
-		if v, ok := values["listening_content"]; ok && v != nil {
-			listenContent = fmt.Sprint(v)
-		}
-		opinion := ""
-		if v, ok := values["TEI"]; ok && v != nil {
-			opinion = fmt.Sprint(v)
-		}
+		listenContent := textValue(values, "listening_content")
+		opinion := textValue(values, "TEI")
 		list = append(list, map[string]interface{}{
 			"record_id": r.ID, "teacher_name": teacher.Username, "teacher_user_no": teacher.UserNo,
 			"course_name": task.CourseName, "class_time": classTime, "classroom": task.Classroom,

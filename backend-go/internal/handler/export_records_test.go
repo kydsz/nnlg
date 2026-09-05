@@ -81,8 +81,8 @@ func xlsxCell(row []string, idx int) string {
 }
 
 // TestExportEvaluationRecordsTEIColumn 评教记录导出应支持 TEI（意见与建议）列：
-// 表头用中文名、按 fields 顺序排在最末，取值为维度作答文本，未填写为空；
-// 长文本列宽度封顶 50 并自动换行，短文本列不受影响。
+// 表头用中文名、按 fields 给定顺序输出（默认勾选/全选路径下 TEI 为最末导出列），
+// 取值为维度作答文本，未填写为空；长文本列宽度封顶 50 并自动换行，短文本列不受影响。
 func TestExportEvaluationRecordsTEIColumn(t *testing.T) {
 	env, adminID := seedTEIExportEnv(t)
 
