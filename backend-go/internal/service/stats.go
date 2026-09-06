@@ -345,12 +345,11 @@ func teachersWithCourses(db *gorm.DB, teacherIDs []int, semester string) map[int
 
 // scoreDimCodeSet 启用的 score 维度编码集合
 func scoreDimCodeSet(db *gorm.DB) map[string]bool {
-	var codes []string
-	db.Model(&model.EvaluationDimension{}).Where("status = 1 AND field_type = ?", model.FieldScore).
-		Pluck("code", &codes)
 	m := map[string]bool{}
-	for _, c := range codes {
-		m[c] = true
+	for _, d := range loadActiveDimensions(db) {
+		if d.FieldType == model.FieldScore {
+			m[d.Code] = true
+		}
 	}
 	return m
 }
@@ -806,7 +805,7 @@ func (s *Stats) CampusStatsList(db *gorm.DB, viewer *model.User, start, end *tim
 			"teacher_count": len(courseIDs),
 			"total_tasks":   total, "evaluated_tasks": evaluated, "pending_tasks": pending,
 			"total_evaluations": evaluations, "coverage_rate": coverage,
-			"evaluation_rate":   evalRate,
+			"evaluation_rate": evalRate,
 		})
 	}
 	return list, int64(len(campuses)), nil
@@ -1181,6 +1180,14 @@ func studentCountFor(db *gorm.DB, teacherID int, courseName string) (int, bool) 
 	return ParseStudentCount(matched.ClassInfo)
 }
 
+// textValue 取文本维度作答（缺失或空返回空串）
+func textValue(values map[string]interface{}, code string) string {
+	if v, ok := values[code]; ok && v != nil {
+		return fmt.Sprint(v)
+	}
+	return ""
+}
+
 // EvaluationRecordsStats 评教记录合并统计（分页）
 func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f RecordStatsFilters) ([]map[string]interface{}, int64, error) {
 	// 未指定日期时，默认按当前学期汇总
@@ -1353,10 +1360,8 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 		if task.ClassTime != nil {
 			classTime = task.ClassTime.ToTime().Format("2006-01-02 15:04:05")
 		}
-		listenContent := ""
-		if v, ok := values["listening_content"]; ok && v != nil {
-			listenContent = fmt.Sprint(v)
-		}
+		listenContent := textValue(values, "listening_content")
+		opinion := textValue(values, "TEI")
 		list = append(list, map[string]interface{}{
 			"record_id": r.ID, "teacher_name": teacher.Username, "teacher_user_no": teacher.UserNo,
 			"course_name": task.CourseName, "class_time": classTime, "classroom": task.Classroom,
@@ -1370,6 +1375,7 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 			"evaluator_name":    evaluatorName,
 			"evaluator_role":    model.RoleName(r.EvaluatorRole),
 			"listening_content": listenContent, "attendance_rate": attendanceRate,
+			"TEI": opinion,
 			"total_score": totalScore, "max_total_score": maxTotal,
 			"submit_time": ftimePtr(r.SubmitTime),
 		})

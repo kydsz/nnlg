@@ -84,6 +84,15 @@ func cellValue(v interface{}) interface{} {
 	}
 }
 
+// xlsxColWidth 列宽决策：常规列自适应（显示宽度+4），超长文本列封顶 50 并标记自动换行
+func xlsxColWidth(maxDisplay float64) (width float64, wrap bool) {
+	w := maxDisplay + 4
+	if w > 50 {
+		return 50, true
+	}
+	return w, false
+}
+
 // generateExport 按格式分发导出（对齐旧端：xlsx 走 openpyxl 样式、pdf 走 reportlab 表格）
 func generateExport(c *gin.Context, format, filename, title string, cols []xlsxCol, rows []map[string]interface{}) {
 	if format == "pdf" {
@@ -147,16 +156,10 @@ func generateXLSX(c *gin.Context, filename, titleText string, cols []xlsxCol, ro
 		_ = f.SetCellStyle(sheet, cell, cell, headerStyle)
 	}
 	row++
-	for _, r := range rows {
-		for i, col := range cols {
-			cell, _ := excelize.CoordinatesToCellName(i+1, row)
-			_ = f.SetCellValue(sheet, cell, cellValue(r[col.Key]))
-			_ = f.SetCellStyle(sheet, cell, cell, dataStyle)
-		}
-		row++
-	}
 
-	// 自适应列宽：min(最大显示宽度 + 4, 50)
+	// 预计算列宽：常规列自适应（显示宽度+4），超长文本列封顶 50 并自动换行
+	widths := make([]float64, len(cols))
+	wraps := make([]bool, len(cols))
 	for i, col := range cols {
 		maxW := displayWidth(col.Label)
 		for _, r := range rows {
@@ -164,12 +167,31 @@ func generateXLSX(c *gin.Context, filename, titleText string, cols []xlsxCol, ro
 				maxW = w
 			}
 		}
-		w := float64(maxW + 4)
-		if w > 50 {
-			w = 50
+		widths[i], wraps[i] = xlsxColWidth(float64(maxW))
+	}
+	wrapStyle, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Family: "微软雅黑", Size: 10},
+		Alignment: &excelize.Alignment{Horizontal: "left", Vertical: "top", WrapText: true},
+		Border:    thinBorders,
+	})
+
+	for _, r := range rows {
+		for i, col := range cols {
+			cell, _ := excelize.CoordinatesToCellName(i+1, row)
+			_ = f.SetCellValue(sheet, cell, cellValue(r[col.Key]))
+			style := dataStyle
+			if wraps[i] {
+				style = wrapStyle
+			}
+			_ = f.SetCellStyle(sheet, cell, cell, style)
 		}
+		row++
+	}
+
+	// 自适应列宽
+	for i := range cols {
 		name, _ := excelize.ColumnNumberToName(i + 1)
-		_ = f.SetColWidth(sheet, name, name, w)
+		_ = f.SetColWidth(sheet, name, name, widths[i])
 	}
 
 	// 冻结表头行
@@ -655,6 +677,7 @@ func (h *Stats) ExportEvaluationRecords(c *gin.Context) {
 		"attendance_count": "出勤人数", "evaluator_name": "评教教师", "evaluator_role": "评教角色",
 		"listening_content": "听课内容", "attendance_rate": "出勤率(%)", "total_score": "总评分",
 		"max_total_score": "满分", "submit_time": "提交时间",
+		"TEI": "意见与建议",
 	}
 	cols := make([]xlsxCol, 0, len(fields))
 	for _, fd := range fields {

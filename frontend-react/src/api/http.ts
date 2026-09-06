@@ -1,5 +1,6 @@
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios'
-import type { ApiResponse } from './types'
+import type { ApiResponse, UserInfo } from './types'
+import { useAuthStore } from '@/stores/auth'
 
 export class ApiError extends Error {
   code: number
@@ -21,7 +22,27 @@ export function setUnauthorizedHandler(fn: UnauthorizedHandler) {
 const instance = axios.create({
   baseURL: '/api/v1',
   timeout: 60000,
+  withCredentials: true,
 })
+
+/** 刷新令牌并发去重：一次只发一个 /auth/refresh，后续 401 复用它 */
+let refreshPromise: Promise<void> | null = null
+
+async function refreshAccessToken(): Promise<void> {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      const resp = await instance.post<{ access_token: string; user: UserInfo }>('/auth/refresh')
+      const data = resp.data
+      if (!data?.access_token || !data?.user) {
+        throw new Error('refresh failed')
+      }
+      useAuthStore.getState().setAuth(data.access_token, data.user)
+    })().finally(() => {
+      refreshPromise = null
+    })
+  }
+  return refreshPromise
+}
 
 instance.interceptors.request.use((config) => {
   const token = localStorage.getItem('te-auth')
@@ -54,13 +75,27 @@ instance.interceptors.response.use(
     }
     return resp
   },
-  (error: AxiosError<ApiResponse>) => {
+  async (error: AxiosError<ApiResponse>) => {
     const status = error.response?.status
     const body = error.response?.data
-    // 登录接口的 401 表示账号或密码错误，不是会话过期，需要展示后端的具体错误信息
-    const isLoginRequest = error.config?.url === '/auth/login'
+    const config = error.config as (AxiosRequestConfig & { _retried?: boolean }) | undefined
+    const url = config?.url || ''
+    const isLoginRequest = url === '/auth/login'
+    const isRefreshRequest = url === '/auth/refresh'
+
+    // 非登录/非刷新接口遇 401：先静默刷新令牌，成功则重试原请求一次
+    if (status === 401 && !isLoginRequest && !isRefreshRequest && config && !config._retried) {
+      config._retried = true
+      try {
+        await refreshAccessToken()
+        return await instance.request(config)
+      } catch {
+        // 刷新失败：走统一登出
+      }
+    }
+
     if (status === 401) {
-      if (!isLoginRequest) onUnauthorized?.()
+      if (!isLoginRequest && !isRefreshRequest) onUnauthorized?.()
       const msg =
         body?.message ||
         (isLoginRequest ? '工号或密码错误' : '登录已过期，请重新登录')

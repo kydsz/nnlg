@@ -11,9 +11,27 @@ export interface EvaluationListParams {
   keyword?: string
   start_date?: string
   end_date?: string
+  order_by?: string
+  order?: 'asc' | 'desc'
 }
 
 export interface SubmitPayload {
+  task_id: number
+  dimension_values: Record<string, unknown>
+  is_anonymous?: boolean
+}
+
+export interface EvaluationDraft {
+  id: number
+  task_id: number
+  evaluator_id: number
+  evaluator_name: string
+  dimension_values: Record<string, unknown>
+  is_anonymous: boolean
+  update_time: string | null
+}
+
+export interface DraftPayload {
   task_id: number
   dimension_values: Record<string, unknown>
   is_anonymous?: boolean
@@ -62,4 +80,13 @@ export const evaluationApi = {
 
   update: (id: number, data: UpdatePayload) =>
     request<EvaluationRecord>({ url: `/evaluations/${id}`, method: 'PUT', data }),
+
+  getDraft: (taskId: number) =>
+    request<{ draft: EvaluationDraft | null }>({ url: '/evaluations/drafts/mine', method: 'GET', params: { task_id: taskId } }),
+
+  saveDraft: (data: DraftPayload) =>
+    request<EvaluationDraft>({ url: '/evaluations/drafts', method: 'POST', data }),
+
+  discardDraft: (taskId: number) =>
+    request<null>({ url: '/evaluations/drafts/mine', method: 'DELETE', params: { task_id: taskId } }),
 }

@@ -64,7 +64,7 @@ export function configSummary(v: unknown): string {
   if (opts.length > 0) parts.push(`选项：${opts.map((o) => o.label).join('、')}`)
   if (cfg.min_score != null || cfg.max_score != null)
     parts.push(`分值：${cfg.min_score ?? 0} ~ ${cfg.max_score ?? '-'}`)
-  if (cfg.step != null) parts.push(`步长：${cfg.step}`)
+  if (cfg.step != null && cfg.step !== 1) parts.push(`步长：${cfg.step}`)
   if (cfg.placeholder) parts.push(`提示：${cfg.placeholder}`)
   if (cfg.min_value != null || cfg.max_value != null)
     parts.push(`范围：${cfg.min_value ?? '-'} ~ ${cfg.max_value ?? '-'}`)
@@ -462,7 +462,7 @@ function FieldTypeConfigForm({ form }: { form: ReturnType<typeof Form.useForm>[0
           <InputNumber min={0} />
         </Form.Item>
         <Form.Item name={['field_config', 'step']} label="步长" initialValue={1}>
-          <InputNumber min={1} />
+          <InputNumber min={0.1} step={0.1} />
         </Form.Item>
       </Space>
     )

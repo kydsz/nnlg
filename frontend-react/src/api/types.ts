@@ -153,6 +153,8 @@ export interface Task {
   status_name?: string
   evaluation_count?: number
   has_supervisor_eval?: boolean
+  /** 当前登录用户是否对该任务有暂存草稿 */
+  has_draft?: boolean
   create_by?: number
   create_by_name?: string
   create_time?: string

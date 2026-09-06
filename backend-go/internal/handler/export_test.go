@@ -125,6 +125,22 @@ func TestColsByFields(t *testing.T) {
 	})
 }
 
+// TestXlsxColWidth 列宽计算：常规列自适应，超长文本列封顶 50 并标记换行。
+func TestXlsxColWidth(t *testing.T) {
+	t.Run("常规列自适应", func(t *testing.T) {
+		width, wrap := xlsxColWidth(6)
+		if width != 10 || wrap {
+			t.Fatalf("xlsxColWidth(6) = (%v, %v), 期望 (10, false)", width, wrap)
+		}
+	})
+	t.Run("超长列封顶并换行", func(t *testing.T) {
+		width, wrap := xlsxColWidth(120)
+		if width != 50 || !wrap {
+			t.Fatalf("xlsxColWidth(120) = (%v, %v), 期望 (50, true)", width, wrap)
+		}
+	})
+}
+
 func TestSplitRoles(t *testing.T) {
 	if got := splitRoles(""); got != nil {
 		t.Fatalf("空字符串应返回 nil, 得到 %v", got)

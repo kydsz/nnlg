@@ -187,6 +187,8 @@ export default function Users() {
       title: '最后登录',
       dataIndex: 'last_login_time',
       width: 160,
+      sorter: true,
+      sortOrder: sortState.field === 'last_login_time' ? sortState.order : null,
       render: (v: string) => formatDate(v),
     },
     {
@@ -250,6 +252,16 @@ export default function Users() {
           style={{ width: 180 }}
           options={collegeOptions}
           onChange={(v) => setParams((p) => ({ ...p, page: 1, college_id: v }))}
+        />
+        <Select
+          allowClear
+          placeholder="状态"
+          style={{ width: 120 }}
+          options={[
+            { label: '启用', value: 1 },
+            { label: '禁用', value: 0 },
+          ]}
+          onChange={(v) => setParams((p) => ({ ...p, page: 1, status: v }))}
         />
         <Button
           type="primary"

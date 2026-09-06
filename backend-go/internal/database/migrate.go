@@ -51,8 +51,8 @@ func Migrate(db *gorm.DB) error {
 				continue
 			}
 			if err := db.Exec(sql).Error; err != nil {
-				if isDuplicateColumn(err) {
-					continue // 幂等：列已存在则跳过
+				if isDuplicateError(err) {
+					continue // 幂等：列/键已存在则跳过
 				}
 				return fmt.Errorf("migration %s failed: %w", name, err)
 			}
@@ -61,11 +61,15 @@ func Migrate(db *gorm.DB) error {
 	return nil
 }
 
-// isDuplicateColumn 判断是否为"列已存在"（MySQL 1060）错误
-func isDuplicateColumn(err error) bool {
+// isDuplicateError 判断是否为"列/键已存在"类幂等错误（MySQL 1060 Duplicate column / 1061 Duplicate key）
+func isDuplicateError(err error) bool {
 	var me *mysql.MySQLError
-	if errors.As(err, &me) && me.Number == 1060 {
+	if errors.As(err, &me) && (me.Number == 1060 || me.Number == 1061) {
 		return true
 	}
-	return err != nil && strings.Contains(err.Error(), "Duplicate column name")
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Duplicate column name") || strings.Contains(msg, "Duplicate key name")
 }

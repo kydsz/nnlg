@@ -70,7 +70,7 @@ func TestAuthInvalidToken(t *testing.T) {
 
 func TestAuthExpiredToken(t *testing.T) {
 	r := newAuthRouter()
-	token, _ := jwtutil.Sign(testSecret, 1, -1)
+	token, _ := jwtutil.SignAccess(testSecret, 1, -1, 0)
 	w := do(t, r, &http.Cookie{Name: "token", Value: token})
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("过期 token 应 401, 实际 %d", w.Code)
@@ -108,7 +108,7 @@ func TestAuthNonBearerAuthorization(t *testing.T) {
 // 测试即失败，从而证明 cookie 优先级正确。）
 func TestAuthCookieTakesPrecedenceOverBearer(t *testing.T) {
 	r := newAuthRouter()
-	bearerToken, _ := jwtutil.Sign(testSecret, 1, 30)
+	bearerToken, _ := jwtutil.SignAccess(testSecret, 1, 30, 0)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)

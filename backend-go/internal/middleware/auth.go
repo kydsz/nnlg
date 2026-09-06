@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"backend-go/internal/cache"
 	"backend-go/internal/model"
 	"backend-go/pkg/jwtutil"
 	"backend-go/pkg/response"
@@ -24,7 +25,8 @@ func CurrentUser(c *gin.Context) *model.User {
 	return u
 }
 
-// Auth 认证中间件：token 优先取 cookie "token"，其次 Authorization: Bearer
+// Auth 认证中间件：token 优先取 cookie "token"，其次 Authorization: Bearer。
+// 访问用户快照缓存（未命中回源 DB），并校验 token_type=access、用户启用、会话 epoch。
 func Auth(secret string, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token, _ := c.Cookie("token")
@@ -34,31 +36,20 @@ func Auth(secret string, db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 		if token == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, response.Body{
-				Code: http.StatusUnauthorized, Message: "未提供认证凭证", Data: nil,
-			})
+			abortAuth(c, "未提供认证凭证")
 			return
 		}
 
-		uid, err := jwtutil.Parse(secret, token)
+		info, err := jwtutil.ParseAccess(secret, token)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, response.Body{
-				Code: http.StatusUnauthorized, Message: "无效的认证凭证", Data: nil,
-			})
+			abortAuth(c, "无效的认证凭证")
 			return
 		}
 
-		var user model.User
-		if err := db.
-			Preload("UserRoles").
-			Preload("UserColleges.College").
-			Preload("UserRooms.ResearchRoom.College").
-			Preload("College").
-			Preload("ResearchRoom").
-			First(&user, uid).Error; err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, response.Body{
-				Code: http.StatusUnauthorized, Message: "无效的认证凭证", Data: nil,
-			})
+		uid := int(info.UserID)
+		user, err := cache.LoadUser(c.Request.Context(), db, uid)
+		if err != nil {
+			abortAuth(c, "无效的认证凭证")
 			return
 		}
 
@@ -69,7 +60,21 @@ func Auth(secret string, db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		c.Set(ctxUserKey, &user)
+		// 会话撤销检查（Redis 启用时）：登出/禁用/改密会自增 epoch，旧 token 立即失效
+		if rdb := cache.GetClient(); rdb != nil && rdb.Enabled {
+			if epoch := rdb.GetSessionEpoch(c.Request.Context(), uid); epoch != info.Epoch {
+				abortAuth(c, "会话已失效，请重新登录")
+				return
+			}
+		}
+
+		c.Set(ctxUserKey, user)
 		c.Next()
 	}
+}
+
+func abortAuth(c *gin.Context, msg string) {
+	c.AbortWithStatusJSON(http.StatusUnauthorized, response.Body{
+		Code: http.StatusUnauthorized, Message: msg, Data: nil,
+	})
 }

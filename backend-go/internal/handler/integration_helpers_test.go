@@ -45,11 +45,13 @@ func newTestServer(t *testing.T) *testEnv {
 	}
 
 	cfg := &config.Config{
-		SecretKey:   itSecret,
-		AppName:     "test",
-		Version:     "test",
-		Debug:       false,
-		CORSOrigins: []string{"*"},
+		SecretKey:              itSecret,
+		AppName:                "test",
+		Version:                "test",
+		Debug:                  false,
+		TokenExpireMinutes:     30,
+		RefreshTokenExpireDays: 7,
+		CORSOrigins:            []string{"*"},
 	}
 	return &testEnv{r: router.Setup(cfg, db), db: db}
 }
@@ -91,7 +93,7 @@ func (e *testEnv) seedUserRole(t *testing.T, userID int, role string) {
 // tokenOf 签发指定用户 ID 的 JWT（含 Bearer 前缀）。
 func (e *testEnv) tokenOf(t *testing.T, userID int64) string {
 	t.Helper()
-	s, err := jwtutil.Sign(itSecret, userID, 60)
+	s, err := jwtutil.SignAccess(itSecret, userID, 60, 0)
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)
 	}

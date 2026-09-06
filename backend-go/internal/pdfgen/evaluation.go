@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -493,9 +494,34 @@ func fileNameFromURL(u string) string {
 	return name
 }
 
-var httpClient = &http.Client{Timeout: 10 * time.Second}
+// ---------- 图片加载（防目录穿越 / SSRF） ----------
 
-// loadImageHolder 加载图片：data: 内联 / http(s) 下载 / 相对路径映射 uploads 目录
+const maxImageDownload = 20 << 20 // 20MB
+
+// httpClient 用于下载评教详情中的远程图片。
+// 安全约束：禁止走系统代理（Proxy=nil）；DialContext 解析目标 IP 并拦截回环/私网等地址，防 SSRF；
+// 重定向目标同样经过 validateImageURL 校验，超 3 次即中止。
+var httpClient = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		Proxy:               func(*http.Request) (*url.URL, error) { return nil, nil },
+		DialContext:         safeDialContext,
+		ForceAttemptHTTP2:   false,
+		DisableKeepAlives:   true,
+		MaxIdleConns:        2,
+		IdleConnTimeout:     time.Second * 30,
+		TLSHandshakeTimeout: time.Second * 5,
+	},
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("重定向次数过多")
+		}
+		return validateImageURL(req.URL)
+	},
+}
+
+// loadImageHolder 加载图片：data: 内联 / http(s) 下载 / 相对路径映射 uploads 目录。
+// 相对路径会做规范化并校验最终路径必须位于 uploadDir 之内，防止 ../ 目录穿越。
 func loadImageHolder(u, uploadDir string) (gopdf.ImageHolder, error) {
 	if strings.HasPrefix(u, "data:image/") {
 		if i := strings.Index(u, ","); i > 0 {
@@ -506,17 +532,9 @@ func loadImageHolder(u, uploadDir string) (gopdf.ImageHolder, error) {
 		return nil, fmt.Errorf("无效的 data URL")
 	}
 	if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
-		resp, err := httpClient.Get(u)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		data, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
-		if err != nil {
-			return nil, err
-		}
-		return gopdf.ImageHolderByBytes(data)
+		return loadRemoteImage(u)
 	}
+
 	// /api/v1/files/xxx 或 /files/xxx → uploads/xxx
 	rel := strings.TrimPrefix(u, "/api/v1")
 	rel = strings.TrimPrefix(rel, "/files")
@@ -524,9 +542,44 @@ func loadImageHolder(u, uploadDir string) (gopdf.ImageHolder, error) {
 	if rel == "" {
 		return nil, fmt.Errorf("无效路径")
 	}
-	data, err := os.ReadFile(filepath.Join(uploadDir, filepath.FromSlash(rel)))
+	baseAbs, err := filepath.Abs(uploadDir)
 	if err != nil {
 		return nil, err
+	}
+	target, err := filepath.Abs(filepath.Join(baseAbs, filepath.FromSlash(rel)))
+	if err != nil || !strings.HasPrefix(target, baseAbs+string(filepath.Separator)) {
+		return nil, fmt.Errorf("非法的文件路径")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return nil, err
+	}
+	return gopdf.ImageHolderByBytes(data)
+}
+
+// loadRemoteImage 下载远程图片。仅允许公网 http(s)，并二次校验返回内容为图片。
+func loadRemoteImage(u string) (gopdf.ImageHolder, error) {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateImageURL(parsed); err != nil {
+		return nil, err
+	}
+	resp, err := httpClient.Get(u)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("下载失败: HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageDownload))
+	if err != nil {
+		return nil, err
+	}
+	if ct := http.DetectContentType(data); !strings.HasPrefix(ct, "image/") {
+		return nil, fmt.Errorf("非图片内容: %s", ct)
 	}
 	return gopdf.ImageHolderByBytes(data)
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"backend-go/internal/cache"
 	"backend-go/internal/config"
 	"backend-go/internal/middleware"
 	"backend-go/internal/model"
@@ -43,7 +44,7 @@ type loginReq struct {
 	Password string `json:"password" binding:"required"`
 }
 
-// Login 登录：返回 token 并写入 HttpOnly cookie
+// Login 登录：写 access + refresh 两个 HttpOnly cookie，返回 access_token 与用户信息。
 func (h *Auth) Login(c *gin.Context) {
 	var req loginReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -51,8 +52,19 @@ func (h *Auth) Login(c *gin.Context) {
 		return
 	}
 
+	ip := clientIP(c)
+	if !loginIPLimiter.allow(ip) {
+		response.Fail(c, http.StatusTooManyRequests, "登录过于频繁，请稍后再试")
+		return
+	}
+	if loginUserLimiter.blocked(req.UserNo) {
+		response.Fail(c, http.StatusTooManyRequests, "该账号登录失败次数过多，请稍后再试")
+		return
+	}
+
 	user, err := h.svc.Login(h.db, req.UserNo, req.Password)
 	if err != nil {
+		loginUserLimiter.recordFailure(req.UserNo)
 		if errors.Is(err, service.ErrUserDisabled) {
 			response.Fail(c, http.StatusForbidden, err.Error())
 		} else {
@@ -60,6 +72,7 @@ func (h *Auth) Login(c *gin.Context) {
 		}
 		return
 	}
+	loginUserLimiter.reset(req.UserNo)
 
 	now := time.Now()
 	// Py 端 SQLAlchemy onupdate 会同时刷新 update_time，这里对齐；
@@ -67,23 +80,89 @@ func (h *Auth) Login(c *gin.Context) {
 	_ = h.db.Model(&model.User{}).Where("id = ?", user.ID).Omit(clause.Associations).Updates(map[string]interface{}{"last_login_time": now, "update_time": now}).Error
 	user.LastLoginTime = model.LocalTimePtr(now)
 	user.UpdateTime = model.LocalTimePtr(now)
+	invalidateUserAuth(c, user.ID)
 
-	token, err := jwtutil.Sign(h.cfg.SecretKey, int64(user.ID), h.cfg.TokenExpireMinutes)
+	epoch := cache.GetClient().GetSessionEpoch(c.Request.Context(), user.ID)
+	accessToken, err := jwtutil.SignAccess(h.cfg.SecretKey, int64(user.ID), h.cfg.TokenExpireMinutes, epoch)
 	if err != nil {
 		response.Fail(c, http.StatusInternalServerError, "生成令牌失败")
 		return
 	}
+	refreshToken, err := jwtutil.SignRefresh(h.cfg.SecretKey, int64(user.ID), h.cfg.RefreshTokenExpireDays, jwtutil.NewJTI(), epoch)
+	if err != nil {
+		response.Fail(c, http.StatusInternalServerError, "生成刷新令牌失败")
+		return
+	}
 
-	h.setTokenCookie(c, token, h.cfg.TokenExpireMinutes*60)
+	h.setAccessCookie(c, accessToken, h.cfg.TokenExpireMinutes*60)
+	h.setRefreshCookie(c, refreshToken, h.cfg.RefreshTokenExpireDays*24*3600)
 	response.OKMsg(c, "登录成功", gin.H{
-		"token_type": "bearer",
-		"user":       userPayload(h.db, user),
+		"access_token": accessToken,
+		"token_type":   "bearer",
+		"user":         userPayload(h.db, user),
 	})
 }
 
-// Logout 登出：清除 cookie
+// Refresh 用 refresh_token cookie 换取新的 access_token（可选轮换 refresh_token）。
+func (h *Auth) Refresh(c *gin.Context) {
+	refreshToken, _ := c.Cookie("refresh_token")
+	if refreshToken == "" {
+		response.Fail(c, http.StatusUnauthorized, "缺少刷新令牌")
+		return
+	}
+	info, err := jwtutil.ParseRefresh(h.cfg.SecretKey, refreshToken)
+	if err != nil {
+		response.Fail(c, http.StatusUnauthorized, "刷新令牌无效")
+		return
+	}
+	uid := int(info.UserID)
+
+	// 会话撤销校验：登出/禁用/改密会自增会话 epoch，旧 refresh_token 立即失效
+	rdb := cache.GetClient()
+	if rdb != nil && rdb.Enabled {
+		if epoch := rdb.GetSessionEpoch(c.Request.Context(), uid); epoch != info.Epoch {
+			response.Fail(c, http.StatusUnauthorized, "刷新令牌已失效")
+			return
+		}
+	}
+
+	user, err := cache.LoadUser(c.Request.Context(), h.db, uid)
+	if err != nil {
+		response.Fail(c, http.StatusUnauthorized, "刷新令牌无效")
+		return
+	}
+	if user.Status != 1 {
+		response.Fail(c, http.StatusUnauthorized, "用户已被禁用")
+		return
+	}
+
+	accessToken, err := jwtutil.SignAccess(h.cfg.SecretKey, int64(user.ID), h.cfg.TokenExpireMinutes, info.Epoch)
+	if err != nil {
+		response.Fail(c, http.StatusInternalServerError, "生成令牌失败")
+		return
+	}
+	h.setAccessCookie(c, accessToken, h.cfg.TokenExpireMinutes*60)
+
+	// 轮换 refresh_token（同 epoch，新 jti）
+	newRefresh, err := jwtutil.SignRefresh(h.cfg.SecretKey, int64(user.ID), h.cfg.RefreshTokenExpireDays, jwtutil.NewJTI(), info.Epoch)
+	if err == nil {
+		h.setRefreshCookie(c, newRefresh, h.cfg.RefreshTokenExpireDays*24*3600)
+	}
+
+	response.OKMsg(c, "刷新成功", gin.H{
+		"access_token": accessToken,
+		"token_type":   "bearer",
+		"user":         userPayload(h.db, user),
+	})
+}
+
+// Logout 登出：清除 cookie，并撤销该用户全部会话（自增 epoch + 删快照）。
 func (h *Auth) Logout(c *gin.Context) {
-	h.setTokenCookie(c, "", -1)
+	if uid, ok := currentUID(c, h.cfg.SecretKey); ok {
+		cache.IncrSessionEpoch(c.Request.Context(), uid)
+	}
+	h.setAccessCookie(c, "", -1)
+	h.setRefreshCookie(c, "", -1)
 	response.OKMsg(c, "登出成功", nil)
 }
 
@@ -97,23 +176,45 @@ type changePasswordReq struct {
 	NewPassword string `json:"new_password" binding:"required"`
 }
 
-// ChangePassword 修改密码
+// ChangePassword 修改密码（成功后撤销该用户全部会话，需重新登录）。
 func (h *Auth) ChangePassword(c *gin.Context) {
 	var req changePasswordReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, http.StatusBadRequest, "请求参数错误")
 		return
 	}
-	if err := h.svc.ChangePassword(h.db, middleware.CurrentUser(c), req.OldPassword, req.NewPassword); err != nil {
+	u := middleware.CurrentUser(c)
+	if err := h.svc.ChangePassword(h.db, u, req.OldPassword, req.NewPassword); err != nil {
 		response.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	cache.IncrSessionEpoch(c.Request.Context(), u.ID)
 	response.OKMsg(c, "密码修改成功", nil)
 }
 
-func (h *Auth) setTokenCookie(c *gin.Context, token string, maxAge int) {
+func (h *Auth) setAccessCookie(c *gin.Context, token string, maxAge int) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie("token", token, maxAge, "/api/v1", "", h.cfg.CookieSecure, true)
+}
+
+func (h *Auth) setRefreshCookie(c *gin.Context, token string, maxAge int) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("refresh_token", token, maxAge, "/api/v1", "", h.cfg.CookieSecure, true)
+}
+
+// currentUID 从请求的 access/refresh token 中解析用户 ID（登出时无需认证中间件）。
+func currentUID(c *gin.Context, secret string) (int, bool) {
+	if t, _ := c.Cookie("token"); t != "" {
+		if info, err := jwtutil.ParseAccess(secret, t); err == nil {
+			return int(info.UserID), true
+		}
+	}
+	if t, _ := c.Cookie("refresh_token"); t != "" {
+		if info, err := jwtutil.ParseRefresh(secret, t); err == nil {
+			return int(info.UserID), true
+		}
+	}
+	return 0, false
 }
 
 // userPayload 组装登录/me 接口的用户数据，字段与旧后端一致

@@ -92,6 +92,8 @@ func (s *User) List(db *gorm.DB, p UserParams) ([]model.User, int64, error) {
 	case "college_name":
 		q = q.Joins("LEFT JOIN college c ON c.id = `user`.`college_id`").
 			Order("c.name IS NULL ASC, c.name " + sortDir(p.OrderDir) + ", `user`.`id` DESC")
+	case "last_login_time":
+		q = q.Order("last_login_time IS NULL ASC, last_login_time " + sortDir(p.OrderDir) + ", `user`.`id` DESC")
 	default:
 		q = q.Order("id DESC")
 	}
@@ -432,7 +434,7 @@ func (s *User) UpdateStatus(db *gorm.DB, caller *model.User, id, status int) (*m
 }
 
 // BatchStatus 批量启用/禁用（系统管理员账号一律跳过）
-func (s *User) BatchStatus(db *gorm.DB, caller *model.User, ids []int, status int) (success, failed int) {
+func (s *User) BatchStatus(db *gorm.DB, caller *model.User, ids []int, status int) (success, failed int, changed []int) {
 	for _, id := range ids {
 		u, err := s.GetByID(db, id)
 		if err != nil || id == caller.ID || s.isAdminUser(db, u) {
@@ -444,6 +446,7 @@ func (s *User) BatchStatus(db *gorm.DB, caller *model.User, ids []int, status in
 			continue
 		}
 		success++
+		changed = append(changed, id)
 	}
 	return
 }
@@ -637,9 +640,9 @@ func (s *User) UpdateSupervisorScope(db *gorm.DB, caller *model.User, userID int
 
 // ScopeResult 督导负责范围
 type ScopeResult struct {
-	CollegeIDs []int                      `json:"supervisor_college_ids"`
-	RoomIDs    []int                      `json:"supervisor_research_room_ids"`
-	Colleges   []model.UserCollegeInfo    `json:"colleges"`
+	CollegeIDs []int                        `json:"supervisor_college_ids"`
+	RoomIDs    []int                        `json:"supervisor_research_room_ids"`
+	Colleges   []model.UserCollegeInfo      `json:"colleges"`
 	Rooms      []model.UserResearchRoomInfo `json:"research_rooms"`
 }
 

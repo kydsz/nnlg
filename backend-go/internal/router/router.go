@@ -36,6 +36,7 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	auth := api.Group("/auth")
 	{
 		auth.POST("/login", authH.Login)
+		auth.POST("/refresh", authH.Refresh)
 		auth.POST("/logout", authH.Logout)
 		auth.GET("/me", authMW, authH.Me)
 		auth.POST("/password", authMW, authH.ChangePassword)
@@ -145,6 +146,9 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		evaluations.GET("", middleware.RequirePermission(db, "evaluation:view"), evalH.List)
 		evaluations.POST("", middleware.RequirePermission(db, "evaluation:create"), evalH.Submit)
 		evaluations.POST("/with-files", middleware.RequirePermission(db, "evaluation:create"), evalH.SubmitWithFiles)
+		evaluations.GET("/drafts/mine", middleware.RequirePermission(db, "evaluation:create"), evalH.GetMyDraft)
+		evaluations.POST("/drafts", middleware.RequirePermission(db, "evaluation:create"), evalH.SaveMyDraft)
+		evaluations.DELETE("/drafts/mine", middleware.RequirePermission(db, "evaluation:create"), evalH.DeleteMyDraft)
 		evaluations.GET("/:id", middleware.RequirePermission(db, "evaluation:view"), evalH.Detail)
 		evaluations.GET("/:id/export", middleware.RequirePermission(db, "evaluation:view"), evalH.Export)
 		evaluations.DELETE("/:id", authMW, evalH.Delete)
@@ -231,6 +235,14 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		stats.GET("/export/supervisors", statsH.ExportSupervisors)
 		stats.GET("/export/teacher-evaluation-summary", statsH.ExportTeacherSummary)
 		stats.POST("/evaluation-records/export", statsH.ExportEvaluationRecords)
+	}
+
+	// 异步队列管理（仅系统管理员）：查看评价队列健康 / 重放死信
+	queueH := handler.NewQueue(db)
+	queue := api.Group("/queue", authMW, middleware.RequirePermission(db, "role:manage"))
+	{
+		queue.GET("/status", queueH.Status)
+		queue.POST("/replay-dead", queueH.ReplayDead)
 	}
 
 	return r

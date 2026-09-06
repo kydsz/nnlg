@@ -16,7 +16,7 @@ import {
   ImageViewer,
   SpinLoading,
 } from 'antd-mobile'
-import { evaluationApi, type SubmitPayload } from '@/api/modules/evaluations'
+import { evaluationApi, type SubmitPayload, type DraftPayload } from '@/api/modules/evaluations'
 import { taskApi } from '@/api/modules/tasks'
 import { dimensionApi } from '@/api/modules/dimensions'
 import { uploadApi } from '@/api/modules/upload'
@@ -41,6 +41,25 @@ export default function Evaluation() {
     queryFn: () => taskApi.get(taskId),
     enabled: !!taskId,
   })
+
+  // 我本人的暂存草稿
+  const { data: draftData } = useQuery({
+    queryKey: ['evaluation-draft', taskId],
+    queryFn: () => evaluationApi.getDraft(taskId),
+    enabled: !!taskId && !!task && !taskLoading,
+    retry: false,
+  })
+
+  // 恢复草稿：草稿值优先于默认初始化，用 ref 防重复提示
+  const draftRestored = useRef(false)
+  useEffect(() => {
+    const d = draftData?.draft
+    if (!d || draftRestored.current) return
+    draftRestored.current = true
+    setValues((prev) => ({ ...prev, ...(d.dimension_values || {}) }))
+    setIsAnonymous(d.is_anonymous)
+    Toast.show({ content: '已恢复上次暂存内容' })
+  }, [draftData])
 
   // 维度
   const { data: dims } = useQuery({
@@ -77,14 +96,7 @@ export default function Evaluation() {
   const matchedCourse: CourseItem | null = useMemo(() => {
     const details = schedule?.details || []
     if (!task || details.length === 0) return null
-    return (
-      details.find(
-        (d) =>
-          d.course_name === task.course_name ||
-          task.course_name.includes(d.course_name) ||
-          d.course_name.includes(task.course_name)
-      ) || details[0]
-    )
+    return details.find((d) => d.course_name === task.course_name) || null
   }, [schedule, task])
 
   // 展示用的课表信息：快照优先，兜底实时课表（历史/PC 端任务无快照）
@@ -100,17 +112,18 @@ export default function Evaluation() {
     }
   }, [snapshot, matchedCourse])
 
-  // 应到人数预填：课表匹配到 student_count 时，自动填入「应到人数」维度（未填写时）
+  // 应到人数预填：优先用「加入待评时固化的快照」（与顶部展示一致），无快照才回退实时课表匹配
+  const prefilledCount = snapshot?.student_count ?? matchedCourse?.student_count
   useEffect(() => {
-    if (!dims || dims.length === 0 || !matchedCourse?.student_count) return
+    if (!dims || dims.length === 0 || !prefilledCount) return
     setValues((prev) => {
       const dim = dims.find((d) => d.code === 'expected_count' && d.field_type === 'number')
       if (!dim) return prev
       const cur = prev[dim.code]
       if (cur !== undefined && cur !== null && cur !== '') return prev
-      return { ...prev, [dim.code]: matchedCourse.student_count }
+      return { ...prev, [dim.code]: prefilledCount }
     })
-  }, [dims, matchedCourse])
+  }, [dims, prefilledCount])
 
   // 出勤率自动计算：实到人数 ÷ 应到人数 × 100，保留一位小数（用户手动修改后不再覆盖）
   const lastAutoRate = useRef<number | null>(null)
@@ -118,7 +131,7 @@ export default function Evaluation() {
     const dimsArr = dims || []
     const rateDim = dimsArr.find((d) => d.code === 'attendance_rate' && d.field_type === 'number')
     if (!rateDim) return
-    const exp = values['expected_count']
+    const exp = values['expected_count'] ?? displaySchedule?.student_count
     const act = values['actual_count']
     if (typeof exp !== 'number' || typeof act !== 'number' || !Number.isFinite(exp) || !Number.isFinite(act) || exp <= 0 || act < 0) return
     const cfg = rateDim.field_config || {}
@@ -130,7 +143,7 @@ export default function Evaluation() {
       lastAutoRate.current = rate
       setValues((prev) => ({ ...prev, [rateDim.code]: rate }))
     }
-  }, [dims, values])
+  }, [dims, values, displaySchedule])
 
   const scoreDims = (dims || []).filter(
     (d) => d.field_type === 'score' && values[d.code] != null
@@ -150,9 +163,20 @@ export default function Evaluation() {
       Toast.show({ content: '评教成功', icon: 'success' })
       qc.invalidateQueries({ queryKey: ['mobile-tasks'] })
       qc.invalidateQueries({ queryKey: ['evaluations'] })
+      qc.setQueryData(['evaluation-draft', taskId], { draft: null })
       navigate('/mobile/home', { replace: true })
     },
     onError: (e) => Toast.show({ content: e instanceof Error ? e.message : '提交评教失败', icon: 'fail' }),
+  })
+
+  const saveDraftMut = useMutation({
+    mutationFn: (payload: DraftPayload) => evaluationApi.saveDraft(payload),
+    onSuccess: () => {
+      Toast.clear()
+      Toast.show({ content: '暂存成功', icon: 'success' })
+      qc.invalidateQueries({ queryKey: ['mobile-tasks'] })
+    },
+    onError: (e) => Toast.show({ content: e instanceof Error ? e.message : '暂存失败', icon: 'fail' }),
   })
 
   const validate = (): string | null => {
@@ -186,6 +210,11 @@ export default function Evaluation() {
         })
       },
     })
+  }
+
+  // 暂存：不校验必填项，保存当前进度
+  const handleSaveDraft = () => {
+    saveDraftMut.mutate({ task_id: taskId, dimension_values: values, is_anonymous: isAnonymous })
   }
 
   if (taskLoading) {
@@ -274,17 +303,31 @@ export default function Evaluation() {
           </div>
         </Card>
 
-        <Button
-          block
-          color="primary"
-          size="large"
-          shape="rounded"
-          style={{ marginBottom: 24 }}
-          loading={submitMut.isPending}
-          onClick={handleSubmit}
-        >
-          提交评教
-        </Button>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
+            <Button
+              block
+              color="default"
+              fill="outline"
+              size="large"
+              shape="rounded"
+              style={{ flex: 1 }}
+              loading={saveDraftMut.isPending}
+              onClick={handleSaveDraft}
+            >
+              暂存
+            </Button>
+            <Button
+              block
+              color="primary"
+              size="large"
+              shape="rounded"
+              style={{ flex: 2 }}
+              loading={submitMut.isPending}
+              onClick={handleSubmit}
+            >
+              提交评教
+            </Button>
+          </div>
       </div>
 
       {/* 公式编辑器 */}
@@ -341,7 +384,11 @@ function DimensionInput({
               max={max}
               step={Number(cfg.step ?? 1)}
               value={typeof value === 'number' ? value : fallback}
-              onChange={(v) => onChange(Array.isArray(v) ? v[0] : v)}
+              onChange={(v) => {
+                // 浮点步进可能产生长小数（如 5.1000000000000005），统一保留一位
+                const n = Array.isArray(v) ? v[0] : v
+                onChange(Math.round(n * 10) / 10)
+              }}
             />
             <div style={{ textAlign: 'right', color: '#104186', fontSize: 13, marginTop: 4 }}>
               {typeof value === 'number' ? value : fallback} 分

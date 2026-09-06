@@ -32,6 +32,7 @@ func (h *Task) List(c *gin.Context) {
 		Keyword: c.Query("keyword"), Status: qInt16(c, "status"), TeacherID: qInt(c, "teacher_id"),
 		HasSupervisorEval: qBool(c, "has_supervisor_eval"), CreateBy: qInt(c, "create_by"),
 		CreateByNot: qInt(c, "create_by_not"), Page: page, PageSize: pageSize,
+		OrderBy: c.Query("order_by"), OrderDir: c.Query("order"),
 	}
 	if v := c.Query("college_id"); v != "" {
 		f.CollegeIDs = splitIntsHandler(v)
@@ -59,6 +60,24 @@ func (h *Task) List(c *gin.Context) {
 	u := middleware.CurrentUser(c)
 	summaries, evaluated := h.evalSvc.SummariesForTasks(h.db, u, tasks)
 
+	// 收集本页任务下当前用户是否有草稿，便于列表展示"暂存中"标记
+	draftSet := map[int]bool{}
+	{
+		ids := make([]int, 0, len(tasks))
+		for _, t := range tasks {
+			ids = append(ids, t.ID)
+		}
+		if len(ids) > 0 {
+			var draftTaskIDs []int
+			h.db.Model(&model.EvaluationDraft{}).
+				Where("task_id IN ? AND evaluator_id = ?", ids, u.ID).
+				Pluck("task_id", &draftTaskIDs)
+			for _, tid := range draftTaskIDs {
+				draftSet[tid] = true
+			}
+		}
+	}
+
 	// 创建者姓名
 	creatorNames := map[int]string{}
 	ids := map[int]bool{}
@@ -69,7 +88,8 @@ func (h *Task) List(c *gin.Context) {
 	}
 	if len(ids) > 0 {
 		var users []model.User
-		h.db.Select("id, username").Where("id IN ?", keysOf(ids)).Scan(&users)
+		// 注意：必须用 Find 而非 Scan——model.User 含指针字段，Scan + Select 组合会报 unsupported data type
+		h.db.Select("id, username").Where("id IN ?", keysOf(ids)).Find(&users)
 		for _, uu := range users {
 			creatorNames[uu.ID] = uu.Username
 		}
@@ -98,6 +118,7 @@ func (h *Task) List(c *gin.Context) {
 			"create_by": t.CreateBy, "create_by_name": createByName,
 			"create_time":            FTime(t.CreateTime),
 			"current_user_evaluated": evaluated[t.ID],
+			"has_draft":              draftSet[t.ID],
 			"evaluation_records":     summary,
 		})
 	}

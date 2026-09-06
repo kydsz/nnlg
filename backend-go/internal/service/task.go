@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
+	"backend-go/internal/cache"
 	"backend-go/internal/model"
 
 	"gorm.io/gorm"
@@ -26,6 +28,7 @@ type TaskFilters struct {
 	CreateBy          *int
 	CreateByNot       *int
 	Start, End        *time.Time // 按上课时间（class_time）筛选学期区间
+	OrderBy, OrderDir string     // 排序字段白名单（id/class_time）与方向（asc/desc）
 	Page, PageSize    int
 }
 
@@ -44,7 +47,9 @@ func (s *Task) buildQuery(db *gorm.DB, f TaskFilters, caller *model.User) (*gorm
 	q := db.Model(&model.EvaluationTask{}).Where("is_deleted = 0")
 
 	if f.Keyword != "" {
-		q = q.Where("course_name LIKE ?", "%"+f.Keyword+"%")
+		// 同时匹配课程名与被评教师姓名（teacher_name 为建任务时冗余的快照字段）
+		kw := "%" + f.Keyword + "%"
+		q = q.Where("course_name LIKE ? OR teacher_name LIKE ?", kw, kw)
 	}
 	if f.Status != nil {
 		q = q.Where("status = ?", *f.Status)
@@ -104,8 +109,16 @@ func (s *Task) List(db *gorm.DB, caller *model.User, f TaskFilters) ([]model.Eva
 		return nil, 0, err
 	}
 	var tasks []model.EvaluationTask
+	// 排序白名单：仅允许 id / class_time（class_time 为空的排最后），其余回落 id DESC
+	switch f.OrderBy {
+	case "id":
+		q = q.Order("id " + sortDir(f.OrderDir))
+	case "class_time":
+		q = q.Order("class_time IS NULL ASC, class_time " + sortDir(f.OrderDir) + ", id DESC")
+	default:
+		q = q.Order("id DESC")
+	}
 	err = q.Session(&gorm.Session{}).
-		Order("id DESC").
 		Offset((f.Page - 1) * f.PageSize).Limit(f.PageSize).
 		Find(&tasks).Error
 	return tasks, total, err
@@ -122,11 +135,11 @@ func (s *Task) Get(db *gorm.DB, id int) (*model.EvaluationTask, error) {
 
 // LoadTeacherUser 加载被评教师（含学院）
 func LoadTeacherUser(db *gorm.DB, id int) (*model.User, error) {
-	var u model.User
-	if err := db.Preload("College").First(&u, id).Error; err != nil {
+	u, err := cache.LoadUser(context.Background(), db, id)
+	if err != nil {
 		return nil, errors.New("被评教师不存在")
 	}
-	return &u, nil
+	return u, nil
 }
 
 // checkTaskTargetScope 校验 caller 对目标教师所在学院的操作权

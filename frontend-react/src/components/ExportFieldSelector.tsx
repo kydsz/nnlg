@@ -16,6 +16,7 @@ export const DEFAULT_EXPORT_FIELDS = [
   'is_anonymous',
   'listening_content',
   'attendance_rate',
+  'TEI',
 ]
 
 export const EXPORT_FIELD_LABELS: Record<string, string> = {
@@ -33,6 +34,7 @@ export const EXPORT_FIELD_LABELS: Record<string, string> = {
   is_anonymous: '是否匿名',
   listening_content: '听课内容',
   attendance_rate: '到课率',
+  TEI: '意见与建议',
   user_no: '工号',
   role_names: '角色',
   given_count: '评教次数',
