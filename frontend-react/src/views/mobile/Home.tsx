@@ -14,9 +14,8 @@ import {
 } from 'antd-mobile'
 import { DeleteOutline } from 'antd-mobile-icons'
 import { taskApi, type TaskListParams } from '@/api/modules/tasks'
-import { scheduleApi } from '@/api/modules/schedule'
 import { useAuthStore } from '@/stores/auth'
-import type { Task, SemesterConfig } from '@/api/types'
+import type { Task } from '@/api/types'
 import {
   defaultFiltersFor,
   showMyCreatedHint,
@@ -25,8 +24,9 @@ import {
   type StatusFilter,
   type CreatorFilter,
 } from './homeFilters'
-import { formatDate, formatClassPeriod, formatSemester, defaultSemesterStart } from '@/utils/format'
-import dayjs from 'dayjs'
+import { useSemesters } from './useSemesters'
+import { semesterRangeOf } from '@/utils/semester'
+import { formatDate, formatClassPeriod, formatSemester } from '@/utils/format'
 
 export default function Home() {
   const navigate = useNavigate()
@@ -39,19 +39,7 @@ export default function Home() {
   const [page, setPage] = useState(1)
 
   // 学期：默认取管理员配置的当前学期；下拉可切换到其它学期
-  const { data: semesterConfigs } = useQuery({
-    queryKey: ['semester-configs'],
-    queryFn: () => scheduleApi.semesterConfigs(),
-  })
-  const { data: currentSemester } = useQuery({
-    queryKey: ['semester-current'],
-    queryFn: () => scheduleApi.currentSemester(),
-  })
-  const configList: SemesterConfig[] = semesterConfigs || []
-  const semesterOptions = useMemo(
-    () => Array.from(new Set(configList.map((c) => c.semester))).sort().reverse(),
-    [configList]
-  )
+  const { configList, semesterOptions, currentSemester } = useSemesters()
   useEffect(() => {
     if (!semester && (currentSemester?.semester || semesterOptions[0])) {
       setFilters((f) =>
@@ -63,14 +51,10 @@ export default function Home() {
   }, [currentSemester, semesterOptions, semester])
 
   // 当前所选学期的日期区间（start_date ~ end_date），用于过滤任务的上课时间
-  const selectedCfg = configList.find((c) => c.semester === semester)
-  const semesterRange = useMemo(() => {
-    if (!semester) return [] as [string, string] | []
-    const start = selectedCfg?.start_date || defaultSemesterStart(semester)
-    const weeks = selectedCfg?.weeks || 20
-    const end = dayjs(start).add(weeks * 7 - 1, 'day').format('YYYY-MM-DD')
-    return [start, end] as [string, string]
-  }, [semester, selectedCfg])
+  const semesterRange = useMemo(
+    () => semesterRangeOf(configList, semester),
+    [configList, semester]
+  )
   const canDelete = (t: Task) =>
     hasPermission('task:delete') ||
     (hasPermission('task:delete_own') && userId != null && t.create_by === userId)

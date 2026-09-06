@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import {
   List,
   Tag,
@@ -16,7 +16,8 @@ import {
 import { evaluationApi } from '@/api/modules/evaluations'
 import { useAuthStore } from '@/stores/auth'
 import type { EvaluationRecord } from '@/api/types'
-import { formatDate } from '@/utils/format'
+import { formatDate, formatSemester } from '@/utils/format'
+import { semesterRangeOf } from '@/utils/semester'
 import { downloadBlob } from '@/utils/download'
 import {
   groupEvaluationDimensions,
@@ -26,12 +27,32 @@ import {
   getFileNameFromUrl,
   type EvalDetailRow,
 } from '@/utils/evalDetail'
+import {
+  buildEvaluatedListParams,
+  defaultEvaluatedFiltersFor,
+  type EvaluatedFilters,
+} from './evaluatedFilters'
+import { useSemesters } from './useSemesters'
 
 type EvalType = 'received' | 'sent'
 
 export default function Evaluated() {
   const [type, setType] = useState<EvalType>('received')
   const userId = useAuthStore((s) => s.user?.id)
+  // 筛选状态两 tab 共享；学期 undefined=初始态（定位到当前学期）、''=全部学期
+  const [filters, setFilters] = useState<EvaluatedFilters>(defaultEvaluatedFiltersFor)
+  const { configList, semesterOptions, currentSemester } = useSemesters()
+
+  // 学期为主轴：初始态定位到当前学期（「全部学期」空串不参与定位）
+  useEffect(() => {
+    if (filters.semester === undefined && (currentSemester?.semester || semesterOptions[0])) {
+      setFilters((f) =>
+        f.semester === undefined
+          ? { ...f, semester: currentSemester?.semester || semesterOptions[0] }
+          : f
+      )
+    }
+  }, [currentSemester, semesterOptions, filters.semester])
 
   return (
     <div>
@@ -40,43 +61,78 @@ export default function Evaluated() {
         <Tabs.Tab title="评给我的" key="received" />
         <Tabs.Tab title="我评的" key="sent" />
       </Tabs>
-      {userId != null && <RecordList key={type} type={type} userId={userId} />}
+      {/* 搜索 + 筛选（sticky），对齐首页模式 */}
+      <div style={{ position: 'sticky', top: 0, zIndex: 10, background: '#f5f5f5', paddingBottom: 4 }}>
+        <div style={{ display: 'flex', gap: 8, padding: '4px 12px', overflowX: 'auto' }}>
+          <select
+            value={filters.semester ?? ''}
+            onChange={(e) => setFilters({ semester: e.target.value })}
+            style={selectStyle}
+          >
+            <option value="">全部学期</option>
+            {semesterOptions.map((s) => (
+              <option key={s} value={s}>
+                {formatSemester(s)}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {userId != null && (
+        <RecordList key={type} type={type} userId={userId} filters={filters} configList={configList} />
+      )}
     </div>
   )
 }
 
-function RecordList({ type, userId }: { type: EvalType; userId: number }) {
+function RecordList({
+  type,
+  userId,
+  filters,
+  configList,
+}: {
+  type: EvalType
+  userId: number
+  filters: EvaluatedFilters
+  configList: ReturnType<typeof useSemesters>['configList']
+}) {
   const qc = useQueryClient()
-  const [page, setPage] = useState(1)
   const [detail, setDetail] = useState<EvaluationRecord | null>(null)
   const hasPermission = useAuthStore((s) => s.hasPermission)
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['evaluations', type, userId],
-    queryFn: () =>
-      evaluationApi.list({
-        page: 1,
-        page_size: 200,
-        ...(type === 'received' ? { teacher_id: userId } : { evaluator_id: userId }),
-      }),
+  const range = useMemo(() => semesterRangeOf(configList, filters.semester), [configList, filters.semester])
+  const baseParams = useMemo(
+    () => buildEvaluatedListParams({ type, userId, filters, range, page: 1 }),
+    [type, userId, filters, range]
+  )
+
+  const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage } = useInfiniteQuery({
+    queryKey: ['mobile-evaluations', type, baseParams],
+    queryFn: ({ pageParam }) => evaluationApi.list({ ...baseParams, page: pageParam }),
+    initialPageParam: 1,
+    getNextPageParam: (last, all) => {
+      const loaded = all.reduce((n, p) => n + (p.list?.length ?? 0), 0)
+      return loaded < last.total ? all.length + 1 : undefined
+    },
+    placeholderData: (prev) => prev,
   })
 
-  const records = (data?.list || []).slice(0, page * 20)
-  const finished = records.length >= (data?.total ?? 0)
+  const records = data?.pages.flatMap((p) => p.list ?? []) ?? []
+  const finished = !hasNextPage
 
   const delMut = async (id: number) => {
     try {
       await evaluationApi.remove(id)
       Toast.show({ content: '删除成功', icon: 'success' })
       setDetail(null)
-      await qc.invalidateQueries({ queryKey: ['evaluations', type] })
+      await qc.invalidateQueries({ queryKey: ['mobile-evaluations', type] })
     } catch (e) {
       Toast.show({ content: e instanceof Error ? e.message : '删除失败', icon: 'fail' })
     }
   }
 
   const refresh = async () => {
-    await qc.invalidateQueries({ queryKey: ['evaluations', type] })
+    await qc.invalidateQueries({ queryKey: ['mobile-evaluations', type] })
   }
 
   const openDetail = async (id: number) => {
@@ -128,12 +184,15 @@ function RecordList({ type, userId }: { type: EvalType; userId: number }) {
           </List.Item>
         ))}
       </List>
-      {!finished && (
+      {!finished && records.length > 0 && (
         <div style={{ textAlign: 'center', padding: 12 }}>
-          <Button fill="none" loading={isLoading} onClick={() => setPage((p) => p + 1)}>
+          <Button fill="none" loading={isFetchingNextPage || isLoading} onClick={() => void fetchNextPage()}>
             加载更多
           </Button>
         </div>
+      )}
+      {finished && records.length > 0 && (
+        <div style={{ textAlign: 'center', color: '#bbb', fontSize: 12, padding: 12 }}>没有更多了</div>
       )}
       {records.length === 0 && !isLoading && (
         <Card style={{ margin: 12, textAlign: 'center', color: '#999' }}>
@@ -323,4 +382,13 @@ function ValueRow({ row }: { row: EvalDetailRow }) {
       </div>
     </div>
   )
+}
+
+const selectStyle: React.CSSProperties = {
+  flexShrink: 0,
+  padding: '6px 8px',
+  borderRadius: 6,
+  border: '1px solid #ddd',
+  background: '#fff',
+  fontSize: 13,
 }
