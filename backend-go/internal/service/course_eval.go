@@ -3,6 +3,7 @@ package service
 import (
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"backend-go/internal/model"
@@ -24,8 +25,16 @@ type courseEvalGroup struct {
 	end       time.Time
 }
 
+// normalizeCourse 课程名归一化：小写、去首尾空格，显式对齐任务创建去重在 MySQL 默认
+// 排序规则下的等值语义（ADR-0001）；SQL 条件与内存分组键必须共用本函数，否则同名异写
+// 课程会被 SQL 命中、却落不进任何组（重音折叠不复制，中文课程名无实际影响）
+func normalizeCourse(course string) string {
+	return strings.ToLower(strings.TrimSpace(course))
+}
+
+// groupKey 同课组键：课程名按 normalizeCourse 归一化
 func groupKey(teacherID int, course, semester string) string {
-	return semester + "|" + strconv.Itoa(teacherID) + "|" + course
+	return semester + "|" + strconv.Itoa(teacherID) + "|" + normalizeCourse(course)
 }
 
 // orderedSemesterConfigs 学期配置按开学日期升序（同一区间重叠时取最早开学者，保证归属确定）
@@ -49,7 +58,7 @@ func semesterOfTask(cfgs []model.SemesterConfig, classTime *model.LocalTime) str
 	ct := classTime.ToTime()
 	for _, c := range cfgs {
 		start := c.StartDate.ToTime()
-		if !ct.Before(start) && ct.Before(start.AddDate(0, 0, c.Weeks*7)) {
+		if !ct.Before(start) && ct.Before(start.AddDate(0, 0, semesterDurationDays(c.Weeks))) {
 			return c.Semester
 		}
 	}
@@ -83,7 +92,7 @@ func CourseEvalStatsForTasks(db *gorm.DB, tasks []model.EvaluationTask) (map[int
 			start := cfg.StartDate.ToTime()
 			groups[key] = &courseEvalGroup{
 				teacherID: t.TeacherID, course: t.CourseName,
-				start: start, end: start.AddDate(0, 0, cfg.Weeks*7),
+				start: start, end: start.AddDate(0, 0, semesterDurationDays(cfg.Weeks)),
 			}
 		}
 		taskGroup[t.ID] = key
@@ -106,8 +115,8 @@ func CourseEvalStatsForTasks(db *gorm.DB, tasks []model.EvaluationTask) (map[int
 		Where("r.is_deleted = 0 AND r.evaluator_id IS NOT NULL")
 	var cond *gorm.DB
 	for _, g := range groups {
-		c := db.Where("t.teacher_id = ? AND t.course_name = ? AND t.class_time >= ? AND t.class_time < ?",
-			g.teacherID, g.course, g.start, g.end)
+		c := db.Where("t.teacher_id = ? AND LOWER(TRIM(t.course_name)) = ? AND t.class_time >= ? AND t.class_time < ?",
+			g.teacherID, normalizeCourse(g.course), g.start, g.end)
 		if cond == nil {
 			cond = c
 		} else {
