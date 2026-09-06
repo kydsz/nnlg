@@ -4,24 +4,24 @@
 
 V3 为全量重构版本：后端使用 **Go + Gin + GORM**，前端使用 **React 18 + TypeScript + Vite**。系统与旧版 V2（FastAPI + Vue3）**共用同一 MySQL 数据库**，接口路径、统一响应格式、JWT、时间格式均与旧端保持兼容，因此管理端与移动端前端可无缝对接任意一端后端。
 
-- 旧版后端（FastAPI + Vue3）：`v2/backend` / `v2/frontend`
-- 新版后端（Go）：`v3/backend-go`
-- 新版前端（React）：`v3/frontend-react`
+- 后端（Go）：`backend-go`
+- 前端（React）：`frontend-react`
+- 部署编排（Nginx 反向代理）：`nginx`
 
 ## 技术栈
 
-### 后端（v3/backend-go）
+### 后端（backend-go）
 - **框架**: Gin
 - **ORM**: GORM（MySQL 驱动）
 - **数据库**: MySQL 8.0+
 - **缓存/消息队列**: Redis 7+（go-redis v9）— 统计报表缓存 + 评价提交异步落库削峰
 - **认证**: JWT（golang-jwt/v5，HS256，与旧端互通）
 - **密码加密**: bcrypt（golang.org/x/crypto，与旧端 passlib 兼容）
-- **导出**: excelize（XLSX）
+- **导出**: excelize（XLSX）、gopdf（评教记录 PDF）
 - **爬虫**: 教务系统同步（jwxt / llsykb）
 - 依赖已 vendor，可离线构建
 
-### 前端（v3/frontend-react）
+### 前端（frontend-react）
 - **框架**: React 18 + TypeScript
 - **UI组件库**: antd 5（管理端）+ antd-mobile 5（移动端）
 - **构建工具**: Vite 5
@@ -33,7 +33,6 @@ V3 为全量重构版本：后端使用 **Go + Gin + GORM**，前端使用 **Rea
 ## 项目结构
 
 ```
-v3/
 ├── backend-go/              # Go 后端
 │   ├── cmd/server/          # 入口 main.go
 │   ├── internal/
@@ -46,6 +45,7 @@ v3/
 │   │   ├── middleware/      # 认证 JWT / 权限码 / CORS
 │   │   ├── model/           # GORM 模型（表结构由旧端/SQL迁移管理，禁止 AutoMigrate）
 │   │   ├── router/          # 路由注册（与旧 FastAPI 路径一一兼容）
+│   │   ├── pdfgen/          # 评教记录 PDF 导出（gopdf）
 │   │   └── jwxt/            # 教务系统爬虫与解析
 │   └── pkg/                 # jwtutil / pwd / response 公共库
 │
@@ -71,6 +71,7 @@ v3/
 - 系统管理员 / 学院管理员 / 校级督导 / 院级督导 / 督导老师 / 教师
 - 用户可拥有多角色，支持动态角色管理与自定义权限码
 - 督导负责范围（学院 / 教研室）配置
+- 会话安全：**会话 epoch 即时撤销**（改密/禁用/删除即踢下线）、登录接口限流、附件/PDF 图片安全下载
 
 ### 评教维度配置
 - 支持动态维度配置与分组管理，批量排序
@@ -82,9 +83,9 @@ v3/
 
 ### 评教功能
 - 移动端评教，支持匿名评教、富文本（LaTeX 公式）
-- 文件类维度附件上传（图片/文档），单条记录导出（可打印 HTML）
+- 文件类维度附件上传（图片/文档），单条记录导出（可打印 HTML / PDF）
 - 评教可见性控制：自己评的、被评教师、系统管理员，或按权限码 `evaluation:view_all` 按学院范围查看
-- **高并发支持**（Redis Stream 异步削峰）：大批学生集中评教时，提交先入 Redis 队列秒回成功，后台消费者批量落库，避免 MySQL 行锁竞争打满连接池
+- **高并发支持**（Redis Stream 异步削峰）：集中评教期间大批教职工同时提交时，提交先入 Redis 队列秒回成功，后台消费者批量落库，避免 MySQL 行锁竞争打满连接池
 - **死信保护**（Redis Stream 消费者组）：单条消息**投递超过阈值**或**在 Pending 停留超 10 分钟**仍未成功落库，自动挪入独立死信流 `<stream>:dead` 并记告警日志，避免无限重试积压且不丢数据（死信流同样受 AOF 保护）。首次死信会**自动重放一次**回主队列，重放仍失败才滞留待人工处理；消费者对"确定不可处理的业务拒绝"才确认丢弃，DB 瞬时故障的消息留待重试。管理端可 `POST /api/v1/queue/replay-dead` 一键重放死信回主队列，`GET /api/v1/queue/status` 查看队列健康（需系统管理员 `role:manage`）
 
 ### 统计报表
@@ -114,7 +115,7 @@ v3/
 ### 后端启动（Go）
 
 ```bash
-cd v3/backend-go
+cd backend-go
 
 # 配置环境变量（复制 .env.example 为 .env 并修改）
 cp .env.example .env
@@ -139,7 +140,7 @@ go build -o server ./cmd/server
 ### 前端启动（React）
 
 ```bash
-cd v3/frontend-react
+cd frontend-react
 
 # 安装依赖
 npm install
@@ -157,10 +158,10 @@ npm run build
 
 ```bash
 # 后端（Alpine，时区 UTC，暴露 8000）
-cd v3/backend-go && docker build -t te-backend-go .
+cd backend-go && docker build -t te-backend-go .
 
 # 前端（Nginx，暴露 80，/api 与 /uploads 反代到后端 backend:8000）
-cd v3/frontend-react && docker build -t te-frontend-react .
+cd frontend-react && docker build -t te-frontend-react .
 ```
 
 ## 默认账号
