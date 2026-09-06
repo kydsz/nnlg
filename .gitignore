@@ -12,6 +12,8 @@
 # 工作区本地数据（AI 记忆 / 会话数据，不入库）
 # ----------------------------------------
 .workbuddy/
+# AI 技能安装目录（由 skills-lock.json 锁定，可随时重装，不入库）
+.agents/
 *.swp
 *.swo
 .trae/
@@ -34,8 +36,10 @@ Thumbs.db
 *.log
 logs/
 log/
-!vendor/github.com/redis/go-redis/v9/internal/maintnotifications/logs/
-!vendor/github.com/redis/go-redis/v9/internal/maintnotifications/logs/**
+# vendor 依赖树必须完整入库;上方 logs/ 规则会吞掉 vendored 的 internal/maintnotifications/logs,
+# 放行规则必须带正确的前缀（vendor 位于 backend-go/vendor,而非仓库根）
+!**/vendor/github.com/redis/go-redis/v9/internal/maintnotifications/logs/
+!**/vendor/github.com/redis/go-redis/v9/internal/maintnotifications/logs/**
 
 # ----------------------------------------
 # 环境配置文件
