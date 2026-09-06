@@ -14,6 +14,8 @@
 .workbuddy/
 # AI 技能安装目录（由 skills-lock.json 锁定，可随时重装，不入库）
 .agents/
+# 本地草稿区（评审中间产物等，不入库）
+.scratch/
 *.swp
 *.swo
 .trae/
