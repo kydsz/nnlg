@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 
 	"backend-go/internal/middleware"
@@ -60,8 +61,11 @@ func (h *Task) List(c *gin.Context) {
 	u := middleware.CurrentUser(c)
 	summaries, evaluated := h.evalSvc.SummariesForTasks(h.db, u, tasks)
 
-	// 同课评教汇总（同学期+同教师+同课程，跨任务聚合；失败降级为零值，不阻断列表展示）
-	courseStats, _ := service.CourseEvalStatsForTasks(h.db, tasks)
+	// 同课评教汇总（同学期+同教师+同课程，跨任务聚合；失败降级为无汇总不阻断列表，仅记告警）
+	courseStats, err := service.CourseEvalStatsForTasks(h.db, tasks)
+	if err != nil {
+		log.Printf("同课评教汇总查询失败(降级为无汇总): %v", err)
+	}
 
 	// 收集本页任务下当前用户是否有草稿，便于列表展示"暂存中"标记
 	draftSet := map[int]bool{}
@@ -105,28 +109,32 @@ func (h *Task) List(c *gin.Context) {
 		if summary == nil {
 			summary = []map[string]interface{}{}
 		}
-		stat := courseStats[t.ID]
 		var createByName interface{}
 		if t.CreateBy != nil {
 			if n, ok := creatorNames[*t.CreateBy]; ok {
 				createByName = n
 			}
 		}
-		list = append(list, gin.H{
+		item := gin.H{
 			"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
 			"course_name": t.CourseName, "class_time": FTimeMin(t.ClassTime),
 			"classroom": t.Classroom, "status": t.Status,
 			"status_name": model.TaskStatusNames[t.Status],
 			"start_time":  FTime(t.StartTime), "end_time": FTime(t.EndTime),
 			"evaluation_count": t.EvaluationCount, "has_supervisor_eval": t.HasSupervisorEval,
-			"course_supervisor_evaluated": stat.SupervisorEvaluated,
-			"course_evaluator_count":      stat.EvaluatorCount,
-			"create_by":                   t.CreateBy, "create_by_name": createByName,
+			"create_by": t.CreateBy, "create_by_name": createByName,
 			"create_time":            FTime(t.CreateTime),
 			"current_user_evaluated": evaluated[t.ID],
 			"has_draft":              draftSet[t.ID],
 			"evaluation_records":     summary,
-		})
+		}
+		// 三态：拿不到同课汇总（无学期归属或查询降级）时不发字段，前端呈现「无法统计」
+		// 而非伪装成「未评/0 人」
+		if stat, ok := courseStats[t.ID]; ok {
+			item["course_supervisor_evaluated"] = stat.SupervisorEvaluated
+			item["course_evaluator_count"] = stat.EvaluatorCount
+		}
+		list = append(list, item)
 	}
 
 	response.OK(c, gin.H{"list": list, "total": total, "page": page, "page_size": pageSize})

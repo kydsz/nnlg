@@ -134,9 +134,16 @@ export default function Tasks() {
       title: '督导已评',
       dataIndex: 'course_supervisor_evaluated',
       width: 90,
-      render: (v: boolean) => <Tag color={v ? 'success' : 'default'}>{v ? '已评' : '未评'}</Tag>,
+      // 字段缺省=无法统计（任务无学期归属或查询降级），呈现「-」而非「未评」
+      render: (v: boolean | undefined) =>
+        v === undefined ? '-' : <Tag color={v ? 'success' : 'default'}>{v ? '已评' : '未评'}</Tag>,
     },
-    { title: '课程评教人数', dataIndex: 'course_evaluator_count', width: 110 },
+    {
+      title: '课程评教人数',
+      dataIndex: 'course_evaluator_count',
+      width: 110,
+      render: (v: number | undefined) => v ?? '-',
+    },
     { title: '创建人', dataIndex: 'create_by_name', width: 100, render: (v: string) => v || '-' },
     {
       title: '操作',
