@@ -19,6 +19,7 @@ func evaluationTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.User{}, &model.UserRole{}, &model.UserCollege{},
 		&model.UserRoom{}, &model.College{}, &model.ResearchRoom{},
+		&model.Role{},
 		&model.EvaluationTask{}, &model.EvaluationRecord{}, &model.EvaluationDimension{},
 		&model.EvaluationDraft{},
 	); err != nil {

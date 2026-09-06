@@ -724,7 +724,7 @@ DELETE /tasks/{task_id}          # 删除（task:delete 删任意；task:delete_
 GET /evaluations?page=1&page_size=20&task_id=1&teacher_id=1&evaluator_id=1&evaluator_name=张&evaluator_role=supervisor&college_id=1&teacher_name=&type=&keyword=&start_date=&end_date=
 ```
 
-**查询参数**: `task_id`、`teacher_id`、`evaluator_id`、`evaluator_name`、`evaluator_role`、`college_id`、`teacher_name`、`type`、`keyword`、`start_date`、`end_date`、`page`、`page_size`（`start_date` / `end_date` 格式 `YYYY-MM-DD`，按提交时间过滤）。
+**查询参数**: `task_id`、`teacher_id`、`evaluator_id`、`evaluator_name`、`evaluator_role`、`college_id`、`teacher_name`、`type`、`keyword`、`start_date`、`end_date`、`page`、`page_size`（`start_date` / `end_date` 格式 `YYYY-MM-DD`，按评教任务的上课时间（听课时间）过滤，即「记录所属学期」口径）。`keyword` 匹配课程名 / 教师名 / 评教人名 / 作答文本；其中评教人名对匿名记录仅对可见身份者（评教人本人、系统管理员、数据范围内持 `evaluation:view_all` 权限者）可命中。
 
 **可见性**: 教师角色只能查看自己的评教记录；督导默认只能查看自己评教的记录，需 `evaluation:view_all` 权限码（在角色管理中分配）后按学院范围查看他人记录。
 

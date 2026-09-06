@@ -349,6 +349,30 @@ func canSeeIdentity(viewer *model.User, rec *model.EvaluationRecord, task *model
 	return false
 }
 
+// evaluatorNameCond 评教人姓名匹配条件（含匿名放行）：匿名记录仅对可见身份的查看者可被姓名搜到，
+// 对齐 canSeeIdentity——评教人本人 / 系统管理员 / 数据范围内持 evaluation:view_all 权限者。
+// 返回条件 SQL 与需前置追加的参数（调用方把 LIKE 参数附在其后）。
+func evaluatorNameCond(viewer *model.User, viewAll bool) (string, []interface{}) {
+	like := "r.evaluator_name LIKE ?"
+	if viewer.HasRole(model.RoleSystemAdmin) {
+		return like, nil
+	}
+	ids := AccessibleCollegeIDs(viewer)
+	if viewAll && ids == nil {
+		return like, nil // 全校范围的 viewAll：身份恒可见
+	}
+	var cond string
+	var args []interface{}
+	if viewAll {
+		cond = "r.evaluator_id = ? OR t.teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)"
+		args = []interface{}{viewer.ID, ids}
+	} else {
+		cond = "r.evaluator_id = ?"
+		args = []interface{}{viewer.ID}
+	}
+	return "((r.is_anonymous = 0 OR (" + cond + ")) AND " + like + ")", args
+}
+
 // buildRecordQuery 构造记录查询（t = evaluation_task, r = evaluation_record）
 func (s *Evaluation) buildRecordQuery(db *gorm.DB, viewer *model.User, f EvaluationFilters) (*gorm.DB, error) {
 	// 记录可见性不随任务软删除消失（对齐旧端：列表/详情均不过滤任务 is_deleted）；
@@ -397,12 +421,25 @@ func (s *Evaluation) buildRecordQuery(db *gorm.DB, viewer *model.User, f Evaluat
 	if f.EvaluatorID != nil {
 		q = q.Where("r.evaluator_id = ?", *f.EvaluatorID)
 	}
-	if f.Keyword != "" {
-		kw := "%" + f.Keyword + "%"
-		q = q.Where("r.dimension_values LIKE ? OR r.evaluator_name LIKE ?", kw, kw)
-	}
-	if f.EvaluatorName != "" {
-		q = q.Where("r.evaluator_name LIKE ?", "%"+f.EvaluatorName+"%")
+	if f.Keyword != "" || f.EvaluatorName != "" {
+		// 评教人姓名参与匹配时，匿名记录仅对可见身份者可被搜到（匿名全程脱敏，CONTEXT.md）
+		viewAll := CanViewOthersEvaluation(db, viewer)
+		if f.Keyword != "" {
+			kw := "%" + f.Keyword + "%"
+			nameCond, nameArgs := evaluatorNameCond(viewer, viewAll)
+			args := make([]interface{}, 0, 4+len(nameArgs))
+			args = append(args, kw, kw)
+			args = append(args, nameArgs...)
+			args = append(args, kw, kw)
+			// dimension_values 是 JSON/blob 列：CAST 成文本再 LIKE（MySQL JSON 列隐式转换的显式化，sqlite 下行为一致）
+			q = q.Where("(t.course_name LIKE ? OR t.teacher_name LIKE ? OR "+nameCond+" OR CAST(r.dimension_values AS CHAR) LIKE ?)", args...)
+		}
+		if f.EvaluatorName != "" {
+			kw := "%" + f.EvaluatorName + "%"
+			nameCond, nameArgs := evaluatorNameCond(viewer, viewAll)
+			args := append(append([]interface{}{}, nameArgs...), kw)
+			q = q.Where(nameCond, args...)
+		}
 	}
 	if f.EvaluatorRole != "" {
 		q = q.Where("r.evaluator_role = ?", f.EvaluatorRole)
