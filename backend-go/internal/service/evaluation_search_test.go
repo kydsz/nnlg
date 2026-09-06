@@ -55,7 +55,7 @@ func searchIDs(items []map[string]interface{}) []int {
 }
 
 func TestListKeywordHits(t *testing.T) {
-	db, teacher, _, _ := searchTestDB(t)
+	db, _, _, _ := searchTestDB(t)
 	admin := &model.User{Role: model.RoleSystemAdmin, Status: 1, Perms: []string{}}
 
 	cases := []struct {
@@ -81,7 +81,6 @@ func TestListKeywordHits(t *testing.T) {
 			}
 		})
 	}
-	_ = teacher
 }
 
 // 匿名记录的姓名可搜索性按查看者区分
@@ -130,5 +129,4 @@ func TestListAnonymousNameSearch(t *testing.T) {
 	if len(items) != 1 || items[0]["evaluator_name"] != "匿名" {
 		t.Fatalf("匿名记录经作答文本搜出后应脱敏展示, 得到 %v", items)
 	}
-	_ = wangwu
 }

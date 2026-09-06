@@ -164,13 +164,3 @@ func CourseEvalStatsForTasks(db *gorm.DB, tasks []model.EvaluationTask) (map[int
 	}
 	return res, nil
 }
-
-// semesterConfigOf 按学期代码取配置（找不到返回零值）
-func semesterConfigOf(cfgs []model.SemesterConfig, semester string) model.SemesterConfig {
-	for _, c := range cfgs {
-		if c.Semester == semester {
-			return c
-		}
-	}
-	return model.SemesterConfig{}
-}
