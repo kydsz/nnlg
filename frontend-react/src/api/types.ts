@@ -153,6 +153,10 @@ export interface Task {
   status_name?: string
   evaluation_count?: number
   has_supervisor_eval?: boolean
+  /** 同课评教汇总：同学期同教师同课程（跨任务）是否已有督导评教 */
+  course_supervisor_evaluated?: boolean
+  /** 同课评教汇总：同学期同教师同课程（跨任务）按评教人去重的评教人数 */
+  course_evaluator_count?: number
   /** 当前登录用户是否对该任务有暂存草稿 */
   has_draft?: boolean
   create_by?: number

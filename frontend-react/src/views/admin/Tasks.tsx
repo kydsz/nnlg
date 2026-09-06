@@ -130,6 +130,13 @@ export default function Tasks() {
       },
     },
     { title: '评教数', dataIndex: 'evaluation_count', width: 80 },
+    {
+      title: '督导已评',
+      dataIndex: 'course_supervisor_evaluated',
+      width: 90,
+      render: (v: boolean) => <Tag color={v ? 'success' : 'default'}>{v ? '已评' : '未评'}</Tag>,
+    },
+    { title: '课程评教人数', dataIndex: 'course_evaluator_count', width: 110 },
     { title: '创建人', dataIndex: 'create_by_name', width: 100, render: (v: string) => v || '-' },
     {
       title: '操作',

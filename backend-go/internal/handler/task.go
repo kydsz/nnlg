@@ -60,6 +60,9 @@ func (h *Task) List(c *gin.Context) {
 	u := middleware.CurrentUser(c)
 	summaries, evaluated := h.evalSvc.SummariesForTasks(h.db, u, tasks)
 
+	// 同课评教汇总（同学期+同教师+同课程，跨任务聚合；失败降级为零值，不阻断列表展示）
+	courseStats, _ := service.CourseEvalStatsForTasks(h.db, tasks)
+
 	// 收集本页任务下当前用户是否有草稿，便于列表展示"暂存中"标记
 	draftSet := map[int]bool{}
 	{
@@ -102,6 +105,7 @@ func (h *Task) List(c *gin.Context) {
 		if summary == nil {
 			summary = []map[string]interface{}{}
 		}
+		stat := courseStats[t.ID]
 		var createByName interface{}
 		if t.CreateBy != nil {
 			if n, ok := creatorNames[*t.CreateBy]; ok {
@@ -115,7 +119,9 @@ func (h *Task) List(c *gin.Context) {
 			"status_name": model.TaskStatusNames[t.Status],
 			"start_time":  FTime(t.StartTime), "end_time": FTime(t.EndTime),
 			"evaluation_count": t.EvaluationCount, "has_supervisor_eval": t.HasSupervisorEval,
-			"create_by": t.CreateBy, "create_by_name": createByName,
+			"course_supervisor_evaluated": stat.SupervisorEvaluated,
+			"course_evaluator_count":      stat.EvaluatorCount,
+			"create_by":                   t.CreateBy, "create_by_name": createByName,
 			"create_time":            FTime(t.CreateTime),
 			"current_user_evaluated": evaluated[t.ID],
 			"has_draft":              draftSet[t.ID],
