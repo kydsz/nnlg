@@ -12,6 +12,7 @@ import {
   Card,
   Dialog,
   ImageViewer,
+  SearchBar,
 } from 'antd-mobile'
 import { evaluationApi } from '@/api/modules/evaluations'
 import { useAuthStore } from '@/stores/auth'
@@ -63,10 +64,15 @@ export default function Evaluated() {
       </Tabs>
       {/* 搜索 + 筛选（sticky），对齐首页模式 */}
       <div style={{ position: 'sticky', top: 0, zIndex: 10, background: '#f5f5f5', paddingBottom: 4 }}>
+        <SearchBar
+          placeholder="搜索课程/教师/评教人"
+          value={filters.keyword}
+          onChange={(k) => setFilters((f) => ({ ...f, keyword: k }))}
+        />
         <div style={{ display: 'flex', gap: 8, padding: '4px 12px', overflowX: 'auto' }}>
           <select
             value={filters.semester ?? ''}
-            onChange={(e) => setFilters({ semester: e.target.value })}
+            onChange={(e) => setFilters((f) => ({ ...f, semester: e.target.value }))}
             style={selectStyle}
           >
             <option value="">全部学期</option>
@@ -106,8 +112,9 @@ function RecordList({
     [type, userId, filters, range]
   )
 
+  // key 保留 'evaluations' 公共前缀：管理端删除、移动端提交后的 ['evaluations'] 失效才能命中本页
   const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage } = useInfiniteQuery({
-    queryKey: ['mobile-evaluations', type, baseParams],
+    queryKey: ['evaluations', 'mobile', type, baseParams],
     queryFn: ({ pageParam }) => evaluationApi.list({ ...baseParams, page: pageParam }),
     initialPageParam: 1,
     getNextPageParam: (last, all) => {
@@ -125,14 +132,14 @@ function RecordList({
       await evaluationApi.remove(id)
       Toast.show({ content: '删除成功', icon: 'success' })
       setDetail(null)
-      await qc.invalidateQueries({ queryKey: ['mobile-evaluations', type] })
+      await qc.invalidateQueries({ queryKey: ['evaluations', 'mobile', type] })
     } catch (e) {
       Toast.show({ content: e instanceof Error ? e.message : '删除失败', icon: 'fail' })
     }
   }
 
   const refresh = async () => {
-    await qc.invalidateQueries({ queryKey: ['mobile-evaluations', type] })
+    await qc.invalidateQueries({ queryKey: ['evaluations', 'mobile', type] })
   }
 
   const openDetail = async (id: number) => {

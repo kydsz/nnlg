@@ -8,10 +8,12 @@ export type EvaluatedTab = 'received' | 'sent'
  */
 export interface EvaluatedFilters {
   semester: string | undefined
+  /** 搜索词：课程/教师/评教人（服务端 keyword，匿名按身份权限放行） */
+  keyword: string
 }
 
 export function defaultEvaluatedFiltersFor(semester?: string): EvaluatedFilters {
-  return { semester }
+  return { semester, keyword: '' }
 }
 
 /** 已评记录列表的查询参数：服务端分页 + 筛选（学期→日期区间按「记录所属学期」口径） */
@@ -33,5 +35,7 @@ export function buildEvaluatedListParams(args: {
     params.start_date = range[0]
     params.end_date = range[1]
   }
+  const kw = filters.keyword.trim()
+  if (kw) params.keyword = kw
   return params
 }
