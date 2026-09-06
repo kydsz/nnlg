@@ -17,11 +17,16 @@ import { taskApi, type TaskListParams } from '@/api/modules/tasks'
 import { scheduleApi } from '@/api/modules/schedule'
 import { useAuthStore } from '@/stores/auth'
 import type { Task, SemesterConfig } from '@/api/types'
+import {
+  defaultFiltersFor,
+  showMyCreatedHint,
+  MY_CREATED_EMPTY_HINT,
+  type HomeFilters,
+  type StatusFilter,
+  type CreatorFilter,
+} from './homeFilters'
 import { formatDate, formatClassPeriod, formatSemester, defaultSemesterStart } from '@/utils/format'
 import dayjs from 'dayjs'
-
-type StatusFilter = '' | '1' | '2' | 'supervisor_yes' | 'supervisor_no'
-type CreatorFilter = '' | 'my_created' | 'other_created'
 
 export default function Home() {
   const navigate = useNavigate()
@@ -29,10 +34,8 @@ export default function Home() {
   const userId = useAuthStore((s) => s.user?.id)
   const hasPermission = useAuthStore((s) => s.hasPermission)
 
-  const [keyword, setKeyword] = useState('')
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('')
-  const [creatorFilter, setCreatorFilter] = useState<CreatorFilter>('')
-  const [semester, setSemester] = useState<string | undefined>(undefined)
+  const [filters, setFilters] = useState<HomeFilters>(defaultFiltersFor)
+  const { keyword, statusFilter, creatorFilter, semester } = filters
   const [page, setPage] = useState(1)
 
   // 学期：默认取管理员配置的当前学期；下拉可切换到其它学期
@@ -51,7 +54,11 @@ export default function Home() {
   )
   useEffect(() => {
     if (!semester && (currentSemester?.semester || semesterOptions[0])) {
-      setSemester(currentSemester?.semester || semesterOptions[0])
+      setFilters((f) =>
+        f.semester
+          ? f
+          : { ...f, semester: currentSemester?.semester || semesterOptions[0] }
+      )
     }
   }, [currentSemester, semesterOptions, semester])
 
@@ -146,7 +153,7 @@ export default function Home() {
         <SearchBar
           placeholder="搜索课程/教师"
           value={keyword}
-          onChange={setKeyword}
+          onChange={(k) => setFilters((f) => ({ ...f, keyword: k }))}
           onSearch={resetAndReload}
           onClear={resetAndReload}
         />
@@ -154,7 +161,8 @@ export default function Home() {
           <select
             value={semester || ''}
             onChange={(e) => {
-              setSemester(e.target.value || undefined)
+              // 学期为主轴：切学期即回到该学期的默认视图
+              setFilters(defaultFiltersFor(e.target.value || undefined))
               resetAndReload()
             }}
             style={selectStyle}
@@ -168,7 +176,7 @@ export default function Home() {
           <select
             value={statusFilter}
             onChange={(e) => {
-              setStatusFilter(e.target.value as StatusFilter)
+              setFilters((f) => ({ ...f, statusFilter: e.target.value as StatusFilter }))
               resetAndReload()
             }}
             style={selectStyle}
@@ -182,7 +190,7 @@ export default function Home() {
           <select
             value={creatorFilter}
             onChange={(e) => {
-              setCreatorFilter(e.target.value as CreatorFilter)
+              setFilters((f) => ({ ...f, creatorFilter: e.target.value as CreatorFilter }))
               resetAndReload()
             }}
             style={selectStyle}
@@ -196,7 +204,11 @@ export default function Home() {
 
       <PullToRefresh onRefresh={refresh}>
         {tasks.length === 0 && !isLoading && !isError ? (
-          <ErrorBlock status="empty" title="暂无待评任务" description="" />
+          <ErrorBlock
+            status="empty"
+            title="暂无待评任务"
+            description={showMyCreatedHint(filters) ? MY_CREATED_EMPTY_HINT : ''}
+          />
         ) : isError ? (
           <ErrorBlock status="default" title="获取任务列表失败" description="" />
         ) : (
