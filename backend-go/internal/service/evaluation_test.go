@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"testing"
 
 	"backend-go/internal/model"
@@ -138,5 +139,31 @@ func TestSupervisorRoleOf(t *testing.T) {
 				t.Fatalf("SupervisorRole() = %q, 期望 %q", got, c.want)
 			}
 		})
+	}
+}
+
+// 回归：matchScheduleForTask 的 student_count 必须是 int/nil 而非 *int——
+// 导出（PDF/HTML）用 fmt.Sprint 渲染，指针会打出 0x... 内存地址
+//（线上截图「应到人数0x2b6082351468人」）。
+func TestMatchScheduleForTaskStudentCountPlainInt(t *testing.T) {
+	snap := `{"class_time_text":"周六 第5-6节","classroom":"1-101","class_info":"2401(125)","student_count":125,"week_pattern":"第1-16周"}`
+	out := matchScheduleForTask(nil, &model.EvaluationTask{
+		ScheduleSnapshot: json.RawMessage(snap),
+		CourseName:       "高等数学",
+	})
+	cnt, ok := out["student_count"].(int)
+	if !ok || cnt != 125 {
+		t.Fatalf("快照路径 student_count 应为 int 125, 得到 %T %v", out["student_count"], out["student_count"])
+	}
+	if out["classroom"] != "1-101" {
+		t.Fatalf("快照路径 classroom 应为 1-101, 得到 %v", out["classroom"])
+	}
+
+	outNil := matchScheduleForTask(nil, &model.EvaluationTask{
+		ScheduleSnapshot: json.RawMessage(`{"class_info":"2403","student_count":null}`),
+		CourseName:       "无人数课程",
+	})
+	if outNil["student_count"] != nil {
+		t.Fatalf("student_count 为 null 时应返回 nil, 得到 %T %v", outNil["student_count"], outNil["student_count"])
 	}
 }

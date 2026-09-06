@@ -539,7 +539,7 @@ func matchScheduleForTask(db *gorm.DB, task *model.EvaluationTask) map[string]in
 				"class_time_text": ifNilStr(snap.ClassTimeText),
 				"classroom":       ifNilStr(snap.Classroom),
 				"class_info":      ifNilStr(snap.ClassInfo),
-				"student_count":   snap.StudentCount,
+				"student_count":   ifNilInt(snap.StudentCount),
 				"week_pattern":    ifNilStr(snap.WeekPattern),
 			}
 		}
@@ -574,7 +574,11 @@ func matchScheduleForTask(db *gorm.DB, task *model.EvaluationTask) map[string]in
 	classroom, _ := matched["classroom"].(string)
 	classInfo, _ := matched["class_info"].(string)
 	weekPattern, _ := matched["week_pattern"].(string)
-	studentCount := matched["student_count"]
+	// 课表明细里 student_count 是 *int，解出为 int/nil（指针会被导出的 fmt.Sprint 渲染成内存地址）
+	var studentCount interface{}
+	if sc, ok := matched["student_count"].(*int); ok && sc != nil {
+		studentCount = *sc
+	}
 
 	// 上课时间文本：如 "周六 第5-6节"
 	classTimeText := ""
@@ -606,6 +610,14 @@ func ifNilStr(s *string) interface{} {
 		return nil
 	}
 	return *s
+}
+
+// ifNilInt 空指针转 nil（导出/HTML 路径 fmt.Sprint 指针会打出内存地址）
+func ifNilInt(p *int) interface{} {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // weekDayNames 周一到周日，对齐前端 WEEK_DAYS

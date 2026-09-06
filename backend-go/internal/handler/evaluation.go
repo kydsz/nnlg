@@ -480,25 +480,7 @@ func renderEvaluationPDF(data map[string]interface{}, uploadDir string) ([]byte,
 	}
 	// 课表信息（与提交页一致）
 	if sch, ok := data["schedule"].(map[string]interface{}); ok {
-		scheduleRows := []struct {
-			label string
-			val   interface{}
-			unit  string
-		}{
-			{"上课时间", sch["class_time_text"], ""},
-			{"教室", sch["classroom"], ""},
-			{"班级", sch["class_info"], ""},
-			{"应到人数", sch["student_count"], "人"},
-			{"周次", sch["week_pattern"], ""},
-		}
-		for _, row := range scheduleRows {
-			if row.val == nil {
-				detail.ScheduleRows = append(detail.ScheduleRows, pdfgen.EvalInfoRow{Label: row.label, Value: "-"})
-				continue
-			}
-			val := fmt.Sprint(row.val) + row.unit
-			detail.ScheduleRows = append(detail.ScheduleRows, pdfgen.EvalInfoRow{Label: row.label, Value: val})
-		}
+		detail.ScheduleRows = buildScheduleRows(sch)
 	}
 	for _, g := range groups {
 		og := pdfgen.EvalDetailGroup{Name: g.Name, Score: g.Score, MaxScore: g.MaxScore}
@@ -512,6 +494,35 @@ func renderEvaluationPDF(data map[string]interface{}, uploadDir string) ([]byte,
 		detail.Groups = append(detail.Groups, og)
 	}
 	return pdfgen.RenderEvaluationPDF(detail, uploadDir)
+}
+
+// buildScheduleRows 课表信息 → PDF 行。解引用指针字段（如历史数据里的 *int 学生数），
+// 避免 fmt.Sprint 把指针渲染成 0x... 内存地址（线上症状「应到人数0x...人」）
+func buildScheduleRows(sch map[string]interface{}) []pdfgen.EvalInfoRow {
+	rows := []struct {
+		label string
+		val   interface{}
+		unit  string
+	}{
+		{"上课时间", sch["class_time_text"], ""},
+		{"教室", sch["classroom"], ""},
+		{"班级", sch["class_info"], ""},
+		{"应到人数", sch["student_count"], "人"},
+		{"周次", sch["week_pattern"], ""},
+	}
+	out := make([]pdfgen.EvalInfoRow, 0, len(rows))
+	for _, row := range rows {
+		val := row.val
+		if u, ok := pdfgen.DerefValue(val); ok {
+			val = u
+		}
+		if val == nil {
+			out = append(out, pdfgen.EvalInfoRow{Label: row.label, Value: "-"})
+			continue
+		}
+		out = append(out, pdfgen.EvalInfoRow{Label: row.label, Value: fmt.Sprint(val) + row.unit})
+	}
+	return out
 }
 
 func strOrEmpty(v interface{}) string {

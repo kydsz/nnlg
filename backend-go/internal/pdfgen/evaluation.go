@@ -253,17 +253,29 @@ func (b *evalPainter) drawSchedule(rows []EvalInfoRow) {
 		b.gp.Line(valX, b.y, valX, b.y+h)
 		b.gp.Line(left, b.y+h, right, b.y+h)
 		for i, ln := range lines {
-			b.text(valX+2, baseLine(b.y, h, 11)+float64(i-(len(lines)-1))/2*4.4, ln, 11, colText)
+			b.text(valX+2, baseLine(b.y, h, 11)+(float64(i)-float64(len(lines)-1)/2)*4.4, ln, 11, colText)
 		}
 		b.y += h
 	}
 	b.y += 3.0
 }
 
+// dimNameW 维度名标签列宽（mm）；dimLabelLineH 标签折行行距（10pt 字）
+const (
+	dimNameW      = 46.0
+	dimLabelPad   = 3.0
+	dimLabelLineH = 4.2
+)
+
+// dimLabelLines 维度名按标签列可用宽折行（超长维度名单行绘制会溢出画过分隔线）
+func (b *evalPainter) dimLabelLines(name string) []string {
+	return b.wrapText(name, dimNameW-2*dimLabelPad, 10)
+}
+
 // drawGroup 分组区块：组头（组名/得分 + 深蓝下划线）+ 两列维度表；跨页时重复组头（对齐打印模板 h3）
 func (b *evalPainter) drawGroup(g *EvalDetailGroup) {
 	const headH = 8.0
-	const nameW = 46.0
+	nameW := dimNameW
 	left, right := margin, pageW-margin
 	valX := left + nameW
 	valW := right - valX - 2
@@ -324,34 +336,45 @@ func (b *evalPainter) drawGroup(g *EvalDetailGroup) {
 	b.y += 3.0
 }
 
-// dimRowHeight 维度行高（文本按实际折行数、图片行按缩略图高）
+// dimRowHeight 维度行高（值按实际折行数、图片行按缩略图高；超长维度名折行抬高行高）
 func (b *evalPainter) dimRowHeight(dim *EvalDetailDim, valW float64) float64 {
+	h := 6.0
 	switch dim.FieldType {
 	case "image":
 		if len(stringSlice(dim.Value)) > 0 {
-			return 15.5
+			h = 15.5
 		}
 	case "file":
-		return 6.0
+		h = 6.0
 	default:
-		n := len(b.wrapText(dim.Display, valW, 11))
-		if n > 3 {
-			n = 3
+		// 与 drawDimRow 绘制时同宽（valW-2）折行，保证行高预算和实际行槽数一致
+		n := len(b.wrapText(dim.Display, valW-2, 11))
+		if n > 3 { // 3 行正文 + 省略号行
+			n = 4
 		}
 		if n > 1 {
-			return float64(n)*4.4 + 1.6
+			h = float64(n)*4.4 + 1.6
 		}
 	}
-	return 6.0
+	// 标签折行所需高度（单行不抬高，保持既有 6.0mm 基准）
+	if n := len(b.dimLabelLines(dim.Name)); n > 1 {
+		if lh := float64(n)*dimLabelLineH + 1.8; lh > h {
+			h = lh
+		}
+	}
+	return h
 }
 
-// drawDimRow 维度行（两列表格）：名称单元格灰底，值单元格左对齐；分数右对齐；图片缩略图、文件显示文件名
+// drawDimRow 维度行（两列表格）：名称单元格灰底折行居中，值单元格左对齐；分数右对齐；图片缩略图、文件显示文件名
 func (b *evalPainter) drawDimRow(left, right, nameW, valX, valW float64, dim *EvalDetailDim) {
 	h := b.dimRowHeight(dim, valW)
 
-	// 名称单元格（浅灰底，对齐打印模板 td 背景 #f5f7fa）
+	// 名称单元格（浅灰底，对齐打印模板 td 背景 #f5f7fa）；超长维度名折行、整块垂直居中
 	b.fillRect(left, b.y, nameW, h, colInfoBG)
-	b.text(left+3, baseLine(b.y, h, 10), dim.Name, 10, colText)
+	nameLines := b.dimLabelLines(dim.Name)
+	for i, ln := range nameLines {
+		b.text(left+dimLabelPad, baseLine(b.y, h, 10)+(float64(i)-float64(len(nameLines)-1)/2)*dimLabelLineH, ln, 10, colText)
+	}
 
 	// 名称/值分隔竖线 + 行底横线
 	b.gp.SetStrokeColor(colBorder[0], colBorder[1], colBorder[2])
@@ -376,21 +399,19 @@ func (b *evalPainter) drawDimRow(left, right, nameW, valX, valW float64, dim *Ev
 		if n > 3 {
 			n = 3
 		}
-		for i := 0; i < n; i++ {
-			b.text(valX+2, baseLine(b.y, h, 11)+float64(i-(n-1))/2*4.4, lines[i], 11, colText)
+		// 行距 4.4mm，整块（含截断省略号行）在行高内垂直居中
+		slots := float64(n)
+		if len(lines) > 3 {
+			slots++
 		}
-		if len(lines) > 3 { // 超出截断（对齐旧端 50 字截断）
-			b.text(valX+2+measureWidth(b, "…", 11), baseLine(b.y, h, 11)+4.4, "…", 11, colText)
+		for i := 0; i < n; i++ {
+			b.text(valX+2, baseLine(b.y, h, 11)+(float64(i)-(slots-1)/2)*4.4, lines[i], 11, colText)
+		}
+		if len(lines) > 3 { // 超出截断（对齐旧端 50 字截断），省略号独占末行
+			b.text(valX+2, baseLine(b.y, h, 11)+(float64(n)-(slots-1)/2)*4.4, "…", 11, colText)
 		}
 	}
 	b.y += h
-}
-
-// measureWidth 文本显示宽度（mm）
-func measureWidth(b *evalPainter, s string, pt float64) float64 {
-	b.setFont(pt)
-	w, _ := b.gp.MeasureTextWidth(s)
-	return w
 }
 
 // drawImages 图片缩略图（最多 4 张，14mm，对齐 v2 dimension-images）
@@ -436,15 +457,51 @@ func (b *evalPainter) drawFooter() {
 	b.textCenter(pageH-margin-4, "生成时间："+time.Now().Format("2006-01-02 15:04"), 9, colMuted)
 }
 
-// wrapText 按像素宽折行（CJK 逐字断行）
+// kinsokuClose 行首禁则字符：折行后不允许出现在行首的收尾标点（对齐浏览器排版禁则）
+const kinsokuClose = "，。、；：？！）】》」』…％%—”’·"
+
+// wrapText 按像素宽折行（CJK 逐字断行），并做行首禁则：
+// 若断点后下一行以收尾标点开头，把断点提前（标点前一字符下移），两行都不会超宽
 func (b *evalPainter) wrapText(s string, w float64, pt float64) []string {
 	if s == "" {
 		return []string{"-"}
 	}
 	b.setFont(pt)
-	lines, err := b.gp.SplitText(s, w)
-	if err != nil || len(lines) == 0 {
-		return []string{s}
+	rs := []rune(s)
+	width := func(from, to int) float64 {
+		wv, _ := b.gp.MeasureTextWidth(string(rs[from:to]))
+		return wv
+	}
+	var lines []string
+	start := 0
+	for i := 0; i < len(rs); {
+		if rs[i] == '\n' { // 显式换行
+			lines = append(lines, string(rs[start:i]))
+			start = i + 1
+			i++
+			continue
+		}
+		if i == len(rs)-1 || width(start, i+1) <= w {
+			i++
+			continue
+		}
+		// rs[i] 放不下，断点默认在 i；下一行行首是禁则字符则提前断行
+		brk := i
+		for brk > start+1 && strings.ContainsRune(kinsokuClose, rs[brk]) {
+			brk--
+		}
+		if brk == start { // 单字符都放不下的病态宽度，保底推进
+			brk = start + 1
+		}
+		lines = append(lines, string(rs[start:brk]))
+		start = brk
+		i = brk
+	}
+	if start < len(rs) {
+		lines = append(lines, string(rs[start:]))
+	}
+	if len(lines) == 0 {
+		lines = []string{s}
 	}
 	return lines
 }
