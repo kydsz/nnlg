@@ -26,6 +26,6 @@ export function defaultFiltersFor(semester?: string): HomeFilters {
 }
 
 /** 「我创建的」空列表需要引导提示；「全部任务」「其他创建的」维持普通空态 */
-export function showMyCreatedHint(f: HomeFilters): boolean {
-  return f.creatorFilter === 'my_created'
+export function showMyCreatedHint(creatorFilter: CreatorFilter): boolean {
+  return creatorFilter === 'my_created'
 }

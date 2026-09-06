@@ -207,7 +207,7 @@ export default function Home() {
           <ErrorBlock
             status="empty"
             title="暂无待评任务"
-            description={showMyCreatedHint(filters) ? MY_CREATED_EMPTY_HINT : ''}
+            description={showMyCreatedHint(creatorFilter) ? MY_CREATED_EMPTY_HINT : ''}
           />
         ) : isError ? (
           <ErrorBlock status="default" title="获取任务列表失败" description="" />
