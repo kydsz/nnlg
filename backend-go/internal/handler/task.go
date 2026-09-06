@@ -64,7 +64,7 @@ func (h *Task) List(c *gin.Context) {
 	// 同课评教汇总（同学期+同教师+同课程，跨任务聚合；失败降级为无汇总不阻断列表，仅记告警）
 	courseStats, err := service.CourseEvalStatsForTasks(h.db, tasks)
 	if err != nil {
-		log.Printf("同课评教汇总查询失败(降级为无汇总): %v", err)
+		log.Printf("[task] 同课评教汇总查询失败(降级为无汇总): %v", err)
 	}
 
 	// 收集本页任务下当前用户是否有草稿，便于列表展示"暂存中"标记

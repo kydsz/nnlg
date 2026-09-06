@@ -10,23 +10,23 @@ import (
 	"gorm.io/gorm"
 )
 
-// groupKey 归一化：对齐 MySQL 默认排序规则（大小写不敏感、尾随空格不敏感），
+// courseGroupKey 归一化：对齐 MySQL 默认排序规则（大小写不敏感、尾随空格不敏感），
 // 与任务创建去重口径一致（ADR-0001）
 func TestGroupKeyNormalization(t *testing.T) {
-	base := groupKey(7, "高等数学A", "2025-2026-1")
-	if base != groupKey(7, "高等数学a", "2025-2026-1") {
+	base := courseGroupKey("2025-2026-1", 7, "高等数学A")
+	if base != courseGroupKey("2025-2026-1", 7, "高等数学a") {
 		t.Fatal("课程名大小写异写应归入同一同课组")
 	}
-	if base != groupKey(7, "高等数学A  ", "2025-2026-1") {
+	if base != courseGroupKey("2025-2026-1", 7, "高等数学A  ") {
 		t.Fatal("课程名首尾空格应忽略")
 	}
-	if base == groupKey(8, "高等数学A", "2025-2026-1") {
+	if base == courseGroupKey("2025-2026-1", 8, "高等数学A") {
 		t.Fatal("不同教师不应同组")
 	}
-	if base == groupKey(7, "高等数学B", "2025-2026-1") {
+	if base == courseGroupKey("2025-2026-1", 7, "高等数学B") {
 		t.Fatal("不同课程不应同组")
 	}
-	if base == groupKey(7, "高等数学A", "2025-2026-2") {
+	if base == courseGroupKey("2025-2026-2", 7, "高等数学A") {
 		t.Fatal("不同学期不应同组")
 	}
 }
@@ -156,6 +156,45 @@ func TestCourseEvalStatsForTasks(t *testing.T) {
 		}
 		if !stat.SupervisorEvaluated || stat.EvaluatorCount != 1 {
 			t.Fatalf("汇总 = %+v, 期望督导已评且 1 人", stat)
+		}
+	})
+
+	t.Run("跨学期同课互不串组", func(t *testing.T) {
+		db := courseEvalTestDB(t)
+		sem1Task := createCourseTask(t, db, 1, "高等数学", sem1)
+		sem2Task := createCourseTask(t, db, 1, "高等数学", sem2) // 同教师同课程，下学期
+		createCourseRecord(t, db, sem1Task.ID, 101, model.RoleTeacher)
+		createCourseRecord(t, db, sem2Task.ID, 102, model.RoleTeacher)
+
+		stats, err := CourseEvalStatsForTasks(db, []model.EvaluationTask{*sem1Task, *sem2Task})
+		if err != nil {
+			t.Fatalf("汇总失败: %v", err)
+		}
+		if got := stats[sem1Task.ID].EvaluatorCount; got != 1 {
+			t.Fatalf("上学期评教人数 = %d, 期望只计上学期记录 1", got)
+		}
+		if got := stats[sem2Task.ID].EvaluatorCount; got != 1 {
+			t.Fatalf("下学期评教人数 = %d, 期望只计下学期记录 1", got)
+		}
+		if stats[sem1Task.ID].SupervisorEvaluated || stats[sem2Task.ID].SupervisorEvaluated {
+			t.Fatal("教师评教不应判督导已评")
+		}
+	})
+
+	t.Run("有学期归属零评教发零值", func(t *testing.T) {
+		db := courseEvalTestDB(t)
+		t1 := createCourseTask(t, db, 1, "高等数学", sem1) // 无任何评教记录
+
+		stats, err := CourseEvalStatsForTasks(db, []model.EvaluationTask{*t1})
+		if err != nil {
+			t.Fatalf("汇总失败: %v", err)
+		}
+		stat, ok := stats[t1.ID]
+		if !ok {
+			t.Fatal("有学期归属的任务应在结果中（零值），而非缺席为「无法统计」")
+		}
+		if stat.SupervisorEvaluated || stat.EvaluatorCount != 0 {
+			t.Fatalf("零评教汇总 = %+v, 期望零值", stat)
 		}
 	})
 

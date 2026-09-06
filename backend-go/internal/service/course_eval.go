@@ -27,13 +27,14 @@ type courseEvalGroup struct {
 
 // normalizeCourse 课程名归一化：小写、去首尾空格，显式对齐任务创建去重在 MySQL 默认
 // 排序规则下的等值语义（ADR-0001）；SQL 条件与内存分组键必须共用本函数，否则同名异写
-// 课程会被 SQL 命中、却落不进任何组（重音折叠不复制，中文课程名无实际影响）
+// 课程会被 SQL 命中、却落不进任何组（重音折叠不复制；TrimSpace 含全部空白而 MySQL
+// TRIM 仅空格，课程名场景无实际差异）
 func normalizeCourse(course string) string {
 	return strings.ToLower(strings.TrimSpace(course))
 }
 
-// groupKey 同课组键：课程名按 normalizeCourse 归一化
-func groupKey(teacherID int, course, semester string) string {
+// courseGroupKey 同课组键，参数序与键布局一致：学期|教师|课程
+func courseGroupKey(semester string, teacherID int, course string) string {
 	return semester + "|" + strconv.Itoa(teacherID) + "|" + normalizeCourse(course)
 }
 
@@ -49,24 +50,26 @@ func orderedSemesterConfigs(db *gorm.DB) ([]model.SemesterConfig, error) {
 	return cfgs, nil
 }
 
-// semesterOfTask 任务学期归属：class_time 落入某配置的 [start_date, start_date+weeks*7) 即为该学期；
-// class_time 为空或不在任何配置区间内返回 ""
-func semesterOfTask(cfgs []model.SemesterConfig, classTime *model.LocalTime) string {
+// semesterConfigOfTask 任务学期归属：class_time 落入某配置的 [start_date, start_date+周数)
+// 即为该学期（同一区间重叠时按升序取最早开学者，保证归属确定）；class_time 为空或不在
+// 任何配置区间内返回 false
+func semesterConfigOfTask(cfgs []model.SemesterConfig, classTime *model.LocalTime) (model.SemesterConfig, bool) {
 	if classTime == nil {
-		return ""
+		return model.SemesterConfig{}, false
 	}
 	ct := classTime.ToTime()
 	for _, c := range cfgs {
 		start := c.StartDate.ToTime()
 		if !ct.Before(start) && ct.Before(start.AddDate(0, 0, semesterDurationDays(c.Weeks))) {
-			return c.Semester
+			return c, true
 		}
 	}
-	return ""
+	return model.SemesterConfig{}, false
 }
 
 // CourseEvalStatsForTasks 批量计算一组任务的同课评教汇总，返回 taskID -> 汇总。
-// 无学期归属（class_time 为空或不在学期区间内）的任务不在结果中。
+// 有学期归属的任务必在结果中（零评教为零值，即确定的「未评/0 人」）；
+// 无学期归属（class_time 为空或不在学期区间内）的任务不在结果中（无法统计）。
 func CourseEvalStatsForTasks(db *gorm.DB, tasks []model.EvaluationTask) (map[int]CourseEvalStat, error) {
 	res := make(map[int]CourseEvalStat, len(tasks))
 	cfgs, err := orderedSemesterConfigs(db)
@@ -82,13 +85,12 @@ func CourseEvalStatsForTasks(db *gorm.DB, tasks []model.EvaluationTask) (map[int
 	taskGroup := map[int]string{}
 	for i := range tasks {
 		t := &tasks[i]
-		sem := semesterOfTask(cfgs, t.ClassTime)
-		if sem == "" {
+		cfg, ok := semesterConfigOfTask(cfgs, t.ClassTime)
+		if !ok {
 			continue
 		}
-		key := groupKey(t.TeacherID, t.CourseName, sem)
+		key := courseGroupKey(cfg.Semester, t.TeacherID, t.CourseName)
 		if _, ok := groups[key]; !ok {
-			cfg := semesterConfigOf(cfgs, sem)
 			start := cfg.StartDate.ToTime()
 			groups[key] = &courseEvalGroup{
 				teacherID: t.TeacherID, course: t.CourseName,
@@ -136,7 +138,11 @@ func CourseEvalStatsForTasks(db *gorm.DB, tasks []model.EvaluationTask) (map[int
 	}
 	aggs := map[string]*agg{}
 	for _, r := range rows {
-		key := groupKey(r.TeacherID, r.CourseName, semesterOfTask(cfgs, r.ClassTime))
+		cfg, ok := semesterConfigOfTask(cfgs, r.ClassTime)
+		if !ok {
+			continue
+		}
+		key := courseGroupKey(cfg.Semester, r.TeacherID, r.CourseName)
 		a := aggs[key]
 		if a == nil {
 			a = &agg{evaluatorIDs: map[int]bool{}}
@@ -148,9 +154,13 @@ func CourseEvalStatsForTasks(db *gorm.DB, tasks []model.EvaluationTask) (map[int
 		}
 	}
 	for id, key := range taskGroup {
+		// 有学期归属的任务必发汇总：零评教为零值（确定的「未评/0 人」），
+		// 缺席仅保留给无学期归属的任务（三态中的「无法统计」）
+		stat := CourseEvalStat{}
 		if a := aggs[key]; a != nil {
-			res[id] = CourseEvalStat{SupervisorEvaluated: a.supervisor, EvaluatorCount: len(a.evaluatorIDs)}
+			stat = CourseEvalStat{SupervisorEvaluated: a.supervisor, EvaluatorCount: len(a.evaluatorIDs)}
 		}
+		res[id] = stat
 	}
 	return res, nil
 }
