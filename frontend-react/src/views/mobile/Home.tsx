@@ -237,8 +237,8 @@ export default function Home() {
                   {(t.course_evaluator_count ?? 0) > 0 && (
                     <Tag color="warning" fill="outline">本课程已评 {t.course_evaluator_count} 人</Tag>
                   )}
-                  <Tag color={t.course_supervisor_evaluated ? 'success' : 'default'} fill="outline">
-                    {t.course_supervisor_evaluated ? '督导已评' : '督导未评'}
+                  <Tag color={t.has_supervisor_eval ? 'success' : 'default'} fill="outline">
+                    {t.has_supervisor_eval ? '本次督导已评' : '本次督导未评'}
                   </Tag>
                   {t.has_draft && <Tag color="danger" fill="outline">有草稿</Tag>}
                 </div>
