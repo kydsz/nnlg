@@ -27,7 +27,7 @@ func TestRedisStreamIntegration(t *testing.T) {
 	}
 
 	msgID, err := c.Publish(ctx, stream, map[string]interface{}{
-		"task_id": "123", "user_id": "456", "is_anonymous": "false",
+		"task_id": "123", "user_id": "456", "is_anonymous": true,
 		"dimension_values": `{"attitude":"5"}`,
 	})
 	if err != nil {
@@ -46,6 +46,14 @@ func TestRedisStreamIntegration(t *testing.T) {
 	}
 	if msgs[0].Values["task_id"] != "123" {
 		t.Fatalf("task_id 不符: %v", msgs[0].Values["task_id"])
+	}
+	// 端到端验证匿名标记：Go bool true 经 go-redis 序列化为 "1" 后，parseMsg 必须解析为匿名
+	var parsed EvalSubmitMsg
+	if err := parseMsg(msgs[0].Values, &parsed); err != nil {
+		t.Fatalf("parseMsg: %v", err)
+	}
+	if parsed.IsAnonymous != true {
+		t.Fatalf("is_anonymous=true 经真实序列化后应解析为匿名, 实际 %v (字段值=%#v)", parsed.IsAnonymous, msgs[0].Values["is_anonymous"])
 	}
 
 	if err := c.Ack(ctx, stream, group, msgs[0].ID); err != nil {

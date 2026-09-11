@@ -36,14 +36,19 @@ func TestConsumerLoop(t *testing.T) {
 	// 等待消费者建立 group
 	time.Sleep(500 * time.Millisecond)
 
-	// 生产 2 条
-	for i := 0; i < 2; i++ {
-		if _, err := c.Publish(ctx, c.StreamName, map[string]interface{}{
-			"task_id": "1", "user_id": "1", "is_anonymous": "false",
-			"dimension_values": `{"x":"1"}`,
-		}); err != nil {
-			t.Fatalf("Publish: %v", err)
-		}
+	// 生产 2 条：一条 is_anonymous=true（Go bool）、一条 false
+	// 覆盖真实 bool 序列化 → 解析的完整路径
+	if _, err := c.Publish(ctx, c.StreamName, map[string]interface{}{
+		"task_id": "1", "user_id": "1", "is_anonymous": true,
+		"dimension_values": `{"x":"1"}`,
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if _, err := c.Publish(ctx, c.StreamName, map[string]interface{}{
+		"task_id": "2", "user_id": "2", "is_anonymous": false,
+		"dimension_values": `{"x":"2"}`,
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
 	}
 
 	// 等待消费
@@ -61,6 +66,10 @@ func TestConsumerLoop(t *testing.T) {
 	}
 	if len(got[1].DimensionValues) == 0 {
 		t.Fatal("DimensionValues 为空")
+	}
+	// 匿名标记经真实 bool 序列化后必须正确解析
+	if got[0].IsAnonymous != true || got[1].IsAnonymous != false {
+		t.Fatalf("is_anonymous 解析错误: got[0]=%v got[1]=%v", got[0].IsAnonymous, got[1].IsAnonymous)
 	}
 
 	// Pending 应归零（都被 ACK）
@@ -162,6 +171,44 @@ func TestDeadLetterSweep(t *testing.T) {
 	// 清理
 	c.rdb.Del(ctx, stream, dead)
 	t.Log("死信机制 + 自动重放一次 验证通过")
+}
+
+// 单元测试 parseMsg 的匿名标记解析（不依赖 Redis）。
+// 生产端以 Go bool 写入 Stream，经 go-redis 序列化为整数 1/0，读取端读回字符串 "1"/"0"；
+// 测试覆盖该真实序列化形态，以及显式字符串与直接 bool 的防御性形态。
+func TestParseMsgAnonymous(t *testing.T) {
+	base := map[string]interface{}{
+		"task_id": "1", "user_id": "1", "dimension_values": `{"x":"1"}`,
+	}
+	cases := []struct {
+		name string
+		val  interface{}
+		want bool
+	}{
+		{"bool true（防御）", true, true},
+		{"bool false（防御）", false, false},
+		{"字符串 true", "true", true},
+		{"字符串 false", "false", false},
+		{"整数 1（真实序列化形态）", "1", true},
+		{"整数 0（真实序列化形态）", "0", false},
+		{"未知字符串按 false 处理", "yes", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			values := make(map[string]interface{}, len(base)+1)
+			for k, v := range base {
+				values[k] = v
+			}
+			values["is_anonymous"] = tc.val
+			var msg EvalSubmitMsg
+			if err := parseMsg(values, &msg); err != nil {
+				t.Fatalf("parseMsg: %v", err)
+			}
+			if msg.IsAnonymous != tc.want {
+				t.Fatalf("is_anonymous=%v (%T) 解析为 %v, 期望 %v", tc.val, tc.val, msg.IsAnonymous, tc.want)
+			}
+		})
+	}
 }
 
 // 单元测试 isDeadLetter 判定逻辑（不依赖 Redis）：

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -185,7 +186,7 @@ func parseMsg(values map[string]interface{}, msg *EvalSubmitMsg) error {
 		return err
 	}
 	if v, ok := values["is_anonymous"]; ok {
-		anon = v == "true" || v == true
+		anon = boolFromStream(v)
 	}
 	dv, ok := values["dimension_values"]
 	if !ok {
@@ -219,4 +220,33 @@ func intField(values map[string]interface{}, key string) (int, error) {
 		return int(n), nil
 	}
 	return 0, fmt.Errorf("%s 类型不支持: %T", key, v)
+}
+
+// boolFromStream 读取流字段的布尔值。go-redis 读取端统一返回 string；
+// 生产端写 Go bool 时经序列化变为 "1"/"0"，显式字符串则为 "true"/"false"。
+// 为兼容入队/在途两种形态（并防御直接 bool/数值），支持 string、bool、数值三种。
+// 无法识别时按 false 处理：该字段只影响匿名脱敏，不阻塞消费。
+func boolFromStream(v interface{}) bool {
+	switch b := v.(type) {
+	case bool:
+		return b
+	case string:
+		switch strings.ToLower(strings.TrimSpace(b)) {
+		case "1", "true":
+			return true
+		case "0", "false":
+			return false
+		}
+		return false
+	case json.Number:
+		n, err := b.Int64()
+		return err == nil && n != 0
+	case float64:
+		return b != 0
+	case int:
+		return b != 0
+	case int64:
+		return b != 0
+	}
+	return false
 }

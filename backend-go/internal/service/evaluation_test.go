@@ -34,6 +34,44 @@ func evaluationTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// 异步消费者攒批落库时，匿名标记必须原样写入 evaluation_record.is_anonymous
+// （issue #13 验收 1/3 的"落库"级断言：解析出的 IsAnonymous 需贯穿到 DB 行）。
+func TestPersistBatchKeepsAnonymous(t *testing.T) {
+	db := evaluationTestDB(t)
+	teacher := model.User{UserNo: "T001", Username: "被评教师", Role: model.RoleTeacher, CollegeID: intPtr(5), Status: 1}
+	if err := db.Create(&teacher).Error; err != nil {
+		t.Fatalf("建教师失败: %v", err)
+	}
+	viewer := model.User{UserNo: "T002", Username: "评教人", Role: model.RoleTeacher, CollegeID: intPtr(5), Status: 1}
+	if err := db.Create(&viewer).Error; err != nil {
+		t.Fatalf("建评教人失败: %v", err)
+	}
+	task := model.EvaluationTask{
+		TeacherID: teacher.ID, TeacherName: teacher.Username, CourseName: "大学英语",
+		Status: model.TaskStatusPending, CreateBy: intPtr(teacher.ID),
+	}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("建任务失败: %v", err)
+	}
+
+	svc := NewEvaluation()
+	if err := svc.PersistBatch(db, []PendingSubmit{{
+		MsgID: "m1", Task: task, EvaluatorRole: model.RoleTeacher,
+		Params: SubmitParams{TaskID: task.ID, IsAnonymous: true, DimensionValues: map[string]interface{}{"score1": 90.0}},
+		Viewer: &viewer,
+	}}); err != nil {
+		t.Fatalf("PersistBatch: %v", err)
+	}
+
+	var rec model.EvaluationRecord
+	if err := db.First(&rec).Error; err != nil {
+		t.Fatalf("读取落库记录: %v", err)
+	}
+	if !rec.IsAnonymous {
+		t.Fatalf("匿名评教经 PersistBatch 落库后 is_anonymous 应为 true, 实际 false")
+	}
+}
+
 // 多角色用户（user_role 同时有 teacher + supervisor，主角色列为 teacher）提交评教：
 // 应记为督导评教（记录角色=督导、任务置 has_supervisor_eval），对齐督导权限分支
 func TestSubmitMultiRoleSupervisor(t *testing.T) {
