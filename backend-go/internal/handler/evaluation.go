@@ -37,6 +37,19 @@ func NewEvaluationHandler(cfg *config.Config, db *gorm.DB) *Evaluation {
 	return &Evaluation{db: db, svc: service.NewEvaluation(), uploadDir: cfg.UploadDir}
 }
 
+// dupKeyOf 提交幂等键（key=task:user）
+func dupKeyOf(taskID, userID int) string {
+	return fmt.Sprintf("tev:dup:%d:%d", taskID, userID)
+}
+
+// releaseDupKey 释放提交幂等键（Redis 未启用时静默）。提交未成功落库时调用，
+// 允许用户立即重试，而不是被 30 分钟 TTL 锁定。
+func releaseDupKey(c *gin.Context, taskID, userID int) {
+	if rdb := cache.GetClient(); rdb != nil && rdb.Enabled {
+		rdb.Del(c.Request.Context(), dupKeyOf(taskID, userID))
+	}
+}
+
 // Submit 提交评教
 // 高并发场景：先做同步校验，再入 Redis Stream 异步落库，秒级返回成功。
 // Redis 不可用（未配置或异常）时自动降级为原同步落库，保证功能不中断。
@@ -101,9 +114,9 @@ func (h *Evaluation) Submit(c *gin.Context) {
 			})
 			return
 		}
-		// 秒回成功（异步落库，数据稍后可见）
+		// 秒回成功（异步落库，数据稍后可见；id/total_score 待落库后由列表接口回填，此处占位对齐结构）
 		response.OKMsg(c, "提交成功", gin.H{
-			"task_id": p.TaskID, "submit_time": FTime(model.LocalTimePtr(time.Now())),
+			"id": nil, "task_id": p.TaskID, "submit_time": FTime(model.LocalTimePtr(time.Now())),
 			"total_score": nil, "queued": true,
 		})
 		return
@@ -319,6 +332,8 @@ func (h *Evaluation) SubmitWithFiles(c *gin.Context) {
 		TaskID: taskID, DimensionValues: values, IsAnonymous: isAnonymous,
 	})
 	if err != nil {
+		// 落库失败：释放幂等键，允许用户立即重试（而不是被锁 30 分钟）
+		releaseDupKey(c, taskID, u.ID)
 		badReq(c, err.Error())
 		return
 	}
@@ -349,6 +364,8 @@ func (h *Evaluation) SubmitWithFiles(c *gin.Context) {
 			values[code] = urls
 		}
 		if err := h.svc.UpdateDimValues(h.db, rec.ID, values); err != nil {
+			// 附件信息回写失败：释放幂等键，允许用户删除记录后重新提交（而非锁 30 分钟）
+			releaseDupKey(c, taskID, u.ID)
 			serverErr(c, "附件信息保存失败")
 			return
 		}
@@ -377,9 +394,9 @@ func (h *Evaluation) Delete(c *gin.Context) {
 	}
 	// 操作日志：记录被删评教的教师/课程/评教人等上下文，便于审计追查
 	content := map[string]interface{}{
-		"task_id":       rec.TaskID,
+		"task_id":        rec.TaskID,
 		"evaluator_name": rec.EvaluatorName,
-		"is_anonymous":  rec.IsAnonymous,
+		"is_anonymous":   rec.IsAnonymous,
 	}
 	if rec.SubmitTime != nil {
 		content["submit_time"] = rec.SubmitTime
@@ -581,7 +598,10 @@ th{background:#eef3fa}.meta td:first-child{width:120px;background:#f7f9fc;font-w
 	// 课表信息（与提交页一致：上课时间/教室/班级/应到人数/周次）
 	if sch, ok := d["schedule"].(map[string]interface{}); ok {
 		b.WriteString(`<table class="meta">`)
-		rows := []struct{ k string; v interface{} }{
+		rows := []struct {
+			k string
+			v interface{}
+		}{
 			{"上课时间", sch["class_time_text"]},
 			{"教室", sch["classroom"]},
 			{"班级", sch["class_info"]},

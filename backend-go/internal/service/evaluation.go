@@ -20,6 +20,19 @@ type Evaluation struct{}
 
 func NewEvaluation() *Evaluation { return &Evaluation{} }
 
+// 幂等冲突判定：优先 gorm.ErrDuplicatedKey（mysql/sqlite 驱动各自翻译）；
+// 兜底按通用字符串匹配，兼容未被驱动翻译的唯一约束错误原文。
+func isDupKeyErr(err error) bool {
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate") || strings.Contains(msg, "unique constraint failed")
+}
+
 // SubmitParams 提交评教参数
 type SubmitParams struct {
 	TaskID          int                    `json:"task_id"`
@@ -180,6 +193,16 @@ func (s *Evaluation) PersistSubmit(db *gorm.DB, task model.EvaluationTask, evalu
 
 	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&rec).Error; err != nil {
+			// 并发/重放下 (task_id, evaluator_id) 唯一索引冲突：视为幂等成功。
+			// 另一份已落库，直接以既有记录为准（不报错、不重复计数，不再清草稿/累加）。
+			if isDupKeyErr(err) {
+				rec = model.EvaluationRecord{}
+				if err := tx.Where("task_id = ? AND evaluator_id = ? AND is_deleted = 0", task.ID, viewer.ID).
+					First(&rec).Error; err != nil {
+					return err
+				}
+				return nil
+			}
 			return err
 		}
 		// 提交成功即清掉同一任务同一评教人的草稿（需重填则重新暂存）
@@ -225,22 +248,33 @@ func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
-		// 1) 批量插入记录
-		recs := make([]model.EvaluationRecord, 0, len(items))
+		// 1) 逐条插入记录：并发/重放下 (task_id, evaluator_id) 唯一索引冲突
+		//    视为幂等成功（该条已由另一份提交落库），跳过该条但不影响批内其它消息；
+		//    避免整批因一条重复而回滚、其余正常消息被滞留重试。
+		var recs []model.EvaluationRecord
+		inserted := map[string]bool{} // MsgID -> 已落库（用于聚合与去重）
 		for _, it := range items {
 			raw, err := marshalJSON(it.Params.DimensionValues)
 			if err != nil {
 				return err
 			}
-			recs = append(recs, model.EvaluationRecord{
+			rec := model.EvaluationRecord{
 				TaskID: it.Task.ID, EvaluatorID: IPtr(it.Viewer.ID), EvaluatorName: it.Viewer.Username,
 				EvaluatorRole: it.EvaluatorRole, IsAnonymous: it.Params.IsAnonymous,
 				SubmitTime:      model.LocalTimePtr(now),
 				DimensionValues: raw,
-			})
+			}
+			if err := tx.Create(&rec).Error; err != nil {
+				if isDupKeyErr(err) {
+					continue // 已提交过本任务，跳过
+				}
+				return err
+			}
+			recs = append(recs, rec)
+			inserted[it.MsgID] = true
 		}
-		if err := tx.Create(&recs).Error; err != nil {
-			return err
+		if len(recs) == 0 {
+			return nil
 		}
 		// 提交成功即清掉同一任务同一评教人的草稿（需重填则重新暂存）；按 item 逐个删，量小
 		for _, it := range items {
@@ -257,6 +291,9 @@ func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
 		}
 		byTask := map[int]*agg{}
 		for _, it := range items {
+			if !inserted[it.MsgID] {
+				continue // 唯一冲突跳过的条目不计数
+			}
 			a, ok := byTask[it.Task.ID]
 			if !ok {
 				a = &agg{}

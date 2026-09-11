@@ -11,6 +11,23 @@ import (
 
 // ============ Stream 消费者组 ============
 
+// streamMaxLen 主队列近似最大长度：已 ACK 消息若不清理会永久留在 Stream，
+// Redis 内存随提交量线性增长直至 OOM。采用 XTRIM MAXLEN~ 近似裁剪（性能优先），
+// 保留最近 N 条已确认消息（消息量远超阈值时按近似长度裁掉头部）。
+const streamMaxLen = 100000
+
+// deadStreamMaxLen 死信流近似最大长度：死信人工重放后消息已被 XDEL 清理，
+// 此值兜底"长期未处理死信"的积压上限，避免死信流无限增长。
+const deadStreamMaxLen = 50000
+
+// Trim 对指定流做近似裁剪（XTRIM MAXLEN~），控制内存占用。流不存在时静默。
+func (c *Client) Trim(ctx context.Context, stream string, maxLen int64) {
+	if !c.Enabled {
+		return
+	}
+	_ = c.rdb.XTrimMaxLenApprox(ctx, stream, maxLen, 0).Err()
+}
+
 // EnsureGroup 确保消费者组存在（幂等，首次调用自动创建）。
 func (c *Client) EnsureGroup(ctx context.Context, stream, group string) error {
 	if !c.Enabled {
@@ -128,6 +145,7 @@ func (c *Client) PendingSummary(ctx context.Context, stream, group string, count
 //     给提交第二次机会；重放副本携带 _replay_count=1。
 //   - 再次进入死信（源消息已带 _replay_count）→ 已经自动重放过仍失败，写入死信流后**不再自动重放**，
 //     滞留待人工通过 ReplayDead 处理。
+//
 // 无论哪种情况都不丢数据：原消息先写死信流、再 ACK；AOF 落盘保护。
 func (c *Client) MoveToDead(ctx context.Context, stream, group, consumer string, ids []string, retries map[string]int64) error {
 	if !c.Enabled || len(ids) == 0 {
@@ -138,9 +156,11 @@ func (c *Client) MoveToDead(ctx context.Context, stream, group, consumer string,
 	// 认领失败的消息跳过，等待下轮清扫；成功挪入死信流 + ACK。
 	var moved []string
 	for _, id := range ids {
+		// MinIdle=sweepInterval/2：只认领"空闲超过半个清扫周期"的消息，避免
+		// 抢走正在被主消费者处理、尚未超阈值的新消息（原 MinIdle=0 会误认领）。
 		claimed, _, err := c.rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
 			Stream: stream, Group: group, Consumer: consumer,
-			MinIdle: 0, Start: id, Count: 1,
+			MinIdle: sweepInterval / 2, Start: id, Count: 1,
 		}).Result()
 		if err != nil {
 			log.Printf("[consumer] 认领死信消息失败 id=%s: %v", id, err)
@@ -191,13 +211,16 @@ func (c *Client) MoveToDead(ctx context.Context, stream, group, consumer string,
 	}
 	if len(moved) > 0 {
 		log.Printf("[consumer] %d 条消息判定为死信，已挪入 %s（首次自动重放，二次滞留待人工）: %v", len(moved), deadStream, moved)
+		// 死信流近似裁剪，防止长期未处理死信积压撑爆内存（AC4）
+		c.Trim(ctx, deadStream, deadStreamMaxLen)
 	}
 	return nil
 }
 
 // ReplayDead 将死信流中的消息重新投递回主队列（人工补偿）。
-// 返回重放的消息数。剥离所有死信元信息（_dead_at/_retry_count/_replay_count），
-// 重新以全新状态 XADD 到目标流，避免重复触发自动重放。
+// 重放成功即从死信流删除该消息（XDEL），避免重复点击"重放死信"反复提交；
+// 崩溃窗口由 DB 唯一约束兜底（重放副本若已落库，消费者按幂等成功处理）。
+// 返回重放的消息数。
 func (c *Client) ReplayDead(ctx context.Context, deadStream, targetStream string, count int64) (int64, error) {
 	if !c.Enabled {
 		return 0, redis.Nil
@@ -218,6 +241,10 @@ func (c *Client) ReplayDead(ctx context.Context, deadStream, targetStream string
 		if err := c.rdb.XAdd(ctx, &redis.XAddArgs{Stream: targetStream, Values: vals}).Err(); err != nil {
 			log.Printf("[consumer] 死信重放失败 id=%s: %v", m.ID, err)
 			continue
+		}
+		// 重放成功即删除死信原消息：保证重复点击重放不会重复入队
+		if err := c.rdb.XDel(ctx, deadStream, m.ID).Err(); err != nil {
+			log.Printf("[consumer] 死信重放后删除原消息失败 id=%s: %v", m.ID, err)
 		}
 		replayed++
 	}

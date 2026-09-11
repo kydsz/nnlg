@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -56,17 +57,37 @@ func (c *Client) RunConsumer(ctx context.Context, db *gorm.DB, persist PersistFu
 	}
 
 	consumerName := fmt.Sprintf("consumer-%d", time.Now().UnixNano())
+	// 启动时对主队列与死信流做近似裁剪，控制已确认消息积累导致的内存增长（AC4）
+	c.Trim(ctx, c.StreamName, streamMaxLen)
+	c.Trim(ctx, c.DeadStream(c.StreamName), deadStreamMaxLen)
 	// 启动周期性清扫 goroutine：把投递次数超阈值、卡在 Pending 的消息挪入死信流。
 	c.startSweeper(ctx, c.StreamName, evalGroup, consumerName)
-	go func() {
-		log.Printf("[consumer] 消费者 %s 启动，stream=%s", consumerName, c.StreamName)
-		for {
+	go c.runConsumerLoop(ctx, db, persist, consumerName)
+}
+
+// runConsumerLoop 消费者主循环（独立 goroutine，顶层 panic 恢复：进程不崩溃、记录堆栈，
+// 短暂退避后自动重启循环继续消费——自愈而非永久停止导致消息滞留）。
+func (c *Client) runConsumerLoop(ctx context.Context, db *gorm.DB, persist PersistFunc, consumerName string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[consumer] 消费者 %s panic: %v\n%s", consumerName, r, debug.Stack())
+			// 自愈：退避后重启消费循环（panic 多为一次性数据问题，重启可继续兜底）
 			select {
 			case <-ctx.Done():
-				log.Println("[consumer] 消费者退出")
-				return
-			default:
+			case <-time.After(2 * time.Second):
+				go c.runConsumerLoop(ctx, db, persist, consumerName)
 			}
+		}
+	}()
+	log.Printf("[consumer] 消费者 %s 启动，stream=%s", consumerName, c.StreamName)
+	batchCount := int64(0)
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("[consumer] 消费者退出")
+			return
+		default:
+		}
 		msgs, err := c.Consume(ctx, c.StreamName, evalGroup, consumerName, 50, 2*time.Second)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -83,37 +104,58 @@ func (c *Client) RunConsumer(ctx context.Context, db *gorm.DB, persist PersistFu
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-			if len(msgs) == 0 {
-				continue
+		if len(msgs) == 0 {
+			continue
+		}
+		// 周期性清理已确认消息：XACK 只从 Pending 移除、消息体保留在 Stream，
+		// 需 XTRIM 控制内存（近似裁剪，每 100 批一次开销可忽略）。
+		batchCount++
+		if batchCount%100 == 0 {
+			c.Trim(ctx, c.StreamName, streamMaxLen)
+		}
+		// 解析全部消息；解析失败的消息直接确认（避免死循环），
+		// 与批量处理返回的 ACK 集合合并，避免同批成功项覆盖解析失败项。
+		parsed, ackIDs := parseAndMergeAck(msgs, func(m XMessage) (EvalSubmitMsg, error) {
+			var msg EvalSubmitMsg
+			if err := parseMsg(m.Values, &msg); err != nil {
+				return msg, err
 			}
-			// 解析全部消息
-			var parsed []EvalSubmitMsg
-			var ackIDs []string
-			for _, m := range msgs {
-				var msg EvalSubmitMsg
-				if err := parseMsg(m.Values, &msg); err != nil {
-					log.Printf("[consumer] 消息解析失败 id=%s: %v", m.ID, err)
-					ackIDs = append(ackIDs, m.ID) // 无法解析的消息直接确认，避免死循环
-					continue
-				}
-				msg.MsgID = m.ID
-				parsed = append(parsed, msg)
-			}
-			if len(parsed) == 0 {
-				if len(ackIDs) > 0 {
-					c.Ack(ctx, c.StreamName, evalGroup, ackIDs...)
-				}
-				continue
-			}
+			msg.MsgID = m.ID
+			return msg, nil
+		})
+		if len(parsed) > 0 {
 			// 应用层批量处理，返回应确认的 ID
-			ackIDs = persist(ctx, db, parsed)
-			if len(ackIDs) > 0 {
-				if err := c.Ack(ctx, c.StreamName, evalGroup, ackIDs...); err != nil {
-					log.Printf("[consumer] ACK 失败: %v", err)
-				}
+			for _, id := range persist(ctx, db, parsed) {
+				ackIDs[id] = true
 			}
 		}
-	}()
+		if len(ackIDs) > 0 {
+			ids := make([]string, 0, len(ackIDs))
+			for id := range ackIDs {
+				ids = append(ids, id)
+			}
+			if err := c.Ack(ctx, c.StreamName, evalGroup, ids...); err != nil {
+				log.Printf("[consumer] ACK 失败: %v", err)
+			}
+		}
+	}
+}
+
+// parseAndMergeAck 解析一批消息并合并"解析失败需确认"的 ID 集合。
+// 返回可处理的消息切片与 ACK 集合（键为消息 ID）。独立成纯函数便于单测。
+func parseAndMergeAck(msgs []XMessage, parse func(XMessage) (EvalSubmitMsg, error)) ([]EvalSubmitMsg, map[string]bool) {
+	var parsed []EvalSubmitMsg
+	ack := map[string]bool{}
+	for _, m := range msgs {
+		msg, err := parse(m)
+		if err != nil {
+			log.Printf("[consumer] 消息解析失败 id=%s: %v", m.ID, err)
+			ack[m.ID] = true // 无法解析的消息直接确认，避免死循环
+			continue
+		}
+		parsed = append(parsed, msg)
+	}
+	return parsed, ack
 }
 
 // startSweeper 启动周期性清扫：认领 Pending 中投递次数超过 maxDelivery 的消息并挪入死信流。
@@ -123,6 +165,11 @@ func (c *Client) startSweeper(ctx context.Context, stream, group, consumer strin
 		return
 	}
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[consumer] 清扫 goroutine panic: %v\n%s", r, debug.Stack())
+			}
+		}()
 		ticker := time.NewTicker(sweepInterval)
 		defer ticker.Stop()
 		for {
@@ -163,8 +210,8 @@ func (c *Client) sweepOnce(ctx context.Context, stream, group, consumer string) 
 }
 
 // isDeadLetter 判定一条 Pending 消息是否为死信。满足其一即判死信：
-//  1) 投递次数超阈值（RetryCount >= maxDelivery）：反复处理仍失败，大概率永远无法成功。
-//  2) 停留时长超阈值（Idle >= maxIdleTime）：卡在 Pending 过久（如消费者长期未启动/崩溃），
+//  1. 投递次数超阈值（RetryCount >= maxDelivery）：反复处理仍失败，大概率永远无法成功。
+//  2. 停留时长超阈值（Idle >= maxIdleTime）：卡在 Pending 过久（如消费者长期未启动/崩溃），
 //     用户已离开提交页，这条评教再落库意义不大，挪入死信流告警而非静默滞留。
 func isDeadLetter(p redis.XPendingExt) bool {
 	return p.RetryCount >= maxDelivery || p.Idle >= maxIdleTime
