@@ -574,7 +574,7 @@ th{background:#eef3fa}.meta td:first-child{width:120px;background:#f7f9fc;font-w
 		if row.v == "<nil>" {
 			row.v = "-"
 		}
-		fmt.Fprintf(&b, "<tr><td>%s</td><td>%s</td></tr>", row.k, row.v)
+		fmt.Fprintf(&b, "<tr><td>%s</td><td>%s</td></tr>", row.k, html.EscapeString(row.v))
 	}
 	b.WriteString(`</table>`)
 
@@ -596,14 +596,14 @@ th{background:#eef3fa}.meta td:first-child{width:120px;background:#f7f9fc;font-w
 					val = val + "人"
 				}
 			}
-			fmt.Fprintf(&b, "<tr><td>%s</td><td>%s</td></tr>", row.k, val)
+			fmt.Fprintf(&b, "<tr><td>%s</td><td>%s</td></tr>", row.k, html.EscapeString(val))
 		}
 		b.WriteString(`</table>`)
 	}
 
 	if groups, ok := d["dimension_groups"].([]service.ExportGroup); ok {
 		for _, g := range groups {
-			fmt.Fprintf(&b, "<h3>%s", g.Name)
+			fmt.Fprintf(&b, "<h3>%s", html.EscapeString(g.Name))
 			if g.MaxScore > 0 {
 				fmt.Fprintf(&b, `（%g / %g 分）`, g.Score, g.MaxScore)
 			}
