@@ -279,6 +279,9 @@ func (s *User) Update(db *gorm.DB, caller *model.User, id int, p UpdateUserParam
 	if err != nil {
 		return nil, err
 	}
+	if err := checkTargetUser(caller, u); err != nil {
+		return nil, err
+	}
 
 	var newRoles []string
 	if p.Roles != nil {
@@ -296,9 +299,19 @@ func (s *User) Update(db *gorm.DB, caller *model.User, id int, p UpdateUserParam
 		updates["username"] = *p.Username
 	}
 	if p.CollegeID != nil {
+		if err := checkManageScope(caller, p.CollegeID); err != nil {
+			return nil, errors.New("无权将该用户归属到该学院")
+		}
 		updates["college_id"] = *p.CollegeID
 	}
 	if p.ResearchRoomID != nil {
+		var room model.ResearchRoom
+		if err := db.First(&room, *p.ResearchRoomID).Error; err != nil {
+			return nil, errors.New("教研室不存在")
+		}
+		if err := checkRoomScope(caller, &room); err != nil {
+			return nil, errors.New("无权将该用户归属到该教研室的学院")
+		}
 		updates["research_room_id"] = *p.ResearchRoomID
 	}
 	if p.Status != nil {
@@ -369,9 +382,12 @@ func (s *User) Update(db *gorm.DB, caller *model.User, id int, p UpdateUserParam
 }
 
 // Delete 删除用户及其关联（硬删除）
-func (s *User) Delete(db *gorm.DB, id int) error {
+func (s *User) Delete(db *gorm.DB, caller *model.User, id int) error {
 	u, err := s.GetByID(db, id)
 	if err != nil {
+		return err
+	}
+	if err := checkTargetUser(caller, u); err != nil {
 		return err
 	}
 	if s.isAdminUser(db, u) && u.Status == 1 && s.activeAdminCount(db, u.ID) == 0 {
@@ -457,6 +473,9 @@ func (s *User) AddRole(db *gorm.DB, caller *model.User, userID int, role string)
 	if err != nil {
 		return err
 	}
+	if err := checkTargetUser(caller, u); err != nil {
+		return err
+	}
 	if err := checkRoleAssignable(db, caller, []string{role}); err != nil {
 		return errors.New("无权分配 " + role + " 角色")
 	}
@@ -477,15 +496,15 @@ func (s *User) AddRole(db *gorm.DB, caller *model.User, userID int, role string)
 
 // RemoveRole 移除用户角色（至少保留一个）
 func (s *User) RemoveRole(db *gorm.DB, caller *model.User, userID int, role string) error {
-	if _, err := s.GetByID(db, userID); err != nil {
+	u, err := s.GetByID(db, userID)
+	if err != nil {
+		return err
+	}
+	if err := checkTargetUser(caller, u); err != nil {
 		return err
 	}
 	if err := checkRoleAssignable(db, caller, []string{role}); err != nil {
 		return errors.New("无权移除 " + role + " 角色")
-	}
-	var u model.User
-	if err := db.Preload("UserRoles").First(&u, userID).Error; err != nil {
-		return errors.New("用户不存在")
 	}
 	if len(u.RoleCodes()) <= 1 {
 		return errors.New("用户至少需要一个角色")
@@ -516,10 +535,14 @@ func (s *User) RemoveRole(db *gorm.DB, caller *model.User, userID int, role stri
 
 // AddCollege 加入督导学院
 func (s *User) AddCollege(db *gorm.DB, caller *model.User, userID, collegeID int) error {
-	if _, err := s.GetByID(db, userID); err != nil {
+	u, err := s.GetByID(db, userID)
+	if err != nil {
 		return err
 	}
-	if !caller.HasRole(model.RoleSystemAdmin) && !caller.HasCollegeID(collegeID) {
+	if err := checkTargetUser(caller, u); err != nil {
+		return err
+	}
+	if err := checkManageScope(caller, &collegeID); err != nil {
 		return errors.New("无权管理该学院")
 	}
 	var college model.College
@@ -537,10 +560,14 @@ func (s *User) AddCollege(db *gorm.DB, caller *model.User, userID, collegeID int
 
 // RemoveCollege 移出督导学院
 func (s *User) RemoveCollege(db *gorm.DB, caller *model.User, userID, collegeID int) error {
-	if _, err := s.GetByID(db, userID); err != nil {
+	u, err := s.GetByID(db, userID)
+	if err != nil {
 		return err
 	}
-	if !caller.HasRole(model.RoleSystemAdmin) && !caller.HasCollegeID(collegeID) {
+	if err := checkTargetUser(caller, u); err != nil {
+		return err
+	}
+	if err := checkManageScope(caller, &collegeID); err != nil {
 		return errors.New("无权管理该学院")
 	}
 	res := db.Where("user_id = ? AND college_id = ?", userID, collegeID).Delete(&model.UserCollege{})
@@ -555,12 +582,19 @@ func (s *User) RemoveCollege(db *gorm.DB, caller *model.User, userID, collegeID 
 
 // AddRoom 加入教研室
 func (s *User) AddRoom(db *gorm.DB, caller *model.User, userID, roomID int) error {
-	if _, err := s.GetByID(db, userID); err != nil {
+	u, err := s.GetByID(db, userID)
+	if err != nil {
+		return err
+	}
+	if err := checkTargetUser(caller, u); err != nil {
 		return err
 	}
 	var room model.ResearchRoom
 	if err := db.First(&room, roomID).Error; err != nil {
 		return errors.New("教研室不存在")
+	}
+	if err := checkRoomScope(caller, &room); err != nil {
+		return err
 	}
 	var cnt int64
 	db.Model(&model.UserRoom{}).Where("user_id = ? AND research_room_id = ?", userID, roomID).Count(&cnt)
@@ -573,7 +607,18 @@ func (s *User) AddRoom(db *gorm.DB, caller *model.User, userID, roomID int) erro
 
 // RemoveRoom 移出教研室
 func (s *User) RemoveRoom(db *gorm.DB, caller *model.User, userID, roomID int) error {
-	if _, err := s.GetByID(db, userID); err != nil {
+	u, err := s.GetByID(db, userID)
+	if err != nil {
+		return err
+	}
+	if err := checkTargetUser(caller, u); err != nil {
+		return err
+	}
+	var room model.ResearchRoom
+	if err := db.First(&room, roomID).Error; err != nil {
+		return errors.New("教研室不存在")
+	}
+	if err := checkRoomScope(caller, &room); err != nil {
 		return err
 	}
 	res := db.Where("user_id = ? AND research_room_id = ?", userID, roomID).Delete(&model.UserRoom{})
@@ -687,6 +732,48 @@ func containsInt(list []int, v int) bool {
 		}
 	}
 	return false
+}
+
+// checkTargetUser 用户管理数据范围与管理员保护统一入口：
+// 1) 非 system_admin 不得操作系统管理员；2) 目标用户主学院/督导学院
+// 至少一个在调用者可访问学院范围内（全校范围视为可操作任意用户）。
+func checkTargetUser(caller, target *model.User) error {
+	if caller.HasRole(model.RoleSystemAdmin) {
+		return nil
+	}
+	if target.HasRole(model.RoleSystemAdmin) {
+		return errors.New("无权操作系统管理员")
+	}
+	ids := AccessibleCollegeIDs(caller)
+	if ids == nil {
+		return nil // 全校数据范围
+	}
+	if target.CollegeID != nil && containsInt(ids, *target.CollegeID) {
+		return nil
+	}
+	for _, uc := range target.UserColleges {
+		if containsInt(ids, uc.CollegeID) {
+			return nil
+		}
+	}
+	return errors.New("目标用户不在您的管理范围内")
+}
+
+// checkManageScope 校验调用者对目标单位（学院/教研室）的管理范围；
+// 教研室按所属学院判定，全校数据范围视为任意单位均可。
+func checkManageScope(caller *model.User, collegeID *int) error {
+	if !CollegeInScope(caller, collegeID) {
+		return errors.New("无权管理该单位")
+	}
+	return nil
+}
+
+// checkRoomScope 校验教研室存在且所属学院在调用者管理范围内
+func checkRoomScope(caller *model.User, room *model.ResearchRoom) error {
+	if !CollegeInScope(caller, &room.CollegeID) {
+		return errors.New("无权管理该教研室")
+	}
+	return nil
 }
 
 // timeNow 当前时间指针

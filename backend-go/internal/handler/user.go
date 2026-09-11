@@ -131,7 +131,7 @@ func (h *User) Delete(c *gin.Context) {
 		return
 	}
 	caller := middleware.CurrentUser(c)
-	if err := h.svc.Delete(h.db, id); err != nil {
+	if err := h.svc.Delete(h.db, caller, id); err != nil {
 		badReq(c, err.Error())
 		return
 	}
