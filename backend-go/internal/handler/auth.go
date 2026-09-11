@@ -82,17 +82,25 @@ func (h *Auth) Login(c *gin.Context) {
 	user.UpdateTime = model.LocalTimePtr(now)
 	invalidateUserAuth(c, user.ID)
 
-	epoch := cache.GetClient().GetSessionEpoch(c.Request.Context(), user.ID)
+	epoch := user.SessionEpoch
 	accessToken, err := jwtutil.SignAccess(h.cfg.SecretKey, int64(user.ID), h.cfg.TokenExpireMinutes, epoch)
 	if err != nil {
 		response.Fail(c, http.StatusInternalServerError, "生成令牌失败")
 		return
 	}
-	refreshToken, err := jwtutil.SignRefresh(h.cfg.SecretKey, int64(user.ID), h.cfg.RefreshTokenExpireDays, jwtutil.NewJTI(), epoch)
+	refreshJTI := jwtutil.NewJTI()
+	refreshToken, err := jwtutil.SignRefresh(h.cfg.SecretKey, int64(user.ID), h.cfg.RefreshTokenExpireDays, refreshJTI, epoch)
 	if err != nil {
 		response.Fail(c, http.StatusInternalServerError, "生成刷新令牌失败")
 		return
 	}
+	// 记录当前有效 refresh jti（DB 权威），供后续轮换与重放检测
+	_ = h.db.Model(&model.User{}).Where("id = ?", user.ID).Updates(map[string]interface{}{
+		"refresh_jti":      refreshJTI,
+		"refresh_jti_prev": "",
+	}).Error
+	// 同步 Redis epoch 加速缓存：避免升级前残留的陈旧缓存凌驾 DB 权威
+	cache.SyncUserEpoch(c.Request.Context(), h.db, user.ID)
 
 	h.setAccessCookie(c, accessToken, h.cfg.TokenExpireMinutes*60)
 	h.setRefreshCookie(c, refreshToken, h.cfg.RefreshTokenExpireDays*24*3600)
@@ -117,13 +125,16 @@ func (h *Auth) Refresh(c *gin.Context) {
 	}
 	uid := int(info.UserID)
 
-	// 会话撤销校验：登出/禁用/改密会自增会话 epoch，旧 refresh_token 立即失效
-	rdb := cache.GetClient()
-	if rdb != nil && rdb.Enabled {
-		if epoch := rdb.GetSessionEpoch(c.Request.Context(), uid); epoch != info.Epoch {
-			response.Fail(c, http.StatusUnauthorized, "刷新令牌已失效")
-			return
-		}
+	// 会话撤销校验（DB 权威，Redis 仅加速）：登出/禁用/改密自增 epoch，旧 refresh 立即失效。
+	// DB 读取失败 fail-closed（拒绝刷新），不静默放行。
+	epoch, err := cache.GetSessionEpoch(c.Request.Context(), h.db, uid)
+	if err != nil {
+		response.Fail(c, http.StatusInternalServerError, "会话状态校验失败，请稍后重试")
+		return
+	}
+	if epoch != info.Epoch {
+		response.Fail(c, http.StatusUnauthorized, "刷新令牌已失效")
+		return
 	}
 
 	user, err := cache.LoadUser(c.Request.Context(), h.db, uid)
@@ -136,7 +147,41 @@ func (h *Auth) Refresh(c *gin.Context) {
 		return
 	}
 
-	accessToken, err := jwtutil.SignAccess(h.cfg.SecretKey, int64(user.ID), h.cfg.TokenExpireMinutes, info.Epoch)
+	// refresh token 轮换与重放检测（DB 权威）：
+	// refresh_jti 为当前有效 jti；轮换时旧 jti 移入 refresh_jti_prev。
+	// 再次使用 refresh_jti_prev 判定为重放/盗用，撤销该用户全部会话。
+	// 并发安全：条件 UPDATE（WHERE refresh_jti=旧值）保证同一 jti 只能轮换一次。
+	var cur, prev string
+	_ = h.db.Model(&model.User{}).Where("id = ?", uid).Select("refresh_jti", "refresh_jti_prev").Row().Scan(&cur, &prev)
+	if info.JTI == prev {
+		// 旧 jti 重放：检测到令牌重用，撤销全部会话
+		cache.IncrSessionEpoch(c.Request.Context(), h.db, uid)
+		response.Fail(c, http.StatusUnauthorized, "检测到令牌重用，会话已撤销，请重新登录")
+		return
+	}
+	// 存量兼容：升级前未记录 jti（cur/prev 均为空）的用户，首次刷新直接放行并轮换
+	if info.JTI != cur && cur != "" {
+		response.Fail(c, http.StatusUnauthorized, "刷新令牌已失效")
+		return
+	}
+	newJTI := jwtutil.NewJTI()
+	res := h.db.Model(&model.User{}).
+		Where("id = ? AND refresh_jti = ?", uid, cur).
+		Updates(map[string]interface{}{
+			"refresh_jti":      newJTI,
+			"refresh_jti_prev": info.JTI,
+		})
+	if res.Error != nil {
+		response.Fail(c, http.StatusInternalServerError, "刷新失败，请重试")
+		return
+	}
+	if res.RowsAffected == 0 {
+		// 并发窗口：同一 jti 已被并发请求轮换 → 拒绝，避免旧 refresh 并行续期
+		response.Fail(c, http.StatusUnauthorized, "刷新令牌已失效")
+		return
+	}
+
+	accessToken, err := jwtutil.SignAccess(h.cfg.SecretKey, int64(user.ID), h.cfg.TokenExpireMinutes, epoch)
 	if err != nil {
 		response.Fail(c, http.StatusInternalServerError, "生成令牌失败")
 		return
@@ -144,10 +189,12 @@ func (h *Auth) Refresh(c *gin.Context) {
 	h.setAccessCookie(c, accessToken, h.cfg.TokenExpireMinutes*60)
 
 	// 轮换 refresh_token（同 epoch，新 jti）
-	newRefresh, err := jwtutil.SignRefresh(h.cfg.SecretKey, int64(user.ID), h.cfg.RefreshTokenExpireDays, jwtutil.NewJTI(), info.Epoch)
-	if err == nil {
-		h.setRefreshCookie(c, newRefresh, h.cfg.RefreshTokenExpireDays*24*3600)
+	newRefresh, err := jwtutil.SignRefresh(h.cfg.SecretKey, int64(user.ID), h.cfg.RefreshTokenExpireDays, newJTI, epoch)
+	if err != nil {
+		response.Fail(c, http.StatusInternalServerError, "生成刷新令牌失败")
+		return
 	}
+	h.setRefreshCookie(c, newRefresh, h.cfg.RefreshTokenExpireDays*24*3600)
 
 	response.OKMsg(c, "刷新成功", gin.H{
 		"access_token": accessToken,
@@ -159,7 +206,11 @@ func (h *Auth) Refresh(c *gin.Context) {
 // Logout 登出：清除 cookie，并撤销该用户全部会话（自增 epoch + 删快照）。
 func (h *Auth) Logout(c *gin.Context) {
 	if uid, ok := currentUID(c, h.cfg.SecretKey); ok {
-		cache.IncrSessionEpoch(c.Request.Context(), uid)
+		// DB 撤销失败时 fail-closed：报告登出失败，避免用户在"以为已登出"时令牌仍有效
+		if _, err := cache.IncrSessionEpoch(c.Request.Context(), h.db, uid); err != nil {
+			response.Fail(c, http.StatusInternalServerError, "登出失败，请稍后重试")
+			return
+		}
 	}
 	h.setAccessCookie(c, "", -1)
 	h.setRefreshCookie(c, "", -1)
@@ -188,7 +239,12 @@ func (h *Auth) ChangePassword(c *gin.Context) {
 		response.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	cache.IncrSessionEpoch(c.Request.Context(), u.ID)
+	// 清理认证快照后刷新（changePassword 之前 u 来自快照，密码不携带）
+	invalidateUserAuth(c, u.ID)
+	if _, err := cache.IncrSessionEpoch(c.Request.Context(), h.db, u.ID); err != nil {
+		response.Fail(c, http.StatusInternalServerError, "修改成功，但会话撤销失败，请重新登录")
+		return
+	}
 	response.OKMsg(c, "密码修改成功", nil)
 }
 

@@ -19,6 +19,12 @@ type User struct {
 	MustChangePassword bool       `gorm:"column:must_change_password" json:"must_change_password"`
 	LastLoginTime      *LocalTime `gorm:"column:last_login_time" json:"last_login_time"`
 
+	// SessionEpoch 会话撤销计数（DB 权威撤销源，登出/禁用/改密自增使已签发 token 立即失效）。
+	// Redis 未启用时由本列兜底；不依赖 Redis。RefreshJTI/Prev 用于 refresh token 轮换与重放检测。
+	SessionEpoch   int64  `gorm:"column:session_epoch;not null;default:0" json:"-"`
+	RefreshJTI     string `gorm:"column:refresh_jti;size:64;not null;default:''" json:"-"`
+	RefreshJTIPrev string `gorm:"column:refresh_jti_prev;size:64;not null;default:''" json:"-"`
+
 	// Perms 已解析权限缓存（来自用户快照，避免每次鉴权回源查询角色表）；gorm:"-" 不落库
 	Perms []string `gorm:"-" json:"-"`
 

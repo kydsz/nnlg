@@ -60,12 +60,16 @@ func Auth(secret string, db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// 会话撤销检查（Redis 启用时）：登出/禁用/改密会自增 epoch，旧 token 立即失效
-		if rdb := cache.GetClient(); rdb != nil && rdb.Enabled {
-			if epoch := rdb.GetSessionEpoch(c.Request.Context(), uid); epoch != info.Epoch {
-				abortAuth(c, "会话已失效，请重新登录")
-				return
-			}
+		// 会话撤销检查（DB 权威，Redis 仅加速）：登出/禁用/改密自增 epoch，旧 token 立即失效。
+		// DB 读取失败按 fail-closed 处理（拒绝访问），不得因撤销源不可用而放行。
+		epoch, err := cache.GetSessionEpoch(c.Request.Context(), db, uid)
+		if err != nil {
+			abortAuth(c, "会话状态校验失败，请稍后重试")
+			return
+		}
+		if epoch != info.Epoch {
+			abortAuth(c, "会话已失效，请重新登录")
+			return
 		}
 
 		c.Set(ctxUserKey, user)

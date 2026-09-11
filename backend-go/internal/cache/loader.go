@@ -46,13 +46,62 @@ func InvalidateUserAuth(ctx context.Context, uid int) {
 	}
 }
 
+// syncEpochCache 同步 Redis 会话 epoch 加速缓存。
+// 写失败时删除 key：保证缓存要么是最新值、要么不存在（读回退 DB），
+// 避免陈旧缓存凌驾 DB 权威导致新 token 被误判失效。
+func syncEpochCache(ctx context.Context, uid int, epoch int64) {
+	c := GetClient()
+	if c == nil || !c.Enabled {
+		return
+	}
+	if err := c.rdb.Set(ctx, c.SessionEpochKey(uid), epoch, 30*24*time.Hour).Err(); err != nil {
+		c.rdb.Del(ctx, c.SessionEpochKey(uid))
+	}
+}
+
+// SyncUserEpoch 将用户当前 DB 会话 epoch 同步到 Redis（登录成功后调用）：
+// 消除升级前残留的陈旧 epoch 缓存，保证 Redis 加速值与 DB 权威一致。
+func SyncUserEpoch(ctx context.Context, db *gorm.DB, uid int) {
+	var epoch int64
+	if err := db.Model(&model.User{}).Where("id = ?", uid).Select("session_epoch").Scan(&epoch).Error; err != nil {
+		return
+	}
+	syncEpochCache(ctx, uid, epoch)
+}
+
+// GetSessionEpoch 读取会话 epoch（DB 权威撤销源）。
+// Redis 缓存命中时直接返回（加速）；未命中或出错回退读取 user.session_epoch 列。
+// DB 读取失败返回错误，调用方应 fail-closed（拒绝访问），不得静默放行。
+func GetSessionEpoch(ctx context.Context, db *gorm.DB, uid int) (int64, error) {
+	if c := GetClient(); c != nil && c.Enabled {
+		if n, err := c.rdb.Get(ctx, c.SessionEpochKey(uid)).Int64(); err == nil {
+			return n, nil
+		}
+		// 未命中（nil）或 Redis 出错：回退 DB 权威源
+	}
+	var epoch int64
+	if err := db.Model(&model.User{}).Where("id = ?", uid).Select("session_epoch").Scan(&epoch).Error; err != nil {
+		return 0, err
+	}
+	return epoch, nil
+}
+
 // IncrSessionEpoch 自增某用户会话 epoch 并删除快照（登出/禁用/改密/删除）。
-func IncrSessionEpoch(ctx context.Context, uid int) int64 {
+// DB 自增为权威撤销源（原子 UPDATE + 读回），Redis 同步刷新值（失败则删 key 兜底回退 DB）。
+func IncrSessionEpoch(ctx context.Context, db *gorm.DB, uid int) (int64, error) {
+	if err := db.Model(&model.User{}).Where("id = ?", uid).
+		UpdateColumn("session_epoch", gorm.Expr("session_epoch + 1")).Error; err != nil {
+		return 0, err
+	}
+	var epoch int64
+	if err := db.Model(&model.User{}).Where("id = ?", uid).Select("session_epoch").Scan(&epoch).Error; err != nil {
+		return 0, err
+	}
 	if c := GetClient(); c != nil && c.Enabled {
 		c.DelAuthUser(ctx, uid)
-		return c.IncrSessionEpoch(ctx, uid)
 	}
-	return 0
+	syncEpochCache(ctx, uid, epoch)
+	return epoch, nil
 }
 
 // dimCacheTTL 启用维度缓存时长。

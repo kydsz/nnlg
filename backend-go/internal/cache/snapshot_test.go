@@ -84,10 +84,6 @@ func TestRedisDisabledClientIsSafe(t *testing.T) {
 	}
 	c.SetAuthUser(ctx, 1, SnapshotFromUser(snapshotTestUser())) // 不应 panic
 	c.DelAuthUser(ctx, 1)
-	if n := c.GetSessionEpoch(ctx, 1); n != 0 {
-		t.Fatalf("禁用客户端 epoch 应为 0, 实际 %d", n)
-	}
-	if n := c.IncrSessionEpoch(ctx, 1); n != 0 {
-		t.Fatalf("禁用客户端自增应返回 0, 实际 %d", n)
-	}
+	// 会话 epoch key（禁用时仅作 key 生成，不应 panic）
+	_ = c.SessionEpochKey(1)
 }

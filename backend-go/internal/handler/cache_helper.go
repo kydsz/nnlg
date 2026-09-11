@@ -11,6 +11,7 @@ import (
 	"backend-go/pkg/response"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // statsCacheTTL 统计报表缓存时长。评教数据非实时，可接受短延迟。
@@ -31,7 +32,9 @@ func cacheKey(api string, c *gin.Context) string {
 func invalidateUserAuth(c *gin.Context, uid int) { cache.InvalidateUserAuth(c.Request.Context(), uid) }
 
 // invalidateUserSession 撤销用户全部会话（登出/禁用/改密/删除），并失效快照。
-func invalidateUserSession(c *gin.Context, uid int) { cache.IncrSessionEpoch(c.Request.Context(), uid) }
+func invalidateUserSession(c *gin.Context, db *gorm.DB, uid int) {
+	cache.IncrSessionEpoch(c.Request.Context(), db, uid)
+}
 
 // invalidateDimensionCache 主动失效启用维度缓存（维度增删改/排序后调用）。
 func invalidateDimensionCache(c *gin.Context) { cache.InvalidateDimensionCache(c.Request.Context()) }

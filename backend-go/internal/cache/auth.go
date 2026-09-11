@@ -212,28 +212,3 @@ func (c *Client) DelAuthUser(ctx context.Context, uid int) {
 	}
 	c.Del(ctx, c.AuthUserKey(uid))
 }
-
-// IncrSessionEpoch 自增会话 epoch（撤销该用户所有 refresh/access 会话）。
-func (c *Client) IncrSessionEpoch(ctx context.Context, uid int) int64 {
-	if c == nil || !c.Enabled {
-		return 0
-	}
-	n, err := c.rdb.Incr(ctx, c.SessionEpochKey(uid)).Result()
-	if err != nil {
-		return 0
-	}
-	c.rdb.Expire(ctx, c.SessionEpochKey(uid), 30*24*time.Hour)
-	return n
-}
-
-// GetSessionEpoch 读取会话 epoch（key 不存在返回 0，兼容未撤销过的旧 token）。
-func (c *Client) GetSessionEpoch(ctx context.Context, uid int) int64 {
-	if c == nil || !c.Enabled {
-		return 0
-	}
-	n, err := c.rdb.Get(ctx, c.SessionEpochKey(uid)).Int64()
-	if err != nil {
-		return 0
-	}
-	return n
-}

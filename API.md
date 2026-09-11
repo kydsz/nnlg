@@ -160,6 +160,8 @@ POST /auth/login
 
 登录成功后写入两个 HttpOnly Cookie：`token`（access\_token，30 分钟）与 `refresh_token`（7 天，path=`/api/v1`，SameSite=Lax，生产环境 Secure），响应体同时返回 access\_token：
 
+> **风险说明（文档化接受）**：access_token 经响应体下发会绕过 HttpOnly 防护（前端 axios 拦截器按 Bearer 头携带）。作为补偿，系统给出两条可撤销防线：1) 会话 epoch 为 **DB 权威撤销源**（Redis 仅加速，未配置 Redis 也可用），登出/禁用/改密/删除用户即时自增撤销全部已签发 token；2) access_token TTL 仅 30 分钟且每次 `/auth/refresh` 轮换 refresh_token（旧 jti 复用即触发会话整体撤销）。若后续将 access_token 改为仅 Cookie 下发，需同步调整前端鉴权链路。
+
 **响应示例**:
 
 ```json
@@ -200,6 +202,8 @@ POST /auth/refresh
 读取 `refresh_token` Cookie，校验签名/类型/会话 epoch 后签发新的 access_token（并轮换 refresh_token）。
 响应体：`{ "access_token": "<jwt>", "token_type": "bearer", "user": {...} }`。
 `refresh_token` 已失效 / 会话已撤销（登出、禁用、改密）时返回 401。
+
+**refresh_token 轮换与重放检测（DB 权威）**：每次刷新会签发新 jti 并将旧 jti 移入 `refresh_jti_prev`；旧 refresh_token 再次使用（jti 命中 prev）判定为重放/盗用，立即撤销该用户全部会话并返回 401。并发刷新同一旧 jti 时，条件 UPDATE（`WHERE refresh_jti=旧值`）保证仅一次成功，其余请求返回 401，防止同一会话并行续期。
 
 ### 退出登录
 

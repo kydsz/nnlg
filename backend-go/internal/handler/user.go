@@ -118,7 +118,7 @@ func (h *User) Update(c *gin.Context) {
 	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", &u.ID, "user", nil)
 	invalidateUserAuth(c, id)
 	if (p.Status != nil && *p.Status == 0) || (p.Password != nil && *p.Password != "") {
-		invalidateUserSession(c, id)
+		invalidateUserSession(c, h.db, id)
 	}
 	response.OKMsg(c, "更新成功", userDetailItem(u))
 }
@@ -136,7 +136,7 @@ func (h *User) Delete(c *gin.Context) {
 		return
 	}
 	service.LogRecord(h.db, &caller.ID, caller.Username, "delete", "user", &id, "user", nil)
-	invalidateUserSession(c, id)
+	invalidateUserSession(c, h.db, id)
 	response.OKMsg(c, "删除成功", nil)
 }
 
@@ -185,7 +185,7 @@ func (h *User) UpdateStatus(c *gin.Context) {
 		map[string]interface{}{"action": "toggle_status", "status": status})
 	invalidateUserAuth(c, id)
 	if status == 0 {
-		invalidateUserSession(c, id)
+		invalidateUserSession(c, h.db, id)
 	}
 	response.OKMsg(c, "操作成功", userDetailItem(u))
 }
@@ -211,7 +211,7 @@ func (h *User) BatchStatus(c *gin.Context) {
 	for _, uid := range changed {
 		invalidateUserAuth(c, uid)
 		if *p.Status == 0 {
-			invalidateUserSession(c, uid)
+			invalidateUserSession(c, h.db, uid)
 		}
 	}
 	response.OK(c, gin.H{"success": success, "failed": failed, "total": len(p.IDs)})

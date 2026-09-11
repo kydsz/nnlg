@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"backend-go/internal/middleware"
+	"backend-go/internal/model"
 	"backend-go/internal/service"
 	"backend-go/pkg/response"
 
@@ -80,7 +81,24 @@ func (h *RoleHandler) Update(c *gin.Context) {
 		return
 	}
 	h.log(c, "update", &role.ID)
+	// 角色权限/状态变更后：失效持有该角色的用户快照，旧权限在快照 TTL 内收敛
+	h.invalidateRoleUsers(c, role.Code)
 	response.OKMsg(c, "更新成功", role)
+}
+
+// invalidateRoleUsers 失效持有某角色的用户认证快照（user_role 关联 + legacy role 字段）。
+func (h *RoleHandler) invalidateRoleUsers(c *gin.Context, code string) {
+	var ids []int
+	if err := h.db.Model(&model.UserRole{}).Where("role = ?", code).Pluck("user_id", &ids).Error; err != nil {
+		return
+	}
+	var legacy []int
+	if err := h.db.Model(&model.User{}).Where("role = ?", code).Pluck("id", &legacy).Error; err == nil {
+		ids = append(ids, legacy...)
+	}
+	for _, uid := range ids {
+		invalidateUserAuth(c, uid)
+	}
 }
 
 // Delete 删除角色

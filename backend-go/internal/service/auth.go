@@ -43,16 +43,21 @@ func (s *Auth) Login(db *gorm.DB, userNo, password string) (*model.User, error) 
 	return &user, nil
 }
 
-// ChangePassword 修改密码并清除强制修改标记
+// ChangePassword 修改密码并清除强制修改标记。
+// 旧密码校验不依赖注入用户（可能来自认证快照，快照不含密码列），按 ID 回源 DB 加载真实记录。
 func (s *Auth) ChangePassword(db *gorm.DB, user *model.User, oldPassword, newPassword string) error {
-	if !pwd.Verify(oldPassword, user.Password) {
+	var u model.User
+	if err := db.Select("id", "password").First(&u, user.ID).Error; err != nil {
+		return errors.New("用户不存在")
+	}
+	if !pwd.Verify(oldPassword, u.Password) {
 		return errors.New("旧密码错误")
 	}
 	hash, err := pwd.Hash(newPassword)
 	if err != nil {
 		return err
 	}
-	return db.Model(&model.User{}).Where("id = ?", user.ID).Omit(clause.Associations).Updates(map[string]interface{}{
+	return db.Model(&model.User{}).Where("id = ?", u.ID).Omit(clause.Associations).Updates(map[string]interface{}{
 		"password":             hash,
 		"must_change_password": false,
 	}).Error
