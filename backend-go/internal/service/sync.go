@@ -23,6 +23,11 @@ var (
 	syncMu       sync.Mutex
 	syncRunning  = map[string]bool{}
 	syncProgress = map[string]map[string]interface{}{} // module -> progress
+
+	// courseWriteSem 课表写入全局互斥（容量 1）：课表各同步入口
+	// （整页/按教师/批量/手动导入）统一经此信号量互斥，
+	// 避免并发写同一张 course_schedule 表产生版本竞态。
+	courseWriteSem = make(chan struct{}, 1)
 )
 
 // Acquire 获取模块同步锁
@@ -41,6 +46,24 @@ func (s *Sync) Release(module string) {
 	syncMu.Lock()
 	defer syncMu.Unlock()
 	delete(syncRunning, module)
+}
+
+// AcquireCourseWrite 获取课表写入互斥（全局唯一）。返回 false 表示已有课表同步进行中。
+func (s *Sync) AcquireCourseWrite() bool {
+	select {
+	case courseWriteSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// ReleaseCourseWrite 释放课表写入互斥。
+func (s *Sync) ReleaseCourseWrite() {
+	select {
+	case <-courseWriteSem:
+	default:
+	}
 }
 
 // SetProgress 记录模块进度（内存态，进度查询用）

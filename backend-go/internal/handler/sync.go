@@ -2,7 +2,9 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +27,10 @@ var (
 	batchMu       sync.Mutex
 	batchProgress = map[string]map[string]interface{}{}
 	batchTTL      = 30 * time.Minute
+
+	// batchSem 后台同步任务并发上限（AC5）：同一时刻最多 1 个批量课表同步在跑，
+	// 避免无界 goroutine 打爆爬虫目标与数据库；获得信号量后仍需等待课表写锁互斥。
+	batchSem = make(chan struct{}, 1)
 )
 
 func initProgress(taskID string, total int, semester, scope string) {
@@ -72,6 +78,14 @@ func cleanupExpiredProgress() {
 	}
 }
 
+// 写课表的同步模块：这些入口会写入 course_schedule，通过 doSync 统一加全局课表写锁（AC4）。
+var courseWriteModule = map[string]bool{
+	"course_schedule": true,
+	"sync_all":        true,
+	"llsykb":          true,
+	"crawl":           true,
+}
+
 // Sync 数据同步接口
 type Sync struct {
 	cfg *config.Config
@@ -108,12 +122,21 @@ type jwxtError struct{ msg string }
 func (e *jwxtError) Error() string { return e.msg }
 
 // doSync 同步通用流程：锁 -> 记录开始 -> 执行 -> 记录结束
+// 写课表的模块额外获取全局课表写锁，确保各入口互斥（AC4）。
 func (h *Sync) doSync(c *gin.Context, module string, run func(*jwxt.BaseSync) (map[string]interface{}, error)) {
 	if !h.svc.Acquire(module) {
 		badReq(c, "同步正在进行中")
 		return
 	}
 	defer h.svc.Release(module)
+
+	if courseWriteModule[module] {
+		if !h.svc.AcquireCourseWrite() {
+			badReq(c, "课表同步正在进行中，请稍后再试")
+			return
+		}
+		defer h.svc.ReleaseCourseWrite()
+	}
 
 	u := middleware.CurrentUser(c)
 	logID, err := h.svc.RecordStart(h.db, &u.ID, u.Username, module)
@@ -239,6 +262,11 @@ func (h *Sync) CrawlCourseSchedule(c *gin.Context) {
 		return
 	}
 	defer h.svc.Release("crawl")
+	if !h.svc.AcquireCourseWrite() {
+		badReq(c, "课表同步正在进行中，请稍后再试")
+		return
+	}
+	defer h.svc.ReleaseCourseWrite()
 
 	spider, err := h.spider(p.Username, p.Password)
 	if err != nil {
@@ -280,6 +308,12 @@ func (h *Sync) ParseHTML(c *gin.Context) {
 	if semester == "" {
 		semester = jwxt.CurrentSemesterCode()
 	}
+	// 手动导入同样写入课表，与其它同步入口互斥（AC4）
+	if !h.svc.AcquireCourseWrite() {
+		badReq(c, "课表同步正在进行中，请稍后再试")
+		return
+	}
+	defer h.svc.ReleaseCourseWrite()
 	saveStats, err := jwxt.SaveSchedules(h.db, schedules, semester, time.Now(), 0)
 	if err != nil {
 		badReq(c, "保存失败: "+err.Error())
@@ -325,6 +359,11 @@ func (h *Sync) SyncLlsykb(c *gin.Context) {
 		return
 	}
 	defer h.svc.Release("llsykb")
+	if !h.svc.AcquireCourseWrite() {
+		badReq(c, "课表同步正在进行中，请稍后再试")
+		return
+	}
+	defer h.svc.ReleaseCourseWrite()
 
 	u := middleware.CurrentUser(c)
 	logID, err := h.svc.RecordStart(h.db, &u.ID, u.Username, "teacher")
@@ -393,14 +432,31 @@ func (h *Sync) SyncLlsykbBatch(c *gin.Context) {
 	taskID := uuid.NewString()[:16]
 	initProgress(taskID, len(teacherNos), p.Xnxq01id, scope)
 
-	// 后台执行
+	// 后台执行：信号量限流 + 课表写锁互斥（AC4/AC5），panic 记录日志与堆栈
 	go func(taskID, semester string, nos []string) {
 		defer func() {
 			if r := recover(); r != nil {
+				log.Printf("[sync] batch task %s panic: %v\n%s", taskID, r, debug.Stack())
 				now := time.Now()
 				updateProgress(taskID, map[string]interface{}{"status": "failed", "error": fmt.Sprint(r), "finished_at": &now})
 			}
 		}()
+		// 并发上限：已有批量任务在跑则本次直接失败（等待无意义且不可告知前端）
+		select {
+		case batchSem <- struct{}{}:
+			defer func() { <-batchSem }()
+		default:
+			now := time.Now()
+			updateProgress(taskID, map[string]interface{}{"status": "failed", "error": "已有批量同步任务进行中", "finished_at": &now})
+			return
+		}
+		if !h.svc.AcquireCourseWrite() {
+			now := time.Now()
+			updateProgress(taskID, map[string]interface{}{"status": "failed", "error": "课表同步正在进行中，请稍后再试", "finished_at": &now})
+			return
+		}
+		defer h.svc.ReleaseCourseWrite()
+
 		spider, err := h.spider("", "")
 		if err != nil {
 			now := time.Now()
@@ -627,8 +683,25 @@ func (h *Sync) CrawlTimetableAsync(c *gin.Context) {
 	semester := c.Query("semester")
 	username := c.Query("username")
 	password := c.Query("password")
+	// 课表写锁互斥 + panic 日志（AC4/AC5）；信号量的获取与释放都必须在后台 goroutine 内，
+	// 保证 goroutine 生命周期内一直被限流（而非请求返回即释放）。
 	go func() {
-		defer func() { recover() }()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[sync] crawl async panic: %v\n%s", r, debug.Stack())
+			}
+		}()
+		select {
+		case batchSem <- struct{}{}:
+			defer func() { <-batchSem }()
+		default:
+			log.Printf("[sync] crawl async 拒绝：已有同步任务进行中")
+			return
+		}
+		if !h.svc.AcquireCourseWrite() {
+			return
+		}
+		defer h.svc.ReleaseCourseWrite()
 		spider, err := h.spider(username, password)
 		if err != nil {
 			return
@@ -688,8 +761,13 @@ func (h *Sync) CrawlLlsykb(c *gin.Context) {
 		out = append(out, llsykbRecordMap(r))
 	}
 
-	// 入库：按教师分组（对齐旧端 save_schedules_from_parser）
+	// 入库：按教师分组（对齐旧端 save_schedules_from_parser）；写入课表需全局写锁互斥（AC4）
 	if len(records) > 0 {
+		if !h.svc.AcquireCourseWrite() {
+			serverErr(c, "课表同步正在进行中，请稍后再试")
+			return
+		}
+		defer h.svc.ReleaseCourseWrite()
 		groups := map[string][]jwxt.CourseInfo{}
 		ids := map[string]int{}
 		for _, r := range records {
