@@ -1,33 +1,58 @@
 import { useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Card, Col, Row, Statistic, Spin, Tag, DatePicker } from 'antd'
+import { Spin, DatePicker } from 'antd'
 import {
   TeamOutlined,
   FileTextOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  RightOutlined,
+  PieChartOutlined,
+  BarChartOutlined,
+  RiseOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import { useNavigate } from 'react-router-dom'
 import { statsApi } from '@/api/modules/stats'
 import { scheduleApi } from '@/api/modules/schedule'
 import { useAuthStore } from '@/stores/auth'
 import { roleNamesStr } from '@/utils/roleNames'
 import { formatSemester } from '@/utils/format'
 import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
-import { useNavigate } from 'react-router-dom'
+import { MENU } from './Layout'
 import type { ECharts } from 'echarts'
+import './dashboard.css'
 
-const QUICK_LINKS: { path: string; label: string }[] = [
-  { path: '/admin/course-schedule', label: '学期配置与课表查询' },
-  { path: '/admin/data-sync', label: '数据同步' },
-  { path: '/admin/users', label: '用户管理' },
-  { path: '/admin/stats', label: '统计报表' },
-  { path: '/admin/tasks', label: '评教任务' },
-  { path: '/admin/dimensions', label: '评教维度' },
+const ACCENTS = ['accent-blue', 'accent-indigo', 'accent-gold', 'accent-teal']
+
+const TILE_GROUPS: { title: string; keys: string[] }[] = [
+  { title: '评教业务', keys: ['/admin/tasks', '/admin/evaluations', '/admin/dimensions'] },
+  { title: '统计分析', keys: ['/admin/stats', '/admin/teacher-evaluation-summary'] },
+  {
+    title: '组织与人员',
+    keys: [
+      '/admin/campus',
+      '/admin/colleges',
+      '/admin/research-rooms',
+      '/admin/users',
+      '/admin/roles',
+    ],
+  },
+  { title: '数据与课表', keys: ['/admin/course-schedule', '/admin/data-sync'] },
 ]
+
+function greeting() {
+  const h = dayjs().hour()
+  if (h < 6) return '凌晨好'
+  if (h < 12) return '早上好'
+  if (h < 14) return '中午好'
+  if (h < 18) return '下午好'
+  return '晚上好'
+}
 
 export default function Dashboard() {
   const user = useAuthStore((s) => s.user)
+  const hasPermission = useAuthStore((s) => s.hasPermission)
   const navigate = useNavigate()
   const donutRef = useRef<HTMLDivElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
@@ -42,26 +67,25 @@ export default function Dashboard() {
     queryFn: () => scheduleApi.currentSemester(),
   })
 
-  // 图表（动态 import echarts，对齐旧版按需加载）
   useEffect(() => {
     if (!data) return
-    let chart: ECharts | null = null
+    let charts: ECharts[] = []
     let disposed = false
     ;(async () => {
       const echarts = await import('echarts')
       if (disposed) return
-      // 环形图：任务完成情况
       if (donutRef.current) {
         const d = echarts.init(donutRef.current)
         d.setOption({
           tooltip: { trigger: 'item' },
           legend: { bottom: 0 },
+          color: ['#104186', '#e1c46e'],
           series: [
             {
               type: 'pie',
-              radius: ['45%', '70%'],
+              radius: ['48%', '72%'],
               avoidLabelOverlap: false,
-              itemStyle: { borderRadius: 6 },
+              itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
               label: { show: false },
               data: [
                 { value: data.tasks.evaluated, name: '已评' },
@@ -70,9 +94,8 @@ export default function Dashboard() {
             },
           ],
         })
-        chart = d
+        charts.push(d)
       }
-      // 柱状图：评教数据概览
       if (barRef.current) {
         const b = echarts.init(barRef.current)
         b.setOption({
@@ -83,152 +106,191 @@ export default function Dashboard() {
           series: [
             {
               type: 'bar',
-              barWidth: '40%',
+              barWidth: '42%',
               itemStyle: {
-                borderRadius: [4, 4, 0, 0],
+                borderRadius: [6, 6, 0, 0],
                 color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                  { offset: 0, color: '#2563eb' },
-                  { offset: 1, color: '#93c5fd' },
+                  { offset: 0, color: '#2f6fb5' },
+                  { offset: 1, color: '#104186' },
                 ]),
               },
               data: [data.users.teachers, data.users.supervisors, data.evaluations.total],
             },
           ],
         })
+        charts.push(b)
       }
     })()
-    const onResize = () => chart?.resize()
+    const onResize = () => charts.forEach((c) => c.resize())
     window.addEventListener('resize', onResize)
     return () => {
       disposed = true
       window.removeEventListener('resize', onResize)
-      chart?.dispose()
+      charts.forEach((c) => c.dispose())
+      charts = []
     }
   }, [data])
 
   if (isLoading || !data) return <Spin style={{ display: 'block', margin: '80px auto' }} />
 
   const rate = data.tasks.evaluation_rate
+  const menuByKey = new Map(MENU.map((m) => [m.key, m]))
+
+  const kpis = [
+    { title: '教师总数', value: data.users.teachers, icon: <TeamOutlined />, accent: 'accent-blue' },
+    {
+      title: '评教记录',
+      value: data.evaluations.total,
+      icon: <FileTextOutlined />,
+      accent: 'accent-gold',
+    },
+    {
+      title: '待评任务',
+      value: data.tasks.pending,
+      icon: <ClockCircleOutlined />,
+      accent: 'accent-teal',
+    },
+    {
+      title: '完成率',
+      value: `${rate}%`,
+      icon: <CheckCircleOutlined />,
+      accent: 'accent-indigo',
+    },
+  ]
+
+  const roleText = roleNamesStr(user?.roles)
+  const chips = [
+    { text: roleText === '-' ? '' : roleText, gold: true },
+    { text: user?.college_name || '' },
+    { text: user?.research_room_name || '' },
+    {
+      text: `当前学期：${currentSemester ? formatSemester(currentSemester.semester) : '未设置'}`,
+    },
+  ].filter((c) => c.text)
 
   return (
-    <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          flexWrap: 'wrap',
-          gap: 8,
-        }}
-      >
-        <div>
-          <h3 className="page-title" style={{ marginBottom: 4 }}>
-            你好，{user?.username}
-          </h3>
-          <Tag color="blue">{roleNamesStr(user?.roles)}</Tag>
-          <Tag style={{ marginLeft: 8 }}>
-            当前学期：{currentSemester ? formatSemester(currentSemester.semester) : '未设置'}
-          </Tag>
-          <Tag color="green">系统状态正常</Tag>
-        </div>
-        <DatePicker.RangePicker
-          value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
-          onChange={(v) =>
-            onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
-          }
-        />
-      </div>
-
-      <Row gutter={[16, 16]}>
-        <Col xs={12} md={6}>
-          <Card>
-            <Statistic title="教师总数" value={data.users.teachers} prefix={<TeamOutlined />} />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card>
-            <Statistic title="评教记录" value={data.evaluations.total} />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card>
-            <Statistic
-              title="待评任务"
-              value={data.tasks.pending}
-              prefix={<ClockCircleOutlined />}
-            />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card>
-            <Statistic
-              title="完成率"
-              value={rate}
-              precision={1}
-              suffix="%"
-              prefix={<CheckCircleOutlined />}
-            />
-          </Card>
-        </Col>
-
-        <Col xs={24} md={12}>
-          <Card title="任务完成情况" size="small">
-            <div ref={donutRef} style={{ height: 280 }} />
-          </Card>
-        </Col>
-        <Col xs={24} md={12}>
-          <Card title="评教数据概览" size="small">
-            <div ref={barRef} style={{ height: 280 }} />
-          </Card>
-        </Col>
-
-        <Col xs={24}>
-          <Card size="small" title="评教进度">
-            <div style={{ marginBottom: 8 }}>
-              已评 {data.tasks.evaluated} / {data.tasks.total}（{rate}%）
-            </div>
-            <div
-              style={{ height: 10, background: '#f0f0f0', borderRadius: 5, overflow: 'hidden' }}
-            >
-              <div
-                style={{
-                  width: `${Math.min(rate, 100)}%`,
-                  height: '100%',
-                  background: '#2563eb',
-                  transition: 'width .4s',
-                }}
-              />
-            </div>
-            <div style={{ marginTop: 12, color: '#666', fontSize: 13 }}>
-              校区 {data.organization.campuses} · 学院 {data.organization.colleges} · 督导{' '}
-              {data.users.supervisors}
-            </div>
-          </Card>
-        </Col>
-
-        <Col xs={24}>
-          <Card size="small" title="快捷入口">
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {QUICK_LINKS.map((l) => (
-                <a
-                  key={l.path}
-                  onClick={() => navigate(l.path)}
-                  style={{
-                    padding: '6px 14px',
-                    background: '#f0f5ff',
-                    borderRadius: 6,
-                    color: '#2563eb',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {l.label}
-                </a>
+    <div className="dash">
+      <section className="dash-hero">
+        <div className="dash-hero-main">
+          <div className="dash-avatar">{(user?.username || 'U').charAt(0)}</div>
+          <div className="dash-hero-info">
+            <h2 className="dash-hero-name">
+              {greeting()}，{user?.username}
+              {user?.user_no && <span className="dash-hero-no">工号 {user.user_no}</span>}
+            </h2>
+            <div className="dash-hero-meta">
+              {chips.map((c) => (
+                <span key={c.text} className={`dash-chip ${c.gold ? 'is-gold' : ''}`}>
+                  {c.text}
+                </span>
               ))}
             </div>
-          </Card>
-        </Col>
-      </Row>
+          </div>
+        </div>
+        <div className="dash-hero-range">
+          <DatePicker.RangePicker
+            value={dates[0] && dates[1] ? [dayjs(dates[0]), dayjs(dates[1])] : undefined}
+            onChange={(v) =>
+              onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
+            }
+          />
+        </div>
+      </section>
+
+      <section className="dash-kpis">
+        {kpis.map((k) => (
+          <div className="dash-kpi" key={k.title}>
+            <div className={`dash-kpi-icon ${k.accent}`}>{k.icon}</div>
+            <div className="dash-kpi-body">
+              <div className="dash-kpi-value">{k.value}</div>
+              <div className="dash-kpi-label">{k.title}</div>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      {TILE_GROUPS.map((group, gi) => {
+        const tiles = group.keys
+          .map((key) => menuByKey.get(key))
+          .filter((m): m is NonNullable<typeof m> => !!m && (!m.perm || hasPermission(m.perm)))
+        if (!tiles.length) return null
+        return (
+          <section className="dash-group" key={group.title}>
+            <div className="dash-group-head">
+              <span className="dash-group-title">{group.title}</span>
+              <span className="dash-group-count">{tiles.length} 项功能</span>
+            </div>
+            <div className="tile-grid">
+              {tiles.map((m, ti) => (
+                <div
+                  className="tile"
+                  key={m.key}
+                  onClick={() => navigate(m.key)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') navigate(m.key)
+                  }}
+                >
+                  <RightOutlined className="tile-arrow" />
+                  <div className={`tile-icon ${ACCENTS[(gi + ti) % ACCENTS.length]}`}>{m.icon}</div>
+                  <div className="tile-label">{m.label}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )
+      })}
+
+      <section className="dash-overview">
+        <div className="dash-card">
+          <div className="dash-card-title">
+            <PieChartOutlined />
+            任务完成情况
+          </div>
+          <div ref={donutRef} style={{ height: 260 }} />
+        </div>
+        <div className="dash-card">
+          <div className="dash-card-title">
+            <BarChartOutlined />
+            评教数据概览
+          </div>
+          <div ref={barRef} style={{ height: 260 }} />
+        </div>
+      </section>
+
+      <section className="dash-card">
+        <div className="dash-card-title">
+          <RiseOutlined />
+          评教进度
+        </div>
+        <div className="dash-progress-track">
+          <div className="dash-progress-bar" style={{ width: `${Math.min(rate, 100)}%` }} />
+        </div>
+        <div className="dash-progress-meta">
+          已评 {data.tasks.evaluated} / {data.tasks.total}（{rate}%）
+        </div>
+        <div className="dash-facts">
+          <div>
+            <div className="dash-fact-value">{data.organization.campuses}</div>
+            <div className="dash-fact-label">校区</div>
+          </div>
+          <div>
+            <div className="dash-fact-value">{data.organization.colleges}</div>
+            <div className="dash-fact-label">学院</div>
+          </div>
+          <div>
+            <div className="dash-fact-value">{data.users.supervisors}</div>
+            <div className="dash-fact-label">督导</div>
+          </div>
+          <div>
+            <div className="dash-fact-value">{data.tasks.total}</div>
+            <div className="dash-fact-label">任务总数</div>
+          </div>
+        </div>
+      </section>
+
+      <div className="dash-footnote">南宁理工学院 · 教学评价系统</div>
     </div>
   )
 }

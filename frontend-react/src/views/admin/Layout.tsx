@@ -24,14 +24,14 @@ import { useAuthStore, PWD_FORCE_CHANGE_DISMISS_KEY } from '@/stores/auth'
 import { authApi } from '@/api/modules/auth'
 import './layout.css'
 
-interface MenuItem {
+export interface MenuItem {
   key: string
   icon: React.ReactNode
   label: string
   perm?: string
 }
 
-const MENU: MenuItem[] = [
+export const MENU: MenuItem[] = [
   { key: '/admin/dashboard', icon: <DashboardOutlined />, label: '概览', perm: 'stats:view' },
   { key: '/admin/campus', icon: <BankOutlined />, label: '校区管理', perm: 'campus:manage' },
   { key: '/admin/colleges', icon: <ApartmentOutlined />, label: '学院管理', perm: 'college:manage' },
