@@ -1056,9 +1056,15 @@ func (s *Stats) EvaluatorStats(db *gorm.DB, viewer *model.User, f PersonStatsFil
 
 // UnteachedTeachers 未被听课教师列表（指定日期区间内无评教任务；未指定日期默认按当前学期）
 func (s *Stats) UnteachedTeachers(db *gorm.DB, viewer *model.User, collegeID *int, start, end *time.Time, page, pageSize int) ([]map[string]interface{}, int64, error) {
-	// 未指定日期时，默认按当前学期区间
-	if start == nil && end == nil {
+	// 日期必须成对（与 handler 校验契约一致）：只传一端视为非法参数，直接拒绝而非吞掉兜底。
+	if (start == nil) != (end == nil) {
+		return nil, 0, errors.New("start_date 与 end_date 必须同时提供或同时省略")
+	}
+	if start == nil {
 		start, end = currentSemesterRange(db)
+		if start == nil || end == nil {
+			return nil, 0, errors.New("学期配置无法解析，无法确定统计区间")
+		}
 	}
 	scope := collegeScopeFor(viewer)
 	target := collegeID

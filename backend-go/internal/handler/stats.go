@@ -291,6 +291,11 @@ func (h *Stats) UnteachedTeachers(c *gin.Context) {
 		badReq(c, "end_date 格式错误")
 		return
 	}
+	// 成对校验：start_date/end_date 要么都传、要么都不传；只传一端是非法参数组合
+	if (start == nil) != (end == nil) {
+		badReq(c, "start_date 与 end_date 必须同时提供或同时省略")
+		return
+	}
 	if start != nil && end != nil && start.After(*end) {
 		badReq(c, "开始日期不能晚于结束日期")
 		return
