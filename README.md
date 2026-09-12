@@ -166,7 +166,7 @@ cd frontend-react && docker build -t te-frontend-react .
 
 ## 默认账号
 
-系统首次运行时由 V2 初始化脚本创建以下账号（初始密码由后端配置 `DEFAULT_USER_PASSWORD` 决定，请在 `.env` 中配置并在首次登录后修改）：
+系统首次运行时由 V2 初始化脚本创建以下账号（初始密码由后端配置 `DEFAULT_USER_PASSWORD` 决定，请在 `.env` 中配置）。该初始密码同样用于新增用户与教务导入账号，服务端会标记 `must_change_password` 并**强制首次登录改密**（未改密前除改密/查看自己/登出外的接口一律 403）：
 
 | 账号 | 角色 | 说明 |
 |------|------|------|

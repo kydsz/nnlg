@@ -162,6 +162,10 @@ POST /auth/login
 
 > **风险说明（文档化接受）**：access_token 经响应体下发会绕过 HttpOnly 防护（前端 axios 拦截器按 Bearer 头携带）。作为补偿，系统给出两条可撤销防线：1) 会话 epoch 为 **DB 权威撤销源**（Redis 仅加速，未配置 Redis 也可用），登出/禁用/改密/删除用户即时自增撤销全部已签发 token；2) access_token TTL 仅 30 分钟且每次 `/auth/refresh` 轮换 refresh_token（旧 jti 复用即触发会话整体撤销）。若后续将 access_token 改为仅 Cookie 下发，需同步调整前端鉴权链路。
 
+**登录失败与限流**: 接口按「IP + 账号」双维度限流——同一 IP 1 分钟内最多 20 次登录尝试，同一账号 10 分钟内最多 5 次失败（登录成功即清零），超限返回 429。多实例部署下额度经 Redis 共享；伪造 `X-Real-IP` / `X-Forwarded-For` 无效（仅当直接对端位于 `TRUSTED_PROXIES` 网段内才采信这两个头）。用户不存在与密码错误返回完全一致的 401 且耗时拉平，无法据此枚举工号；账号被禁用返回 403，且仅在口令校验通过后才暴露该状态。
+
+**初始密码未修改时**: 响应中 `user.must_change_password = true`；此时除 `POST /auth/password`、`GET /auth/me`、`POST /auth/logout` 外的接口一律返回 403，且响应体带 `data.must_change_password = true`，前端据此强制弹出改密窗口。
+
 **响应示例**:
 
 ```json
@@ -234,6 +238,8 @@ POST /auth/password
 | ------------- | ------ | -- | --- |
 | old\_password | string | 是  | 旧密码 |
 | new\_password | string | 是  | 新密码 |
+
+**新密码强度要求**（不满足返回 400）：长度至少 8 个字符，须同时包含字母与数字，不得等于工号或姓名，不得命中常见弱口令表。
 
 修改成功后该用户全部会话失效（access_token 与 refresh_token 均需重新登录）。
 
@@ -326,7 +332,7 @@ POST /users
 | ------------------------------- | -------------- | -- | --------------------------------------------------------------------------- |
 | user\_no                        | string         | 是  | 工号（唯一）                                                                      |
 | username                        | string         | 是  | 姓名                                                                          |
-| password                        | string         | 是  | 密码                                                                          |
+| password                        | string         | 否  | 密码（不传则使用初始密码 `DEFAULT_USER_PASSWORD` 并强制首次登录改密；传入时受最小强度校验：≥8 位且含字母与数字） |
 | role                            | string         | 否  | 主角色（向后兼容，自动从 roles 推导）：system\_admin, college\_admin, supervisor, teacher 等 |
 | roles                           | array\[string] | 否  | 角色列表（多角色无主次，`role` 自动设为最高权限角色）                                              |
 | college\_id                     | int            | 否  | 所属学院ID（单选）                                                                  |
@@ -1093,9 +1099,10 @@ POST /stats/evaluation-records/export     # 评教记录导出
 | 200 | 成功                    |
 | 400 | 请求参数错误                |
 | 401 | 未认证或token过期           |
-| 403 | 无权限访问                 |
+| 403 | 无权限访问；初始密码未修改时业务接口一律 403（`data.must_change_password = true`） |
 | 404 | 资源不存在                 |
 | 422 | 请求验证错误（如 path 数字解析失败） |
+| 429 | 请求过于频繁（登录限流：IP 20 次/分钟，账号 5 次失败/10 分钟） |
 | 500 | 服务器内部错误               |
 
 ## 通用错误响应格式
