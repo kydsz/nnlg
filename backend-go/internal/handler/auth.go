@@ -52,27 +52,29 @@ func (h *Auth) Login(c *gin.Context) {
 		return
 	}
 
+	ctx := c.Request.Context()
 	ip := clientIP(c)
-	if !loginIPLimiter.allow(ip) {
+	if !loginIPLimiter.allow(ctx, ip) {
 		response.Fail(c, http.StatusTooManyRequests, "登录过于频繁，请稍后再试")
 		return
 	}
-	if loginUserLimiter.blocked(req.UserNo) {
+	if loginUserLimiter.blocked(ctx, req.UserNo) {
 		response.Fail(c, http.StatusTooManyRequests, "该账号登录失败次数过多，请稍后再试")
 		return
 	}
 
 	user, err := h.svc.Login(h.db, req.UserNo, req.Password)
 	if err != nil {
-		loginUserLimiter.recordFailure(req.UserNo)
+		loginUserLimiter.recordFailure(ctx, req.UserNo)
 		if errors.Is(err, service.ErrUserDisabled) {
 			response.Fail(c, http.StatusForbidden, err.Error())
 		} else {
+			// 用户不存在与密码错误返回完全一致的响应（状态码+文案），避免账号枚举
 			response.Fail(c, http.StatusUnauthorized, err.Error())
 		}
 		return
 	}
-	loginUserLimiter.reset(req.UserNo)
+	loginUserLimiter.reset(ctx, req.UserNo)
 
 	now := time.Now()
 	// Py 端 SQLAlchemy onupdate 会同时刷新 update_time，这里对齐；

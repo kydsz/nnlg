@@ -41,6 +41,11 @@ type Config struct {
 	// CORS 默认同源（不对外部 Origin 回显凭证 CORS 头）；生产需跨域时显式配置
 	// CORS_ORIGINS（逗号分隔白名单，或 "*" 显式放行任意源）。
 	CORSOrigins []string `env:"CORS_ORIGINS" envSeparator:"," envDefault:""`
+
+	// 可信反向代理网段（IP 或 CIDR，逗号分隔）：只有直接对端在这些网段内时，
+	// 才采信 X-Real-IP / X-Forwarded-For。默认只信任本机与内网（nginx 反代场景）；
+	// 后端若直接暴露公网，务必保持默认值，否则客户端可伪造 IP 头绕过登录限流。
+	TrustedProxies []string `env:"TRUSTED_PROXIES" envSeparator:"," envDefault:"127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"`
 }
 
 func Load() (*Config, error) {

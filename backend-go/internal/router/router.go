@@ -20,6 +20,13 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery(), middleware.CORS(cfg.CORSOrigins))
 
+	// 可信代理：只有直接对端落在这些网段的请求，才允许用 X-Real-IP / X-Forwarded-For
+	// 标识客户端 IP。gin 的 ClientIP() 与登录限流都依赖该配置。
+	// 必须显式调用（含空列表）：gin 默认信任所有代理，跳过调用会让 ClientIP() 无条件
+	// 采信客户端自带的 X-Forwarded-For —— 等于把伪造 IP 的能力留在原地。
+	_ = r.SetTrustedProxies(cfg.TrustedProxies)
+	handler.ConfigureTrustedProxies(cfg.TrustedProxies)
+
 	// 健康检查 / 根路由
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "version": cfg.Version})
@@ -43,7 +50,7 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 
 	// 用户管理
-	userH := handler.NewUser(db, service.NewUser())
+	userH := handler.NewUser(db, service.NewUser(cfg.DefaultUserPassword))
 	users := api.Group("/users", authMW)
 	{
 		users.GET("", middleware.RequirePermission(db, "user:view"), userH.List)
