@@ -60,6 +60,7 @@ func (h *Org) CampusCreate(c *gin.Context) {
 		return
 	}
 	h.log(c, "create", "campus", &cp.ID)
+	invalidateAllStats(c)
 	response.OKMsg(c, "创建成功", cp)
 }
 
@@ -76,6 +77,7 @@ func (h *Org) CampusUpdate(c *gin.Context) {
 		return
 	}
 	h.log(c, "update", "campus", &cp.ID)
+	invalidateAllStats(c)
 	response.OKMsg(c, "更新成功", cp)
 }
 
@@ -86,6 +88,7 @@ func (h *Org) CampusDelete(c *gin.Context) {
 		return
 	}
 	h.log(c, "delete", "campus", &id)
+	invalidateAllStats(c)
 	response.OKMsg(c, "删除成功", nil)
 }
 
@@ -140,6 +143,7 @@ func (h *Org) CollegeCreate(c *gin.Context) {
 		return
 	}
 	h.log(c, "create", "college", &col.ID)
+	invalidateAllStats(c)
 	campusNames := h.campusNameMap()
 	response.OKMsg(c, "创建成功", gin.H{
 		"id": col.ID, "code": col.Code, "name": col.Name,
@@ -170,6 +174,7 @@ func (h *Org) CollegeUpdate(c *gin.Context) {
 		return
 	}
 	h.log(c, "update", "college", &col.ID)
+	invalidateAllStats(c)
 	campusNames := h.campusNameMap()
 	response.OKMsg(c, "更新成功", gin.H{
 		"id": col.ID, "code": col.Code, "name": col.Name,
@@ -186,6 +191,7 @@ func (h *Org) CollegeDelete(c *gin.Context) {
 		return
 	}
 	h.log(c, "delete", "college", &id)
+	invalidateAllStats(c)
 	response.OKMsg(c, "删除成功", nil)
 }
 

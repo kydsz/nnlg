@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"backend-go/internal/config"
@@ -129,6 +130,74 @@ func (c *Client) Del(ctx context.Context, keys ...string) {
 		return
 	}
 	c.rdb.Del(ctx, keys...)
+}
+
+// ============ 统计缓存代际（权限/学院变更后立即失效） ============
+
+// statsGenTTL 代际键保留时长，远大于统计缓存 TTL，避免两者同时过期造成误命中。
+const statsGenTTL = 24 * time.Hour
+
+// statsGenKeys 返回全局代际键与用户代际键
+func (c *Client) statsGenKeys(uid int) (string, string) {
+	return c.key("stats", "gen", "all"), c.key("stats", "gen", "u", strconv.Itoa(uid))
+}
+
+// StatsGenerations 读取统计缓存代际 (global, user)。
+// 统计缓存键携带代际号，主动失效 = 代际自增（O(1)），无需按前缀扫描删除历史键。
+// Redis 未启用时返回 (0, 0)，统计退化为 TTL 失效。
+func StatsGenerations(ctx context.Context, uid int) (int64, int64) {
+	c := GetClient()
+	if c == nil || !c.Enabled || c.rdb == nil {
+		return 0, 0
+	}
+	globalKey, userKey := c.statsGenKeys(uid)
+	vals, err := c.rdb.MGet(ctx, globalKey, userKey).Result()
+	if err != nil || len(vals) < 2 {
+		return 0, 0
+	}
+	return toInt64(vals[0]), toInt64(vals[1])
+}
+
+// InvalidateStats 让指定用户的统计缓存立即失效（权限/学院/角色变更后调用，包级便利）。
+func InvalidateStats(ctx context.Context, uid int) {
+	c := GetClient()
+	if c == nil || !c.Enabled || c.rdb == nil || uid <= 0 {
+		return
+	}
+	_, userKey := c.statsGenKeys(uid)
+	c.bumpStatsGen(ctx, userKey)
+}
+
+// InvalidateAllStats 全局失效统计缓存（学院/校区/维度等影响所有查看者的变更，包级便利）。
+func InvalidateAllStats(ctx context.Context) {
+	c := GetClient()
+	if c == nil || !c.Enabled || c.rdb == nil {
+		return
+	}
+	globalKey, _ := c.statsGenKeys(0)
+	c.bumpStatsGen(ctx, globalKey)
+}
+
+func (c *Client) bumpStatsGen(ctx context.Context, key string) {
+	pipe := c.rdb.Pipeline()
+	pipe.Incr(ctx, key)
+	pipe.Expire(ctx, key, statsGenTTL)
+	_, _ = pipe.Exec(ctx)
+}
+
+// toInt64 兼容 Redis MGet 返回的 int64 / string / nil
+func toInt64(v interface{}) int64 {
+	switch t := v.(type) {
+	case int64:
+		return t
+	case string:
+		n, _ := strconv.ParseInt(t, 10, 64)
+		return n
+	case []byte:
+		n, _ := strconv.ParseInt(string(t), 10, 64)
+		return n
+	}
+	return 0
 }
 
 // ============ 幂等 SETNX ============

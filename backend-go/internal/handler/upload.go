@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,9 +34,18 @@ var docExts = map[string]string{
 	".pdf": "application/pdf", ".zip": "application/zip", ".rar": "application/vnd.rar",
 	".doc": "application/msword", ".xls": "application/vnd.ms-excel",
 	".ppt": "application/vnd.ms-powerpoint",
-	// docx/xlsx/pptx 为 zip 容器，sniff 结果是 zip，跳过严格 MIME 比对
+	// docx/xlsx/pptx 为 zip 容器，sniff 结果是 zip，改由 validateOfficeContent 校验包内部件
 	".docx": "", ".xlsx": "", ".pptx": "",
 }
+
+// ole2Magic OLE2 复合文档签名（.doc/.xls/.ppt 同一容器格式）
+var ole2Magic = []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}
+
+// zipMagic OOXML（.docx/.xlsx/.pptx）zip 容器签名
+var zipMagic = []byte{'P', 'K', 0x03, 0x04}
+
+// ooxmlPartDir 各 OOXML 扩展名必须包含的包内部件目录
+var ooxmlPartDir = map[string]string{".docx": "word/", ".xlsx": "xl/", ".pptx": "ppt/"}
 
 const (
 	maxImageSize = 10 << 20 // 10MB
@@ -73,15 +84,54 @@ func validateUpload(fh *multipart.FileHeader, isImage bool) error {
 	defer f.Close()
 	head := make([]byte, 512)
 	n, _ := f.Read(head)
-	sniffed := http.DetectContentType(head[:n])
+	head = head[:n]
+	sniffed := http.DetectContentType(head)
 	if mimeType != "" && !strings.HasPrefix(sniffed, strings.Split(mimeType, "/")[0]) {
-		return errors.New("文件内容与扩展名不匹配")
+		return errContentMismatch()
 	}
 	if isImage && !strings.HasPrefix(sniffed, "image/") {
-		return errors.New("文件内容与扩展名不匹配")
+		return errContentMismatch()
+	}
+	return validateOfficeContent(fh, ext, head)
+}
+
+// validateOfficeContent 校验 Office 文件「内容与扩展名一致」：
+//   - .doc/.xls/.ppt 必须是 OLE2 复合文档（三者为同一容器，魔数无法再细分）
+//   - .docx/.xlsx/.pptx 必须是 zip 容器且包含对应部件目录（word/ xl/ ppt/）
+//
+// 仅校验扩展名会放行任意改名内容：文件随后由下载接口以附件分发，
+// 攻击者可借可信域名投递可执行/网页内容，故必须校验真实容器结构。
+func validateOfficeContent(fh *multipart.FileHeader, ext string, head []byte) error {
+	switch ext {
+	case ".docx", ".xlsx", ".pptx":
+		if !bytes.HasPrefix(head, zipMagic) {
+			return errContentMismatch()
+		}
+		partDir := ooxmlPartDir[ext]
+		f, err := fh.Open()
+		if err != nil {
+			return errors.New("文件读取失败")
+		}
+		defer f.Close()
+		zr, err := zip.NewReader(f, fh.Size)
+		if err != nil {
+			return errContentMismatch()
+		}
+		for _, zf := range zr.File {
+			if strings.HasPrefix(zf.Name, partDir) {
+				return nil
+			}
+		}
+		return errContentMismatch()
+	case ".doc", ".xls", ".ppt":
+		if !bytes.HasPrefix(head, ole2Magic) {
+			return errContentMismatch()
+		}
 	}
 	return nil
 }
+
+func errContentMismatch() error { return errors.New("文件内容与扩展名不匹配") }
 
 func errUnsupportedType(ext string) error { return errors.New("不支持的文件类型: " + ext) }
 
@@ -208,17 +258,31 @@ func (h *Upload) UploadEvaluation(c *gin.Context) {
 		return
 	}
 
-	uploaded := make([]gin.H, 0, len(files))
+	// 先整体校验再落盘：任一文件校验失败时不留下已写入的半批文件
 	for _, fh := range files {
 		if err := validateUpload(fh, isImage); err != nil {
 			badReq(c, err.Error())
 			return
 		}
+	}
+
+	uploaded := make([]gin.H, 0, len(files))
+	written := make([]string, 0, len(files))
+	fail := func() {
+		// 清理本次请求已写入的文件，避免失败后残留孤儿文件
+		for _, p := range written {
+			_ = os.Remove(p)
+		}
+	}
+	for _, fh := range files {
 		name := uuid.NewString() + "_" + sanitizeName(fh.Filename)
-		if err := saveUploaded(fh, filepath.Join(dir, name)); err != nil {
+		dst := filepath.Join(dir, name)
+		if err := saveUploaded(fh, dst); err != nil {
+			fail()
 			serverErr(c, "文件保存失败")
 			return
 		}
+		written = append(written, dst)
 		rel := "evaluations/" + strconv.Itoa(taskID) + "/" + dimCode + "/" + name
 		uploaded = append(uploaded, gin.H{
 			"url": "/api/v1/files/" + rel, "filename": fh.Filename, "path": rel,
@@ -264,7 +328,9 @@ func (h *Upload) DeleteEvaluationFile(c *gin.Context) {
 	response.OKMsg(c, "删除成功", nil)
 }
 
-func saveUploaded(fh *multipart.FileHeader, dst string) error {
+// saveUploaded 落盘上传文件。任何失败都删除目标文件：
+// 半截文件既占用空间，又会被下载接口当作正常附件分发出去。
+func saveUploaded(fh *multipart.FileHeader, dst string) (err error) {
 	src, err := fh.Open()
 	if err != nil {
 		return err
@@ -274,7 +340,14 @@ func saveUploaded(fh *multipart.FileHeader, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() {
+		if cerr := out.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+		if err != nil {
+			_ = os.Remove(dst)
+		}
+	}()
 	_, err = io.Copy(out, src)
 	return err
 }

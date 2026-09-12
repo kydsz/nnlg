@@ -117,3 +117,47 @@ func TestNumOf(t *testing.T) {
 		})
 	}
 }
+
+// TestRecordsAvgScoreZeroScorePolicy 锁定「0 分记录」统计口径（见 recordsAvgScore 注释）：
+// 单维度 0 分计入该记录合计；整条记录合计为 0 时整体跳过（不计入分子，也不计入分母）。
+func TestRecordsAvgScoreZeroScorePolicy(t *testing.T) {
+	scoreCodes := map[string]bool{"score1": true, "score2": true}
+	rec := func(raw string) model.EvaluationRecord {
+		return model.EvaluationRecord{DimensionValues: json.RawMessage(raw)}
+	}
+
+	t.Run("单维度0分计入合计", func(t *testing.T) {
+		recs := []model.EvaluationRecord{
+			rec(`{"score1":80,"score2":20}`),
+			rec(`{"score1":0,"score2":60}`),
+		}
+		// (100 + 60) / 2 = 80：0 分是有效作答，会拉低该条合计
+		if got := recordsAvgScore(recs, scoreCodes); got != 80 {
+			t.Fatalf("0 分维度应计入合计（期望 80）, 得到 %v", got)
+		}
+	})
+
+	t.Run("整条0分跳过", func(t *testing.T) {
+		recs := []model.EvaluationRecord{
+			rec(`{"score1":0,"score2":0}`),
+			rec(`{"score1":90}`),
+		}
+		if got := recordsAvgScore(recs, scoreCodes); got != 90 {
+			t.Fatalf("全 0 分记录应被跳过（期望 90）, 得到 %v", got)
+		}
+	})
+
+	t.Run("全部0分返回0", func(t *testing.T) {
+		recs := []model.EvaluationRecord{rec(`{"score1":0,"score2":0}`)}
+		if got := recordsAvgScore(recs, scoreCodes); got != 0 {
+			t.Fatalf("全部为 0 分应返回 0, 得到 %v", got)
+		}
+	})
+
+	t.Run("非评分维度不计入", func(t *testing.T) {
+		recs := []model.EvaluationRecord{rec(`{"score1":50,"text1":"很好"}`)}
+		if got := recordsAvgScore(recs, scoreCodes); got != 50 {
+			t.Fatalf("非评分维度不应计入（期望 50）, 得到 %v", got)
+		}
+	})
+}
