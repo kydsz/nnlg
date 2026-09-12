@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { List, Tag, Button, Dialog, Input, Toast, NavBar, Picker } from 'antd-mobile'
@@ -24,6 +24,13 @@ export default function Profile() {
 
   const [roomOpen, setRoomOpen] = useState(false)
   const [roomSelected, setRoomSelected] = useState<string[] | null>(null)
+
+  // 初始密码未修改：后端会拦截全部业务接口，进入「我的」即自动弹出改密弹窗，
+  // 改完强制重新登录（改密会作废旧 token）
+  const mustChange = !!user?.must_change_password
+  useEffect(() => {
+    if (mustChange) setPwdOpen(true)
+  }, [mustChange])
 
   // 本学院启用教研室列表（无主学院时返回全部，对齐旧端行为）
   const { data: rooms } = useQuery({
@@ -90,9 +97,13 @@ export default function Profile() {
     setSaving(true)
     try {
       await authApi.changePassword({ old_password: oldPwd, new_password: newPwd })
-      Toast.show({ content: '密码修改成功', icon: 'success' })
       setPwdOpen(false)
       clearPwd()
+      // 改密后后端作废旧 token，主动退回登录页，避免后续请求 401
+      Toast.show({ content: '密码修改成功，请重新登录', icon: 'success' })
+      authApi.logout().catch(() => {})
+      logout()
+      navigate('/login', { replace: true })
     } catch (e) {
       Toast.show({ content: e instanceof Error ? e.message : '修改失败', icon: 'fail' })
     } finally {

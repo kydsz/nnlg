@@ -72,9 +72,34 @@ func Auth(secret string, db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// 初始口令未修改：除白名单外一律拦截，防止绕过强制改密继续使用系统。
+		if MustChangePasswordBlocked(user, c.Request.URL.Path) {
+			c.AbortWithStatusJSON(http.StatusForbidden, response.Body{
+				Code:    http.StatusForbidden,
+				Message: "首次登录须先修改初始密码",
+				// 机器可读标记：前端据此直接唤起改密弹窗，而不是只弹一条错误提示
+				Data: gin.H{"must_change_password": true},
+			})
+			return
+		}
+
 		c.Set(ctxUserKey, user)
 		c.Next()
 	}
+}
+
+// mustChangePasswordAllow 未修改初始口令时仍允许访问的接口：
+// 改密本身、读取自己的信息、登出（否则用户既改不了密码也退不出去）。
+var mustChangePasswordAllow = map[string]bool{
+	"/api/v1/auth/password": true,
+	"/api/v1/auth/me":       true,
+	"/api/v1/auth/logout":   true,
+}
+
+// MustChangePasswordBlocked 判断该请求是否应被「强制修改初始口令」拦截。
+// 导出以便单测；u 为 nil（未认证）时不拦截，交由认证流程处理。
+func MustChangePasswordBlocked(u *model.User, path string) bool {
+	return u != nil && u.MustChangePassword && !mustChangePasswordAllow[path]
 }
 
 func abortAuth(c *gin.Context, msg string) {

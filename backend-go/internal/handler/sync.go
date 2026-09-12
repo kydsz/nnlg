@@ -33,7 +33,17 @@ var (
 	batchSem = make(chan struct{}, 1)
 )
 
-func initProgress(taskID string, total int, semester, scope string) {
+// defaultUserPassword 教务导入用的初始口令：配置为空时回落到内置默认值，
+// 避免导入出「空口令」账号（空口令任何人都能直接登录）。
+// 注意绝不使用工号作初始口令，且导入账号一律标记 must_change_password 强制首登改密。
+func (h *Sync) defaultUserPassword() string {
+	if strings.TrimSpace(h.cfg.DefaultUserPassword) == "" {
+		return service.DefaultUserPassword
+	}
+	return h.cfg.DefaultUserPassword
+}
+
+func initProgress(taskID string, total int, semester, scope string, ownerID int) {
 	batchMu.Lock()
 	defer batchMu.Unlock()
 	batchProgress[taskID] = map[string]interface{}{
@@ -41,6 +51,8 @@ func initProgress(taskID string, total int, semester, scope string) {
 		"failed_ids": []map[string]interface{}{}, "current_teacher": nil,
 		"current_teacher_no": nil, "semester": semester, "scope": scope,
 		"stats": nil, "error": nil, "started_at": time.Now(), "finished_at": nil,
+		// owner_id 仅用于查询鉴权，响应前会被剥离
+		"owner_id": ownerID,
 	}
 }
 
@@ -65,6 +77,49 @@ func getProgress(taskID string) map[string]interface{} {
 		return cp
 	}
 	return nil
+}
+
+// progressInt 读取进度整数字段：类型异常或缺失时按 0 处理，避免类型断言 panic
+func progressInt(rec map[string]interface{}, key string) int {
+	switch v := rec[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return 0
+}
+
+// progressFailedIDs 读取失败明细，结构异常时返回空切片
+func progressFailedIDs(rec map[string]interface{}) []map[string]interface{} {
+	switch v := rec["failed_ids"].(type) {
+	case []map[string]interface{}:
+		return v
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	return []map[string]interface{}{}
+}
+
+// canViewProgress 进度记录只对任务发起人或管理员可见，
+// 否则任何拿到 taskID 的人都能读到他人的同步进度与失败明细。
+func canViewProgress(rec map[string]interface{}, u *model.User) bool {
+	if u == nil {
+		return false
+	}
+	if u.HasAnyRole("system_admin", "school_admin") {
+		return true
+	}
+	owner := progressInt(rec, "owner_id")
+	return owner != 0 && owner == u.ID
 }
 
 func cleanupExpiredProgress() {
@@ -169,7 +224,7 @@ func (h *Sync) doSync(c *gin.Context, module string, run func(*jwxt.BaseSync) (m
 // SyncTeachers 从教务系统同步教师
 func (h *Sync) SyncTeachers(c *gin.Context) {
 	h.doSync(c, "teacher", func(sp *jwxt.BaseSync) (map[string]interface{}, error) {
-		return sp.SyncTeachers(h.db, h.cfg.DefaultUserPassword)
+		return sp.SyncTeachers(h.db, h.defaultUserPassword())
 	})
 }
 
@@ -180,7 +235,7 @@ func (h *Sync) SyncUnitsAndTeachers(c *gin.Context) {
 		if err != nil {
 			return nil, err
 		}
-		teacherRes, err := sp.SyncTeachers(h.db, h.cfg.DefaultUserPassword)
+		teacherRes, err := sp.SyncTeachers(h.db, h.defaultUserPassword())
 		if err != nil {
 			return nil, err
 		}
@@ -203,7 +258,7 @@ func (h *Sync) SyncAll(c *gin.Context) {
 		if err != nil {
 			return nil, err
 		}
-		teacherRes, err := sp.SyncTeachers(h.db, h.cfg.DefaultUserPassword)
+		teacherRes, err := sp.SyncTeachers(h.db, h.defaultUserPassword())
 		if err != nil {
 			return nil, err
 		}
@@ -429,8 +484,12 @@ func (h *Sync) SyncLlsykbBatch(c *gin.Context) {
 		badReq(c, "未找到符合条件的教师记录")
 		return
 	}
+	ownerID := 0
+	if u := middleware.CurrentUser(c); u != nil {
+		ownerID = u.ID
+	}
 	taskID := uuid.NewString()[:16]
-	initProgress(taskID, len(teacherNos), p.Xnxq01id, scope)
+	initProgress(taskID, len(teacherNos), p.Xnxq01id, scope, ownerID)
 
 	// 后台执行：信号量限流 + 课表写锁互斥（AC4/AC5），panic 记录日志与堆栈
 	go func(taskID, semester string, nos []string) {
@@ -470,10 +529,10 @@ func (h *Sync) SyncLlsykbBatch(c *gin.Context) {
 				batchMu.Unlock()
 				return
 			}
-			completed := rec["completed"].(int)
-			failed := rec["failed"].(int)
-			total := rec["total"].(int)
-			failedIDs, _ := rec["failed_ids"].([]map[string]interface{})
+			completed := progressInt(rec, "completed")
+			failed := progressInt(rec, "failed")
+			total := progressInt(rec, "total")
+			failedIDs := progressFailedIDs(rec)
 			batchMu.Unlock()
 
 			fields := map[string]interface{}{
@@ -509,14 +568,15 @@ func (h *Sync) SyncLlsykbBatch(c *gin.Context) {
 	})
 }
 
-// GetLlsykbProgress 查询批量同步进度
+// GetLlsykbProgress 查询批量同步进度（仅发起人与管理员可查，越权按不存在处理）
 func (h *Sync) GetLlsykbProgress(c *gin.Context) {
 	cleanupExpiredProgress()
 	rec := getProgress(c.Param("taskId"))
-	if rec == nil {
+	if rec == nil || !canViewProgress(rec, middleware.CurrentUser(c)) {
 		response.Fail(c, 404, "任务不存在或已过期")
 		return
 	}
+	delete(rec, "owner_id")
 	response.OK(c, rec)
 }
 

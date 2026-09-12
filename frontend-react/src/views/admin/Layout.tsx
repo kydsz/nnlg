@@ -89,6 +89,14 @@ export default function AdminLayout() {
     }
   }, [user?.must_change_password])
 
+  // 服务端强制拦截（403 must_change_password）时立即弹出改密弹窗：
+  // 此时除改密/登出外的接口都不可用，"本次登录不再提醒"已无意义
+  useEffect(() => {
+    const open = () => setPwdOpen(true)
+    window.addEventListener('tev:must-change-password', open)
+    return () => window.removeEventListener('tev:must-change-password', open)
+  }, [])
+
   const items = MENU.filter((m) => !m.perm || hasPermission(m.perm))
   const current = items.find((m) => location.pathname.startsWith(m.key))
 
@@ -114,11 +122,16 @@ export default function AdminLayout() {
         old_password: values.old_password,
         new_password: values.new_password,
       })
-      message.success('密码修改成功')
       localStorage.removeItem(PWD_FORCE_CHANGE_DISMISS_KEY)
       setPwdOpen(false)
       setPwdDismiss(false)
       pwdForm.resetFields()
+      // 改密后后端会作废旧 token（会话代际自增），主动退出到登录页，
+      // 避免用户停留在页面里被后续请求 401 弹走
+      message.success('密码修改成功，请使用新密码重新登录')
+      authApi.logout().catch(() => {})
+      logout()
+      navigate('/login', { replace: true })
     } catch {
       // 校验或请求失败，保持弹窗
     } finally {
@@ -198,14 +211,25 @@ export default function AdminLayout() {
         </header>
 
         <main className="content">
-          <Outlet />
+          {user?.must_change_password ? (
+            // 初始密码未修改：后端只放行改密/登出/查看自己，任何业务请求都会 403，
+            // 因此不渲染业务页面，仅保留改密弹窗（改完须重新登录）。
+            <div style={{ padding: '80px 24px', textAlign: 'center', color: '#8c8c8c' }}>
+              首次登录须先修改初始密码，请在弹窗中完成修改
+            </div>
+          ) : (
+            <Outlet />
+          )}
         </main>
       </div>
 
       <Modal
         title="修改密码"
         open={pwdOpen}
+        closable={!user?.must_change_password}
         onCancel={() => {
+          // 强制改密期间不允许关闭（后端已拦截全部业务接口，关闭只会看到空页面）
+          if (user?.must_change_password) return
           // 勾选"本次登录不再提醒"后关闭，仅跳过本次登录的强制提示
           if (pwdDismiss && user && user.id !== undefined) {
             localStorage.setItem(PWD_FORCE_CHANGE_DISMISS_KEY, String(user.id))
@@ -216,6 +240,7 @@ export default function AdminLayout() {
         confirmLoading={pwdLoading}
         okText="保存"
         cancelText="暂不修改"
+        cancelButtonProps={{ style: { display: user?.must_change_password ? 'none' : undefined } }}
         maskClosable={false}
       >
         <Form form={pwdForm} layout="vertical" autoComplete="new-password">
@@ -258,14 +283,16 @@ export default function AdminLayout() {
           >
             <Input.Password placeholder="再次输入新密码" />
           </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
-            <Checkbox
-              checked={pwdDismiss}
-              onChange={(e) => setPwdDismiss(e.target.checked)}
-            >
-              本次登录不再提醒
-            </Checkbox>
-          </Form.Item>
+          {!user?.must_change_password && (
+            <Form.Item style={{ marginBottom: 0 }}>
+              <Checkbox
+                checked={pwdDismiss}
+                onChange={(e) => setPwdDismiss(e.target.checked)}
+              >
+                本次登录不再提醒
+              </Checkbox>
+            </Form.Item>
+          )}
         </Form>
       </Modal>
     </div>

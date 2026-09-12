@@ -98,7 +98,7 @@ func TestUserAuthzUpdate(t *testing.T) {
 
 	t.Run("系统管理员操作不受限", func(t *testing.T) {
 		caller := authzCaller(t, db, "系统管理员")
-		_, err := svc.Update(db, caller, authzID(t, db, "马院教师A"), UpdateUserParams{Password: pwdParam("Sys@123")})
+		_, err := svc.Update(db, caller, authzID(t, db, "马院教师A"), UpdateUserParams{Password: pwdParam("Sys@12345")})
 		if err != nil {
 			t.Fatalf("系统管理员修改任意用户应成功: %v", err)
 		}

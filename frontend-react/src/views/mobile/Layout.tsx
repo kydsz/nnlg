@@ -1,6 +1,8 @@
+import { useEffect } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { TabBar } from 'antd-mobile'
 import { AppOutline, CalendarOutline, UnorderedListOutline, UserOutline } from 'antd-mobile-icons'
+import { useAuthStore } from '@/stores/auth'
 
 const TABS = [
   { key: '/mobile/home', title: '首页', icon: <AppOutline /> },
@@ -12,6 +14,15 @@ const TABS = [
 export default function MobileLayout() {
   const location = useLocation()
   const navigate = useNavigate()
+  const mustChange = useAuthStore((s) => s.user?.must_change_password)
+
+  // 初始密码未修改：后端只放行改密/登出/查看自己，其它页面请求必然 403，
+  // 直接把人送到「我的」页并自动弹出改密弹窗（见 Profile），避免在各页面撞错误提示。
+  useEffect(() => {
+    if (mustChange && location.pathname !== '/mobile/profile') {
+      navigate('/mobile/profile', { replace: true })
+    }
+  }, [mustChange, location.pathname, navigate])
 
   return (
     <div

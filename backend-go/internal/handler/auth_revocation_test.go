@@ -83,7 +83,7 @@ func TestChangePasswordInvalidatesOldTokens(t *testing.T) {
 
 	access, _ := loginAndExtract(t, env, "T001", "old-password")
 	w := env.do(t, http.MethodPost, "/api/v1/auth/password",
-		`{"old_password":"old-password","new_password":"new-password"}`, bearerHeader(access))
+		`{"old_password":"old-password","new_password":"new-password1"}`, bearerHeader(access))
 	if w.Code != http.StatusOK {
 		t.Fatalf("改密应 200, 实际 %d body=%s", w.Code, w.Body.String())
 	}

@@ -35,10 +35,22 @@ func sortDir(dir string) string {
 	return "ASC"
 }
 
-// User 用户相关业务逻辑
-type User struct{}
+// DefaultUserPassword 未显式指定口令时的初始口令（可用 DEFAULT_USER_PASSWORD 覆盖）。
+// 注意：初始口令绝不等于工号——「工号即口令」会让任何知道工号的人直接登录成功。
+const DefaultUserPassword = "teach123"
 
-func NewUser() *User { return &User{} }
+// User 用户相关业务逻辑
+type User struct {
+	defaultPassword string
+}
+
+// NewUser defaultPassword 为空时使用 DefaultUserPassword。
+func NewUser(defaultPassword string) *User {
+	if strings.TrimSpace(defaultPassword) == "" {
+		defaultPassword = DefaultUserPassword
+	}
+	return &User{defaultPassword: defaultPassword}
+}
 
 // List 分页查询用户（预加载关联，排序/筛选语义与旧端一致）
 func (s *User) List(db *gorm.DB, p UserParams) ([]model.User, int64, error) {
@@ -197,7 +209,11 @@ func (s *User) Create(db *gorm.DB, caller *model.User, p CreateUserParams) (*mod
 	// 旧端：新建用户一律要求首次登录改密
 	mustChange := true
 	if password == "" {
-		password = p.UserNo
+		// 未指定口令时使用初始口令（可配置），不得回落到工号：
+		// 工号是公开信息，作为口令等于账号裸奔。配合 must_change_password 强制首登改密。
+		password = s.defaultPassword
+	} else if err := pwd.Validate(password, p.UserNo, p.Username); err != nil {
+		return nil, err
 	}
 	hash, err := pwd.Hash(password)
 	if err != nil {
@@ -225,6 +241,12 @@ func (s *User) Create(db *gorm.DB, caller *model.User, p CreateUserParams) (*mod
 	}
 	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&u).Error; err != nil {
+			// 并发新增（或与教务导入并发）下预检查可能同时通过，
+			// 由 user.user_no 唯一索引兜底：映射为与预检查一致的「工号已存在」，
+			// 而不是把 1062 原始报错暴露给调用方。
+			if isDupKeyErr(err) {
+				return errors.New("工号已存在")
+			}
 			return err
 		}
 		return s.assignRelations(tx, u.ID, roles, supColleges, supRooms)
@@ -321,6 +343,10 @@ func (s *User) Update(db *gorm.DB, caller *model.User, id int, p UpdateUserParam
 		updates["must_change_password"] = *p.MustChangePassword
 	}
 	if p.Password != nil && *p.Password != "" {
+		// 管理员重置口令同样受最小强度约束（不得为工号/弱口令）
+		if err := pwd.Validate(*p.Password, u.UserNo, u.Username); err != nil {
+			return nil, err
+		}
 		hash, err := pwd.Hash(*p.Password)
 		if err != nil {
 			return nil, err

@@ -19,6 +19,18 @@ export function setUnauthorizedHandler(fn: UnauthorizedHandler) {
   onUnauthorized = fn
 }
 
+type MustChangePasswordHandler = () => void
+
+let onMustChangePassword: MustChangePasswordHandler | null = null
+
+/**
+ * 注册「服务端要求强制修改初始密码」的处理（403 must_change_password）。
+ * 未修改初始密码时后端只放行改密/登出/查看自己，其余接口一律 403。
+ */
+export function setMustChangePasswordHandler(fn: MustChangePasswordHandler) {
+  onMustChangePassword = fn
+}
+
 const instance = axios.create({
   baseURL: '/api/v1',
   timeout: 60000,
@@ -100,6 +112,10 @@ instance.interceptors.response.use(
         body?.message ||
         (isLoginRequest ? '工号或密码错误' : '登录已过期，请重新登录')
       return Promise.reject(new ApiError(body?.code ?? 401, msg))
+    }
+    // 服务端强制改密拦截：直接唤起改密弹窗，避免用户看到一串难以理解的 403
+    if (status === 403 && (body?.data as { must_change_password?: boolean } | null)?.must_change_password) {
+      onMustChangePassword?.()
     }
     const msg = body?.message || error.message || '网络错误'
     return Promise.reject(new ApiError(body?.code ?? status ?? 0, msg))

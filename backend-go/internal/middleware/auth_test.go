@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"backend-go/internal/model"
 	"backend-go/pkg/jwtutil"
 
 	"github.com/gin-gonic/gin"
@@ -117,6 +118,30 @@ func TestAuthCookieTakesPrecedenceOverBearer(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("cookie 存在时不应回退 Bearer, 实际 %d", w.Code)
+	}
+}
+
+// TestMustChangePasswordBlocked 初始口令未修改时：除改密/查看自己/登出外一律拦截
+func TestMustChangePasswordBlocked(t *testing.T) {
+	pending := &model.User{MustChangePassword: true}
+	done := &model.User{MustChangePassword: false}
+
+	if MustChangePasswordBlocked(nil, "/api/v1/stats/overview") {
+		t.Fatal("未认证（nil 用户）不应由此函数拦截")
+	}
+	if MustChangePasswordBlocked(done, "/api/v1/stats/overview") {
+		t.Fatal("已改密用户不应被拦截")
+	}
+	if !MustChangePasswordBlocked(pending, "/api/v1/stats/overview") {
+		t.Fatal("未改密用户访问业务接口应被拦截")
+	}
+	if !MustChangePasswordBlocked(pending, "/api/v1/users") {
+		t.Fatal("未改密用户访问用户管理应被拦截")
+	}
+	for _, p := range []string{"/api/v1/auth/password", "/api/v1/auth/me", "/api/v1/auth/logout"} {
+		if MustChangePasswordBlocked(pending, p) {
+			t.Fatalf("白名单接口 %s 应放行，否则用户既改不了密码也退不出去", p)
+		}
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"backend-go/internal/model"
 	"backend-go/internal/router"
 	"backend-go/internal/service"
+	"backend-go/pkg/pwd"
 
 	"github.com/joho/godotenv"
 	"gorm.io/gorm"
@@ -91,6 +92,15 @@ func main() {
 		})
 	} else {
 		log.Println("[cache] Redis 未配置，运行于直连 DB 模式")
+	}
+
+	// 初始口令体检：新建/导入账号共用该口令（配合 must_change_password 强制首登改密），
+	// 仍是内置默认值或不满足最小强度时给出告警，提示运维在环境变量中更换。
+	if cfg.DefaultUserPassword == "" || cfg.DefaultUserPassword == service.DefaultUserPassword {
+		log.Printf("[auth] 警告：DEFAULT_USER_PASSWORD 为内置默认值 %q，建议在环境变量中更换",
+			service.DefaultUserPassword)
+	} else if err := pwd.Validate(cfg.DefaultUserPassword, "", ""); err != nil {
+		log.Printf("[auth] 警告：DEFAULT_USER_PASSWORD 不符合最小强度（%v），建议在环境变量中更换", err)
 	}
 
 	r := router.Setup(cfg, db)
