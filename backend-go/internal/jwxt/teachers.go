@@ -95,6 +95,13 @@ func (b *BaseSync) SyncTeachers(db *gorm.DB, defaultPassword string) (map[string
 					Role: "teacher", Status: status, MustChangePassword: true,
 				}
 				if err := db.Create(&nu).Error; err != nil {
+					// 并发导入（多实例/重复点击）下预检查可能同时通过，
+					// 由 user.user_no 唯一索引兜底：冲突即视为「已存在 → 跳过」，
+					// 不覆盖既有账号，也不计入错误。
+					if isDupKeyErr(err) {
+						skipCount++
+						return
+					}
 					errCount++
 					return
 				}

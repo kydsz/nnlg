@@ -186,8 +186,22 @@ type ScheduleSnapshot struct {
 	WeekPattern   *string `json:"week_pattern"`
 }
 
-// Create 创建任务（含权限与去重校验）
-func (s *Task) Create(db *gorm.DB, caller *model.User, p CreateTaskParams) (*model.EvaluationTask, error) {
+// ErrDuplicateTask 任务重复：同教师 + 同课程 + 同上课时间，且未删除未取消。
+// 预检查与唯一索引兜底（迁移 013）共用同一语义，便于批量场景按重复跳过。
+var ErrDuplicateTask = errors.New("该教师已存在相同课程的任务")
+
+// taskDedupeKey 批次内去重键（口径与预检查一致：教师+课程+上课时间）
+func taskDedupeKey(p CreateTaskParams) string {
+	ct := ""
+	if p.ClassTime != nil {
+		ct = p.ClassTime.ToTime().Format("2006-01-02 15:04:05")
+	}
+	return fmt.Sprintf("%d|%s|%s", p.TeacherID, p.CourseName, ct)
+}
+
+// buildTask 创建前校验并构造任务实体（不落库）。
+// 批量创建据此先整体校验、再统一在事务内落库。
+func (s *Task) buildTask(db *gorm.DB, caller *model.User, p CreateTaskParams) (*model.EvaluationTask, error) {
 	if p.TeacherID == 0 || p.CourseName == "" {
 		return nil, errors.New("teacher_id 与 course_name 为必填")
 	}
@@ -202,8 +216,9 @@ func (s *Task) Create(db *gorm.DB, caller *model.User, p CreateTaskParams) (*mod
 		return nil, err
 	}
 
-	// 去重：同教师+同课程+同上课时间，未删除且未取消。
+	// 去重预检查：同教师+同课程+同上课时间，未删除且未取消。
 	// class_time 参与比较：不同时间（同一天不同节次、不同周）的课程不算重复。
+	// 预检查只为「友好提示 + 批量跳过」，并发安全由唯一索引 uk_task_dedupe_active 兜底。
 	var dup model.EvaluationTask
 	q := db.Where("teacher_id = ? AND course_name = ? AND is_deleted = 0 AND status <> ?",
 		p.TeacherID, p.CourseName, model.TaskStatusCancelled)
@@ -212,8 +227,7 @@ func (s *Task) Create(db *gorm.DB, caller *model.User, p CreateTaskParams) (*mod
 	} else {
 		q = q.Where("class_time IS NULL")
 	}
-	err = q.First(&dup).Error
-	if err == nil {
+	if err := q.First(&dup).Error; err == nil {
 		return nil, fmt.Errorf("该教师已存在相同课程的任务（任务ID=%d）", dup.ID)
 	}
 
@@ -234,10 +248,24 @@ func (s *Task) Create(db *gorm.DB, caller *model.User, p CreateTaskParams) (*mod
 			t.ScheduleSnapshot = raw
 		}
 	}
-	if err := db.Create(&t).Error; err != nil {
+	return &t, nil
+}
+
+// Create 创建任务（含权限与去重校验）
+func (s *Task) Create(db *gorm.DB, caller *model.User, p CreateTaskParams) (*model.EvaluationTask, error) {
+	t, err := s.buildTask(db, caller, p)
+	if err != nil {
 		return nil, err
 	}
-	return &t, nil
+	if err := db.Create(t).Error; err != nil {
+		// 并发下两个请求可同时通过预检查，由唯一索引兜底；
+		// 命中时返回与预检查同类的重复语义，而非暴露原始 1062 报错。
+		if isDupKeyErr(err) {
+			return nil, ErrDuplicateTask
+		}
+		return nil, err
+	}
+	return t, nil
 }
 
 // BatchCreateResult 批量创建结果
@@ -247,18 +275,56 @@ type BatchCreateResult struct {
 	Skipped      []map[string]interface{} `json:"skipped"`
 }
 
-// BatchCreate 批量创建
+// BatchCreate 批量创建。
+//
+// 分两阶段，兼顾「按项跳过」的既有语义与「失败不留半批数据」：
+//  1. 校验阶段（事务外）：逐项做权限/参数/重复预检查，不合格项计入 skipped 并说明原因，
+//     不阻断本批其它项；批内重复（同一请求里出现两条相同任务）在此直接跳过。
+//  2. 落库阶段（单事务）：校验通过的项一次性提交，任一项落库失败（DB 故障等）则整体回滚，
+//     避免「接口报错但库里已有部分任务」的脏状态；
+//     *并发* 才暴露的唯一索引冲突仍按重复跳过（另一请求已创建），不拖垮整批。
 func (s *Task) BatchCreate(db *gorm.DB, caller *model.User, items []CreateTaskParams) (*BatchCreateResult, error) {
 	res := &BatchCreateResult{CreatedTasks: []map[string]interface{}{}, Skipped: []map[string]interface{}{}}
+	skip := func(p CreateTaskParams, reason string) {
+		res.Skipped = append(res.Skipped, map[string]interface{}{
+			"teacher_id": p.TeacherID, "course_name": p.CourseName, "reason": reason,
+		})
+	}
+
+	pending := make([]*model.EvaluationTask, 0, len(items))
+	seen := make(map[string]bool, len(items))
 	for _, p := range items {
-		t, err := s.Create(db, caller, p)
-		if err != nil {
-			res.Skipped = append(res.Skipped, map[string]interface{}{
-				"teacher_id": p.TeacherID, "course_name": p.CourseName, "reason": err.Error(),
-			})
+		if key := taskDedupeKey(p); seen[key] {
+			skip(p, "本次提交中已存在相同课程的任务")
 			continue
 		}
-		res.Created = append(res.Created, *t)
+		t, err := s.buildTask(db, caller, p)
+		if err != nil {
+			skip(p, err.Error())
+			continue
+		}
+		seen[taskDedupeKey(p)] = true
+		pending = append(pending, t)
+	}
+	if len(pending) == 0 {
+		return res, nil
+	}
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		for _, t := range pending {
+			if err := tx.Create(t).Error; err != nil {
+				if isDupKeyErr(err) {
+					skip(CreateTaskParams{TeacherID: t.TeacherID, CourseName: t.CourseName}, ErrDuplicateTask.Error())
+					continue
+				}
+				return err // 触发回滚：本批已插入的任务全部撤销
+			}
+			res.Created = append(res.Created, *t)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return res, nil
 }
