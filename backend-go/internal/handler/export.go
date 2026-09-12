@@ -252,11 +252,12 @@ func exportFormat(c *gin.Context) (string, bool) {
 	return format, true
 }
 
-// exportFields 按 fields 参数过滤列；空或全不匹配回退全列（对齐旧端 GET 导出）
-func exportFields(c *gin.Context, all []xlsxCol) []xlsxCol {
+// exportFields 按 fields 参数过滤列；未显式指定时返回全列。
+// 显式指定但全为未知字段 → 返回 false，调用方回 400（避免静默产出空表）。
+func exportFields(c *gin.Context, all []xlsxCol) ([]xlsxCol, bool) {
 	fields := c.QueryArray("fields")
 	if len(fields) == 0 {
-		return all
+		return all, true
 	}
 	set := map[string]bool{}
 	for _, s := range fields {
@@ -269,9 +270,9 @@ func exportFields(c *gin.Context, all []xlsxCol) []xlsxCol {
 		}
 	}
 	if len(out) == 0 {
-		return all
+		return nil, false // 显式指定的列全部未知
 	}
-	return out
+	return out, true
 }
 
 // colsByFields 按 fields 顺序组列（对齐旧端 POST /tasks/export：未知字段取自身为标题）
@@ -526,11 +527,15 @@ func (h *Stats) ExportTeachers(c *gin.Context) {
 			"average_score": t.AverageScore, "evaluation_rate": t.EvaluationRate,
 		})
 	}
-	cols := exportFields(c, []xlsxCol{
+	cols, ok := exportFields(c, []xlsxCol{
 		{"teacher_name", "教师姓名"}, {"user_no", "工号"}, {"college_name", "学院"},
 		{"total_tasks", "总任务数"}, {"evaluated_tasks", "已评任务数"}, {"pending_tasks", "待评任务数"},
 		{"total_evaluations", "被评教次数"}, {"average_score", "平均分"}, {"evaluation_rate", "评教完成率(%)"},
 	})
+	if !ok {
+		badReq(c, "导出列无效：fields 未匹配任何可用列")
+		return
+	}
 	sq, eq := c.Query("start_date"), c.Query("end_date")
 	generateExport(c, format, "教师统计"+exportDateSuffix(sq, eq), exportTitle("教师评教统计报表", exportDateLabel(sq, eq)), cols, rows)
 }
@@ -559,13 +564,17 @@ func (h *Stats) ExportColleges(c *gin.Context) {
 		serverErr(c, "导出失败")
 		return
 	}
-	cols := exportFields(c, []xlsxCol{
+	cols, ok := exportFields(c, []xlsxCol{
 		{"college_name", "学院名称"}, {"total_teacher_count", "全部教师数"}, {"teacher_count", "有课教师数"},
 		{"total_tasks", "总任务数"}, {"evaluated_tasks", "已评任务数"}, {"pending_tasks", "待评任务数"},
 		{"total_evaluations", "评教次数"}, {"average_score", "平均分"}, {"coverage_rate", "评教覆盖率(%)"},
 		{"teachers_with_tasks", "被听课教师数"}, {"evaluation_rate", "评教完成率(%)"},
 		{"evaluated_teacher_names", "已评教师"}, {"unevaluated_teacher_names", "未评教师"},
 	})
+	if !ok {
+		badReq(c, "导出列无效：fields 未匹配任何可用列")
+		return
+	}
 
 	sq, eq := c.Query("start_date"), c.Query("end_date")
 	var filename string
@@ -612,11 +621,15 @@ func (h *Stats) ExportSupervisors(c *gin.Context) {
 		serverErr(c, "导出失败")
 		return
 	}
-	cols := exportFields(c, []xlsxCol{
+	cols, ok := exportFields(c, []xlsxCol{
 		{"supervisor_name", "督导姓名"}, {"user_no", "工号"}, {"college_name", "学院"},
 		{"total_evaluations", "评教次数"}, {"average_score", "平均给分"},
 		{"evaluated_teacher_count", "评教教师数"}, {"last_evaluation_time", "最近评教时间"},
 	})
+	if !ok {
+		badReq(c, "导出列无效：fields 未匹配任何可用列")
+		return
+	}
 	sq, eq := c.Query("start_date"), c.Query("end_date")
 	generateExport(c, format, "督导评教统计"+exportDateSuffix(sq, eq), exportTitle("督导评教统计报表", exportDateLabel(sq, eq)), cols, list)
 }
@@ -743,7 +756,7 @@ func (h *Stats) ExportTeacherSummary(c *gin.Context) {
 		}
 		rows = append(rows, row)
 	}
-	cols := exportFields(c, []xlsxCol{
+	cols, ok := exportFields(c, []xlsxCol{
 		{"teacher_name", "教师姓名"}, {"user_no", "工号"}, {"college_name", "学院"},
 		{"role_names", "角色"}, {"has_courses", "是否有课"}, {"given_count", "评教次数"}, {"given_avg_score", "评教平均给分"},
 		{"given_teacher_count", "评教教师数"}, {"received_count", "被评教次数"},
@@ -751,6 +764,10 @@ func (h *Stats) ExportTeacherSummary(c *gin.Context) {
 		{"total_tasks", "总任务数"}, {"evaluated_tasks", "已评任务数"},
 		{"pending_tasks", "待评任务数"}, {"evaluation_rate", "评教完成率(%)"},
 	})
+	if !ok {
+		badReq(c, "导出列无效：fields 未匹配任何可用列")
+		return
+	}
 	sq, eq := c.Query("start_date"), c.Query("end_date")
 	generateExport(c, format, "教师评教汇总"+exportDateSuffix(sq, eq), exportTitle("教师评教汇总报表", exportDateLabel(sq, eq)), cols, rows)
 }

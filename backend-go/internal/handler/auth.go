@@ -88,7 +88,11 @@ func (h *Auth) Login(c *gin.Context) {
 		response.Fail(c, http.StatusInternalServerError, "生成令牌失败")
 		return
 	}
-	refreshJTI := jwtutil.NewJTI()
+	refreshJTI, err := jwtutil.NewJTI()
+	if err != nil {
+		response.Fail(c, http.StatusInternalServerError, "生成刷新令牌失败")
+		return
+	}
 	refreshToken, err := jwtutil.SignRefresh(h.cfg.SecretKey, int64(user.ID), h.cfg.RefreshTokenExpireDays, refreshJTI, epoch)
 	if err != nil {
 		response.Fail(c, http.StatusInternalServerError, "生成刷新令牌失败")
@@ -164,7 +168,11 @@ func (h *Auth) Refresh(c *gin.Context) {
 		response.Fail(c, http.StatusUnauthorized, "刷新令牌已失效")
 		return
 	}
-	newJTI := jwtutil.NewJTI()
+	newJTI, err := jwtutil.NewJTI()
+	if err != nil {
+		response.Fail(c, http.StatusInternalServerError, "刷新失败，请重试")
+		return
+	}
 	res := h.db.Model(&model.User{}).
 		Where("id = ? AND refresh_jti = ?", uid, cur).
 		Updates(map[string]interface{}{

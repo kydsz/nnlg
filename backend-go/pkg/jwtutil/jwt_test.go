@@ -57,18 +57,6 @@ func TestParseAccessRejectsRefresh(t *testing.T) {
 	}
 }
 
-func TestParseAccessAllowsMissingTokenType(t *testing.T) {
-	// 旧签发的无 token_type token（如历史遗留）仍可解析为 access，避免升级断链
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": "5",
-		"exp": time.Now().Add(time.Minute).Unix(),
-	})
-	signed, _ := token.SignedString([]byte(testSecret))
-	if _, err := ParseAccess(testSecret, signed); err != nil {
-		t.Fatalf("无 token_type 的旧 token 应可作 access 使用: %v", err)
-	}
-}
-
 func TestSignUsesHS256WithStringSub(t *testing.T) {
 	token, err := SignAccess(testSecret, 7, 30, 0)
 	if err != nil {
@@ -150,8 +138,31 @@ func TestParseRejectsNoneAlgorithm(t *testing.T) {
 }
 
 func TestNewJTIUnique(t *testing.T) {
-	a, b := NewJTI(), NewJTI()
+	a, errA := NewJTI()
+	b, errB := NewJTI()
+	if errA != nil || errB != nil {
+		t.Fatalf("jti 生成不应报错: %v %v", errA, errB)
+	}
 	if a == "" || b == "" || a == b {
 		t.Fatalf("jti 应非空且唯一: a=%q b=%q", a, b)
+	}
+}
+
+func TestParseAccessRejectsMissingTokenType(t *testing.T) {
+	// 缺 token_type 的令牌不得被当作 access token 接受
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "1", "exp": time.Now().Add(time.Minute).Unix(),
+	})
+	signed, _ := token.SignedString([]byte(testSecret))
+	if _, err := ParseAccess(testSecret, signed); err == nil {
+		t.Fatal("缺失 token_type 的令牌应被 ParseAccess 拒绝")
+	}
+	// 显式 refresh 类型也不得冒充 access
+	tokenR := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "1", "token_type": TokenTypeRefresh, "exp": time.Now().Add(time.Minute).Unix(),
+	})
+	signedR, _ := tokenR.SignedString([]byte(testSecret))
+	if _, err := ParseAccess(testSecret, signedR); err == nil {
+		t.Fatal("refresh 令牌不得冒充 access")
 	}
 }

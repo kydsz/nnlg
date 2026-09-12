@@ -50,13 +50,14 @@ func sign(secret string, claims map[string]interface{}) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims(claims)).SignedString([]byte(secret))
 }
 
-// NewJTI 生成随机 jti（refresh token 唯一标识）。
-func NewJTI() string {
+// NewJTI 生成随机 jti（refresh token 唯一标识）。随机源失败返回错误，
+// 不再降级为时间戳（时间戳可预测，削弱 jti 随机性）。
+func NewJTI() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
+		return "", err
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 // Parse 校验签名与过期时间，返回 token 载荷信息。不限定 token_type，由调用方进一步校验。
@@ -100,13 +101,14 @@ func Parse(secret, tokenStr string) (*TokenInfo, error) {
 	return info, nil
 }
 
-// ParseAccess 解析并强制要求 access token（refresh token 不得冒充 access）。
+// ParseAccess 解析并强制要求 access token：
+// 缺失 token_type 或非 access 一律拒绝（缺失即视为非法令牌，防模糊携带）。
 func ParseAccess(secret, tokenStr string) (*TokenInfo, error) {
 	info, err := Parse(secret, tokenStr)
 	if err != nil {
 		return nil, err
 	}
-	if info.TokenType != "" && info.TokenType != TokenTypeAccess {
+	if info.TokenType != TokenTypeAccess {
 		return nil, errors.New("token 类型不允许")
 	}
 	return info, nil

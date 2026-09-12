@@ -38,7 +38,9 @@ type Config struct {
 
 	DefaultUserPassword string `env:"DEFAULT_USER_PASSWORD" envDefault:"teach123"`
 
-	CORSOrigins []string `env:"CORS_ORIGINS" envSeparator:"," envDefault:"*"`
+	// CORS 默认同源（不对外部 Origin 回显凭证 CORS 头）；生产需跨域时显式配置
+	// CORS_ORIGINS（逗号分隔白名单，或 "*" 显式放行任意源）。
+	CORSOrigins []string `env:"CORS_ORIGINS" envSeparator:"," envDefault:""`
 }
 
 func Load() (*Config, error) {
