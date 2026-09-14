@@ -37,7 +37,9 @@ func (b *BaseSync) GetPrintParams(listURL, tableName string) (url.Values, error)
 	params.Set("Bblk", "南宁理工学院")
 	params.Set("c_tbldate", "true")
 	params.Set("tbldate", time.Now().Format("2006年01月02日"))
-	log.Printf("[jwxt] 打印参数(%s): %v", tableName, params)
+	// 只记录字段名：hidden input 可能携带会话票据/令牌，值不落日志
+	log.Printf("[jwxt] 打印参数(%s): %d 个字段 [%s]",
+		tableName, len(params), strings.Join(sortedKeys(params), " "))
 	return params, nil
 }
 
