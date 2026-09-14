@@ -36,7 +36,18 @@ type ParseStats struct {
 	SectionDist   map[string]int `json:"section_distribution"`
 }
 
+// daysPerWeek 课表固定 7 天；每天节次数由页面列数推导，不再硬编码 43 列
+const daysPerWeek = 7
+
 var sections = []string{"0102", "0304", "0506", "0708", "0910", "1112"}
+
+// sectionCode 第 idx（0 基）个节次的编码；超出内置编码时按「2 节一大节」顺延
+func sectionCode(idx int) string {
+	if idx < len(sections) {
+		return sections[idx]
+	}
+	return fmt.Sprintf("%02d%02d", idx*2+1, idx*2+2)
+}
 
 var weekPatternRe = regexp.MustCompile(`\((\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*周)\)`)
 
@@ -65,31 +76,35 @@ func ParseScheduleHTML(content string) ([]TeacherSchedule, ParseStats, error) {
 	if len(rows[0]) < 2 {
 		return nil, ParseStats{}, fmt.Errorf("表头结构不正确")
 	}
-	if len(rows[1]) < 43 {
-		return nil, ParseStats{}, fmt.Errorf("节次列数不正确，期望43列，实际%d列", len(rows[1]))
+
+	// 网格宽度 = 1 列教师名 + 7 天 × 每天节次数，由页面列数推导（上游增删节次时不整体失败）；
+	// 若无法按 7 天均分则明确报错——宁可失败也不猜列位（错位会把课程写到错误星期/节次）。
+	cols, err := resolveGridWidth(rows)
+	if err != nil {
+		return nil, ParseStats{}, err
 	}
+	perDay := (cols - 1) / daysPerWeek
 
 	var schedules []TeacherSchedule
 	for _, cells := range rows[2:] {
 		if len(cells) < 2 {
 			continue
 		}
-		teacherName := strings.TrimSpace(textOf(cells[0]))
-		if teacherName == "" || teacherName == "&nbsp;" {
+		teacherName := strings.TrimSpace(strings.ReplaceAll(textOf(cells[0]), "\u00a0", ""))
+		if teacherName == "" {
 			continue
 		}
 		ts := TeacherSchedule{TeacherName: teacherName}
-		for day := 0; day < 7; day++ {
-			for sec := 0; sec < 6; sec++ {
-				idx := 1 + day*6 + sec
+		for day := 0; day < daysPerWeek; day++ {
+			for sec := 0; sec < perDay; sec++ {
+				idx := 1 + day*perDay + sec
 				if idx >= len(cells) {
+					break
+				}
+				if strings.TrimSpace(strings.ReplaceAll(textOf(cells[idx]), "\u00a0", "")) == "" {
 					continue
 				}
-				cellHTML := innerHTML(cells[idx])
-				if strings.Contains(cellHTML, "&nbsp;") && strings.TrimSpace(textOf(cells[idx])) == "" {
-					continue
-				}
-				ts.Courses = append(ts.Courses, parseCell(cellHTML, day+1, sections[sec])...)
+				ts.Courses = append(ts.Courses, parseCell(innerHTML(cells[idx]), day+1, sectionCode(sec))...)
 			}
 		}
 		schedules = append(schedules, ts)
@@ -104,6 +119,42 @@ func ParseScheduleHTML(content string) ([]TeacherSchedule, ParseStats, error) {
 		}
 	}
 	return schedules, stats, nil
+}
+
+// resolveGridWidth 推导课表网格宽度（含教师列）。
+// 优先取节次行（rows[1]）的列数；节次行缺失或不能按 7 天均分时，
+// 退化为取数据行中出现次数最多的可整除列数，避免单个异常行影响整体。
+func resolveGridWidth(rows [][]*html.Node) (int, error) {
+	if len(rows) > 1 {
+		if w := len(rows[1]); w >= 2 && (w-1)%daysPerWeek == 0 {
+			return w, nil
+		}
+	}
+	counts := map[int]int{}
+	maxWidth := 0
+	for _, cells := range rows[2:] {
+		if len(cells) > maxWidth {
+			maxWidth = len(cells)
+		}
+		if len(cells) >= 2 && (len(cells)-1)%daysPerWeek == 0 {
+			counts[len(cells)]++
+		}
+	}
+	best, bestCount := 0, 0
+	for w, n := range counts {
+		if n > bestCount || (n == bestCount && w > best) {
+			best, bestCount = w, n
+		}
+	}
+	if best != 0 {
+		return best, nil
+	}
+	observed := maxWidth
+	if len(rows) > 1 && len(rows[1]) > observed {
+		observed = len(rows[1])
+	}
+	return 0, fmt.Errorf("课表列数 %d（含教师列）无法按 %d 天均分，页面结构可能已变化",
+		observed, daysPerWeek)
 }
 
 // parseCell 解析单元格（可能含多门课程，用 <br><br> 分隔）

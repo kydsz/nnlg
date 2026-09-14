@@ -67,8 +67,73 @@ func TestParseScheduleHTMLErrors(t *testing.T) {
 	// 节次行列数不足
 	badSections := `<table id="kbtable"><tr><td>教师</td><td>星期一</td></tr>` +
 		`<tr><td>x</td><td>y</td></tr><tr><td>张三</td></tr></table>`
-	if _, _, err := ParseScheduleHTML(badSections); err == nil || !strings.Contains(err.Error(), "43") {
+	if _, _, err := ParseScheduleHTML(badSections); err == nil || !strings.Contains(err.Error(), "列数") {
 		t.Fatalf("节次列数错误应报错: %v", err)
+	}
+}
+
+// buildScheduleWithGrid 构造可指定每天节次数的课表（列数 = 1 + 7*perDay）
+func buildScheduleWithGrid(perDay int, teacher string, courseCells map[int]string) string {
+	total := 1 + 7*perDay
+	var b strings.Builder
+	b.WriteString(`<html><body><table id="kbtable">`)
+	b.WriteString(`<tr><td>教师</td><td>星期一</td></tr>`)
+	b.WriteString(`<tr>`)
+	for i := 0; i < total; i++ {
+		b.WriteString(`<td>节次</td>`)
+	}
+	b.WriteString(`</tr><tr><td>` + teacher + `</td>`)
+	for i := 1; i <= total; i++ {
+		if c, ok := courseCells[i]; ok {
+			b.WriteString(`<td>` + c + `</td>`)
+		} else {
+			b.WriteString(`<td>&nbsp;</td>`)
+		}
+	}
+	b.WriteString(`</tr></table></body></html>`)
+	return b.String()
+}
+
+// TestParseScheduleHTMLAdaptiveSections 每天节次数由列数推导：5 节/天（36 列）不再整体失败
+func TestParseScheduleHTMLAdaptiveSections(t *testing.T) {
+	perDay := 5
+	cell := `大学物理<br>计科3班(31)<br>(3-10周)<br>教学楼203`
+	idx := 1 + 2*perDay + 4 // 第 3 天第 5 节
+	htmlStr := buildScheduleWithGrid(perDay, "周七", map[int]string{idx: cell})
+	schedules, _, err := ParseScheduleHTML(htmlStr)
+	if err != nil {
+		t.Fatalf("自适应节次解析失败: %v", err)
+	}
+	if len(schedules) != 1 || len(schedules[0].Courses) != 1 {
+		t.Fatalf("应解析出 1 门课: %+v", schedules)
+	}
+	c := schedules[0].Courses[0]
+	if c.WeekDay != 3 || c.Section != "0910" {
+		t.Fatalf("节次推导不符: day=%d section=%s", c.WeekDay, c.Section)
+	}
+}
+
+// TestParseScheduleHTMLGeneratedSectionCode 超出内置节次编码时按 2 节一大节顺延
+func TestParseScheduleHTMLGeneratedSectionCode(t *testing.T) {
+	if got := sectionCode(6); got != "1314" {
+		t.Fatalf("第 7 大节编码应为 1314, 实际 %s", got)
+	}
+	if got := sectionCode(0); got != "0102" {
+		t.Fatalf("第 1 大节编码应为 0102, 实际 %s", got)
+	}
+}
+
+// TestParseScheduleHTMLColumnMismatch 列数无法按 7 天均分时明确报错，避免课程错位
+func TestParseScheduleHTMLColumnMismatch(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`<table id="kbtable"><tr><td>教师</td><td>星期一</td></tr><tr>`)
+	for i := 0; i < 40; i++ { // 41 列 -> 40 % 7 != 0
+		b.WriteString(`<td>节次</td>`)
+	}
+	b.WriteString(`</tr><tr><td>张三</td><td>x</td></tr></table>`)
+	if _, _, err := ParseScheduleHTML(b.String()); err == nil ||
+		!strings.Contains(err.Error(), "无法按 7 天均分") {
+		t.Fatalf("列数不整除应报错: %v", err)
 	}
 }
 
