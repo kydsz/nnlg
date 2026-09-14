@@ -198,10 +198,7 @@ func parseSingleCourse(fragment string) *LlsykbRecord {
 	}
 	raw := strings.TrimSpace(textOf(node))
 	raw = strings.Join(strings.Fields(raw), " ")
-	if len(raw) > 200 {
-		raw = raw[:200]
-	}
-	rec.Raw = raw
+	rec.Raw = truncateRunes(raw, 200) // 按字符截断，避免切出非法 UTF-8
 	return rec
 }
 
