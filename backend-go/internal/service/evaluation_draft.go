@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"time"
 
 	"backend-go/internal/model"
 
@@ -47,6 +48,12 @@ func (s *Evaluation) SaveDraft(db *gorm.DB, viewer *model.User, p SaveDraftParam
 		return nil, err
 	}
 
+	// create_time/update_time 必须显式写入：Model 的时间字段是 *LocalTime，
+	// nil 时 GORM 会把 NULL 显式写进列，绕过 evaluation_draft 两列的
+	// NOT NULL DEFAULT CURRENT_TIMESTAMP(3)（迁移 009），MySQL 严格模式报
+	// Error 1048 (23000): Column 'create_time' cannot be null，暂存整条不可用。
+	now := model.LocalTimePtr(time.Now())
+
 	var draft model.EvaluationDraft
 	err = db.Where("task_id = ? AND evaluator_id = ?", task.ID, viewer.ID).First(&draft).Error
 	switch {
@@ -57,6 +64,7 @@ func (s *Evaluation) SaveDraft(db *gorm.DB, viewer *model.User, p SaveDraftParam
 			EvaluatorName:   viewer.Username,
 			DimensionValues: raw,
 			IsAnonymous:     p.IsAnonymous,
+			Model:           model.Model{CreateTime: now, UpdateTime: now},
 		}
 		if err := db.Create(&draft).Error; err != nil {
 			return nil, err
@@ -66,6 +74,8 @@ func (s *Evaluation) SaveDraft(db *gorm.DB, viewer *model.User, p SaveDraftParam
 	default:
 		draft.DimensionValues = raw
 		draft.IsAnonymous = p.IsAnonymous
+		// Save 为全字段更新：update_time 需显式赋值才会随本次暂存刷新
+		draft.UpdateTime = now
 		if err := db.Save(&draft).Error; err != nil {
 			return nil, err
 		}
