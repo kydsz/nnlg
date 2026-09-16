@@ -548,16 +548,8 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 		taskMap[t.ID] = t
 		teacherIDs[t.TeacherID] = true
 	}
-	// 被评教师所在学院（注意：Scan 在指针字段 + Select 场景会报 unsupported data type，必须用 Find）
-	collegeOf := map[int]*int{}
-	if len(teacherIDs) > 0 {
-		var users []model.User
-		db.Select("id, college_id").Where("id IN ?", keysOf(teacherIDs)).Find(&users)
-		for _, u := range users {
-			c := u.CollegeID
-			collegeOf[u.ID] = c
-		}
-	}
+	// 被评教师所在学院：列表展示（college_id/college_name）与匿名可见性判定共用同一口径
+	colleges := TeacherCollegeMap(db, keysOf(teacherIDs))
 	scoreCodes := scoreDimCodeSet(db)
 	maxTotal := totalMaxScoreOfSchema(db)
 	viewAll := CanViewOthersEvaluation(db, viewer)
@@ -565,6 +557,7 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 	for i := range recs {
 		r := &recs[i]
 		task, ok := taskMap[r.TaskID]
+		teacherCollegeID, teacherCollegeName := TeacherCollegeDisplay(colleges, task.TeacherID)
 		item := map[string]interface{}{
 			"id": r.ID, "task_id": r.TaskID, "is_anonymous": r.IsAnonymous,
 			"evaluator_role": r.EvaluatorRole, "evaluator_role_name": model.RoleName(r.EvaluatorRole),
@@ -574,6 +567,8 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 		if ok {
 			item["teacher_id"] = task.TeacherID
 			item["teacher_name"] = task.TeacherName
+			item["college_id"] = teacherCollegeID
+			item["college_name"] = teacherCollegeName
 			item["course_name"] = task.CourseName
 			item["class_time"] = task.ClassTime
 		}
@@ -584,7 +579,7 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 				item["dimension_values"] = r.DimensionValues
 			}
 		}
-		if canSeeIdentity(viewer, r, &task, collegeOf[task.TeacherID], viewAll) {
+		if canSeeIdentity(viewer, r, &task, teacherCollegeID, viewAll) {
 			item["evaluator_id"] = r.EvaluatorID
 			item["evaluator_name"] = r.EvaluatorName
 		} else {
@@ -798,13 +793,7 @@ func (s *Evaluation) SummariesForTasks(db *gorm.DB, viewer *model.User, tasks []
 	for _, t := range tasks {
 		teacherIDs[t.TeacherID] = true
 	}
-	collegeOf := map[int]*int{}
-	var users []model.User
-	db.Select("id, college_id").Where("id IN ?", keysOf(teacherIDs)).Find(&users)
-	for _, u := range users {
-		c := u.CollegeID
-		collegeOf[u.ID] = c
-	}
+	colleges := TeacherCollegeMap(db, keysOf(teacherIDs))
 
 	summaries := map[int][]map[string]interface{}{}
 	evaluated := map[int]bool{}
@@ -822,12 +811,13 @@ func (s *Evaluation) SummariesForTasks(db *gorm.DB, viewer *model.User, tasks []
 		if !isEvaluator && task.TeacherID != viewer.ID && !viewAll {
 			continue // 不可见他人评教，仅保留任务状态
 		}
+		teacherCollegeID, _ := TeacherCollegeDisplay(colleges, task.TeacherID)
 		item := map[string]interface{}{
 			"id": r.ID, "evaluator_role": r.EvaluatorRole,
 			"evaluator_role_name": model.RoleName(r.EvaluatorRole),
 			"total_score":         totalScoreOfValues(r.DimensionValues, scoreCodes), "submit_time": r.SubmitTime,
 		}
-		if canSeeIdentity(viewer, r, &task, collegeOf[task.TeacherID], viewAll) {
+		if canSeeIdentity(viewer, r, &task, teacherCollegeID, viewAll) {
 			item["evaluator_id"] = r.EvaluatorID
 			item["evaluator_name"] = r.EvaluatorName
 		} else {

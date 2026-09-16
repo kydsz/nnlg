@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -1610,12 +1611,12 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 		}
 
 		studentCount, hasStudents := studentIdx.lookup(task.TeacherID, task.CourseName)
-		attendanceRate := values["attendance_rate"]
+		// 出勤率：优先用记录里存的值（评教人填写的为准），历史记录缺该键时按「实到 ÷ 应到」现算
+		attendanceRate := attendanceRateOf(values, studentCount, hasStudents)
+		// 出勤人数：直接取作答里的实到人数。不再由出勤率反算——出勤率缺失时会把两列一起拖空
 		attendanceCount := interface{}("")
-		if hasStudents {
-			if rate, ok := toFloat(attendanceRate); ok {
-				attendanceCount = int(float64(studentCount)*rate/100 + 0.5)
-			}
+		if actual, ok := toFloat(values["actual_count"]); ok && actual >= 0 {
+			attendanceCount = int(actual + 0.5)
 		}
 
 		classTime := interface{}(nil)
@@ -1643,6 +1644,34 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 		})
 	}
 	return list, total, nil
+}
+
+// attendanceRateOf 评教记录批量导出用的出勤率取值。
+//
+// 口径：记录里已存 attendance_rate（评教人填写/移动端自动算出）时以它为准，不被现算覆盖；
+// 缺失时按「实到 ÷ 应到 × 100」现算，保留 1 位小数——历史记录与 PC/督导端提交的记录
+// 往往没有该键，只看记录里存的值会让整列恒空。
+// 应到人数优先取作答里的 expected_count，回退到课表推算的上课人数。
+// 实到或应到缺失（或应到为 0）时返回空串，导出留空——不臆造 0%。
+func attendanceRateOf(values map[string]interface{}, scheduleStudentCount int, hasScheduleStudents bool) interface{} {
+	if v, ok := values["attendance_rate"]; ok && v != nil && v != "" {
+		return v
+	}
+	actual, ok := toFloat(values["actual_count"])
+	if !ok || actual < 0 {
+		return ""
+	}
+	expected := 0.0
+	hasExpected := false
+	if v, ok := toFloat(values["expected_count"]); ok && v > 0 {
+		expected, hasExpected = v, true
+	} else if hasScheduleStudents && scheduleStudentCount > 0 {
+		expected, hasExpected = float64(scheduleStudentCount), true
+	}
+	if !hasExpected {
+		return ""
+	}
+	return math.Round(actual/expected*1000) / 10
 }
 
 // ---------- /stats/teacher-evaluation-summary ----------

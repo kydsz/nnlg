@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +143,76 @@ func TestExportEvaluationRecordsTEIColumn(t *testing.T) {
 	shortStyle, _ := f.GetStyle(shortID)
 	if shortStyle != nil && shortStyle.Alignment.WrapText {
 		t.Fatalf("短文本列不应启用换行")
+	}
+}
+
+// TestExportEvaluationRecordsAttendanceColumns 评教记录导出的考勤两列：
+// 「出勤率(%)」在记录未存该键时按「实到 ÷ 应到」现算（历史记录不再整列空），
+// 记录已存值时原样输出；「出勤人数」取作答里的实到人数，不再由出勤率反算。
+func TestExportEvaluationRecordsAttendanceColumns(t *testing.T) {
+	env := newTestServer(t)
+	if err := env.db.AutoMigrate(
+		&model.EvaluationTask{}, &model.EvaluationRecord{}, &model.EvaluationDimension{},
+	); err != nil {
+		t.Fatalf("补齐评教相关表失败: %v", err)
+	}
+	admin := systemAdminUser()
+	env.seedUser(t, admin)
+	teacher := &model.User{UserNo: "T001", Username: "李老师", Role: model.RoleTeacher, Status: 1}
+	env.seedUser(t, teacher)
+	classTime := model.LocalTime(time.Now()) // 落在默认"当前学期"区间内，避免被日期过滤
+	task := model.EvaluationTask{
+		TeacherID: teacher.ID, TeacherName: "李老师", CourseName: "高等数学",
+		ClassTime: &classTime, Status: model.TaskStatusPending,
+	}
+	if err := env.db.Create(&task).Error; err != nil {
+		t.Fatalf("灌入任务失败: %v", err)
+	}
+	// 只填了应到/实到、没有 attendance_rate —— 正是历史上「出勤率整列空」的形态
+	computed := model.EvaluationRecord{
+		TaskID: task.ID, EvaluatorRole: model.RoleTeacher,
+		DimensionValues: json.RawMessage(`{"expected_count":50,"actual_count":45}`),
+	}
+	// 记录里已存出勤率（评教人填过）：以记录为准，且出勤人数仍取实到人数而非反算值
+	stored := model.EvaluationRecord{
+		TaskID: task.ID, EvaluatorRole: model.RoleTeacher,
+		DimensionValues: json.RawMessage(`{"expected_count":50,"actual_count":40,"attendance_rate":72.5}`),
+	}
+	if err := env.db.Create(&[]model.EvaluationRecord{computed, stored}).Error; err != nil {
+		t.Fatalf("灌入评教记录失败: %v", err)
+	}
+
+	w := env.do(t, http.MethodPost, "/api/v1/stats/evaluation-records/export",
+		`{"fields":["record_id","attendance_rate","attendance_count"]}`, env.authHeader(t, int64(admin.ID)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("导出状态码=%d, body=%s", w.Code, w.Body.String())
+	}
+	rows := parseXlsxRows(t, w.Body.Bytes())
+	headers := rows[1]
+	if len(headers) != 3 || headers[1] != "出勤率(%)" || headers[2] != "出勤人数" {
+		t.Fatalf("表头应为 [记录ID 出勤率(%%) 出勤人数], 得到 %v", headers)
+	}
+
+	countOf := map[float64]float64{} // 出勤率 -> 出勤人数
+	for _, r := range rows[2:] {
+		rate, err := strconv.ParseFloat(xlsxCell(r, 1), 64)
+		if err != nil {
+			t.Fatalf("出勤率单元格不是数字: %q（行=%v）", xlsxCell(r, 1), r)
+		}
+		cnt, err := strconv.ParseFloat(xlsxCell(r, 2), 64)
+		if err != nil {
+			t.Fatalf("出勤人数单元格不是数字: %q（行=%v）", xlsxCell(r, 2), r)
+		}
+		countOf[rate] = cnt
+	}
+	if len(countOf) != 2 {
+		t.Fatalf("应有 2 条数据行且出勤率互不相同, 得到 %v", countOf)
+	}
+	if cnt, ok := countOf[90]; !ok || cnt != 45 {
+		t.Fatalf("未存出勤率的记录应按 45/50 现算得 90、出勤人数取实到 45, 得到 %v", countOf)
+	}
+	if cnt, ok := countOf[72.5]; !ok || cnt != 40 {
+		t.Fatalf("已存出勤率的记录应原样输出 72.5、出勤人数取实到 40, 得到 %v", countOf)
 	}
 }
 

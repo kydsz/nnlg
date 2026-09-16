@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { defaultFiltersFor, showMyCreatedHint, MY_CREATED_EMPTY_HINT } from './homeFilters'
+import {
+  defaultFiltersFor,
+  showMyCreatedHint,
+  myCreatedEmptyHint,
+  MY_CREATED_EMPTY_HINT,
+  MY_CREATED_SCOPED_EMPTY_HINT,
+} from './homeFilters'
 
 describe('defaultFiltersFor', () => {
   it('初始视图（无学期）：创建者默认「我创建的」，状态与关键词为默认空值', () => {
@@ -33,5 +39,18 @@ describe('showMyCreatedHint', () => {
 
   it('提示文案指向「全部任务」', () => {
     expect(MY_CREATED_EMPTY_HINT).toContain('全部任务')
+  })
+})
+
+describe('myCreatedEmptyHint', () => {
+  it('有「查看他人评教任务」权限时，引导切到「全部任务」', () => {
+    expect(myCreatedEmptyHint(true)).toBe(MY_CREATED_EMPTY_HINT)
+    expect(MY_CREATED_EMPTY_HINT).toContain('全部任务')
+  })
+
+  it('无权限时列表里没有「全部任务」可切，改引导找管理员开权限', () => {
+    expect(myCreatedEmptyHint(false)).toBe(MY_CREATED_SCOPED_EMPTY_HINT)
+    expect(MY_CREATED_SCOPED_EMPTY_HINT).not.toContain('全部任务')
+    expect(MY_CREATED_SCOPED_EMPTY_HINT).toContain('管理员')
   })
 })

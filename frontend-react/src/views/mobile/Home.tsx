@@ -19,7 +19,7 @@ import type { Task } from '@/api/types'
 import {
   defaultFiltersFor,
   showMyCreatedHint,
-  MY_CREATED_EMPTY_HINT,
+  myCreatedEmptyHint,
   type HomeFilters,
   type StatusFilter,
   type CreatorFilter,
@@ -58,6 +58,9 @@ export default function Home() {
   const canDelete = (t: Task) =>
     hasPermission('task:delete') ||
     (hasPermission('task:delete_own') && userId != null && t.create_by === userId)
+  // 「查看他人评教任务」由管理员按角色分配；未分配时只能看与我相关的任务，
+  // 后端已强制收敛，这里同步去掉会诱导去翻别人任务的视图切换。
+  const canViewOthersTasks = hasPermission('task:view_all')
 
   const buildParams = useCallback(
     (p: number): TaskListParams => {
@@ -171,18 +174,20 @@ export default function Home() {
             <option value="supervisor_yes">本次督导已评</option>
             <option value="supervisor_no">本次督导未评</option>
           </select>
-          <select
-            value={creatorFilter}
-            onChange={(e) => {
-              setFilters((f) => ({ ...f, creatorFilter: e.target.value as CreatorFilter }))
-              resetAndReload()
-            }}
-            style={selectStyle}
-          >
-            <option value="">全部任务</option>
-            <option value="my_created">我创建的</option>
-            <option value="other_created">其他创建的</option>
-          </select>
+          {canViewOthersTasks && (
+            <select
+              value={creatorFilter}
+              onChange={(e) => {
+                setFilters((f) => ({ ...f, creatorFilter: e.target.value as CreatorFilter }))
+                resetAndReload()
+              }}
+              style={selectStyle}
+            >
+              <option value="">全部任务</option>
+              <option value="my_created">我创建的</option>
+              <option value="other_created">其他创建的</option>
+            </select>
+          )}
         </div>
       </div>
 
@@ -191,7 +196,7 @@ export default function Home() {
           <ErrorBlock
             status="empty"
             title="暂无待评任务"
-            description={showMyCreatedHint(creatorFilter) ? MY_CREATED_EMPTY_HINT : ''}
+            description={showMyCreatedHint(creatorFilter) ? myCreatedEmptyHint(canViewOthersTasks) : ''}
           />
         ) : isError ? (
           <ErrorBlock status="default" title="获取任务列表失败" description="" />

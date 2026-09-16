@@ -102,6 +102,13 @@ func (h *Task) List(c *gin.Context) {
 		}
 	}
 
+	// 被评教师所属学院（口径与任务可见范围、统计报表一致：被评教师主学院）
+	teacherIDSet := map[int]bool{}
+	for _, t := range tasks {
+		teacherIDSet[t.TeacherID] = true
+	}
+	teacherColleges := service.TeacherCollegeMap(h.db, keysOf(teacherIDSet))
+
 	list := []gin.H{}
 	for i := range tasks {
 		t := &tasks[i]
@@ -115,8 +122,10 @@ func (h *Task) List(c *gin.Context) {
 				createByName = n
 			}
 		}
+		teacherCollegeID, teacherCollegeName := service.TeacherCollegeDisplay(teacherColleges, t.TeacherID)
 		item := gin.H{
 			"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
+			"teacher_college_id": teacherCollegeID, "teacher_college_name": teacherCollegeName,
 			"course_name": t.CourseName, "class_time": FTimeMin(t.ClassTime),
 			"classroom": t.Classroom, "status": t.Status,
 			"status_name": model.TaskStatusNames[t.Status],
@@ -149,6 +158,12 @@ func (h *Task) Get(c *gin.Context) {
 		return
 	}
 	u := middleware.CurrentUser(c)
+	// 可见范围与列表同一口径：未获 task:view_all 者只能看与我相关的任务，
+	// 避免绕过列表直接按 id 拉取他人任务详情。
+	if !service.CanViewTask(h.db, u, t) {
+		forbidden(c, "您没有权限查看该评教任务")
+		return
+	}
 	summaries, _ := h.evalSvc.SummariesForTasks(h.db, u, []model.EvaluationTask{*t})
 	summary := summaries[t.ID]
 	if summary == nil {

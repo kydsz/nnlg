@@ -216,12 +216,54 @@ func TestEvalDetailNoTextOverlapExplicitNewline(t *testing.T) {
 	assertNoLayoutDefects(t, renderDetail(t, d))
 }
 
-// TestEvalDetailNoTextOverlapTruncated 变体：折行超 3 行走省略号截断路径
-func TestEvalDetailNoTextOverlapTruncated(t *testing.T) {
+// TestEvalDetailNoTextOverlapLongText 变体：长评语全额折行绘制（不截断）
+func TestEvalDetailNoTextOverlapLongText(t *testing.T) {
 	d := EvalDetail{Groups: []EvalDetailGroup{
-		textDim("意见与建议", strings.Repeat("超长文本折行截断路径验证。", 20)),
+		textDim("意见与建议", strings.Repeat("超长文本折行完整展示路径验证。", 20)),
 	}}
 	assertNoLayoutDefects(t, renderDetail(t, d))
+}
+
+// evalValXpt 维度值列的文本 x（valX+2 = 56+2 = 58mm，单位 pt）
+const evalValXpt = 58.0 / 25.4 * 72
+
+// valueColumnDraws 值列上的文本绘制次数（每一折行一次）
+func valueColumnDraws(t *testing.T, pdf []byte) int {
+	t.Helper()
+	draws, _ := parsePDFContent(t, pdf)
+	n := 0
+	for _, d := range draws {
+		if abs(d.x-evalValXpt) < 0.5 {
+			n++
+		}
+	}
+	return n
+}
+
+// TestEvalDetailLongTextFullyRendered 长评语必须完整绘制，不得截断。
+// 旧版按「折行 3 行 + 省略号」截断，值列上恒定 4 次文本绘制——本测试即该缺陷的回归锁。
+func TestEvalDetailLongTextFullyRendered(t *testing.T) {
+	d := EvalDetail{Groups: []EvalDetailGroup{
+		textDim("意见与建议", strings.Repeat("超长文本折行完整展示路径验证。", 30)),
+	}}
+	pdf := renderDetail(t, d)
+	assertNoLayoutDefects(t, pdf)
+	if n := valueColumnDraws(t, pdf); n <= 4 {
+		t.Fatalf("长评语在值列应有超过 4 次文本绘制（旧版截断为 3 行 + 省略号），实际 %d 次", n)
+	}
+}
+
+// TestEvalDetailLongTextSpansPages 超出单页容量的评语续写到下一页，而不是被裁掉。
+func TestEvalDetailLongTextSpansPages(t *testing.T) {
+	d := EvalDetail{Groups: []EvalDetailGroup{
+		textDim("意见与建议", strings.Repeat("超长文本折行跨页续写路径验证。", 300)),
+	}}
+	pdf := renderDetail(t, d)
+	assertNoLayoutDefects(t, pdf)
+	// 单页正文上限约 floor((pageBottom-margin-headH-1.6)/4.4) ≈ 58 行
+	if n := valueColumnDraws(t, pdf); n <= 58 {
+		t.Fatalf("超长评语应跨页续写（单页上限约 58 行），实际共 %d 行", n)
+	}
 }
 
 // TestScheduleNoTextOverlap 变体：课表信息多行值（同一公式的另一处调用点）

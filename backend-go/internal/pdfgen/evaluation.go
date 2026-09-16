@@ -21,6 +21,8 @@ import (
 const (
 	pageW, pageH = 210.0, 297.0
 	margin       = 10.0
+	// pageBottom 内容区下界（底部预留页脚区）
+	pageBottom = pageH - margin - 8
 )
 
 // v2 模板配色（generate_evaluation_html）
@@ -299,7 +301,7 @@ func (b *evalPainter) drawGroup(g *EvalDetailGroup) {
 	if len(g.Dimensions) > 0 {
 		firstNeed += b.dimRowHeight(&g.Dimensions[0], valW)
 	}
-	if b.y+firstNeed > pageH-margin-8 {
+	if b.y+firstNeed > pageBottom {
 		b.gp.AddPage()
 		b.y = margin
 	}
@@ -310,23 +312,54 @@ func (b *evalPainter) drawGroup(g *EvalDetailGroup) {
 	b.gp.Line(left, b.y, right, b.y)
 	drawHead()
 
+	// breakPage 换页：封闭当前页组框，新页重开框并重复组头（对齐打印模板）
+	breakPage := func() {
+		b.gp.SetStrokeColor(colBorder[0], colBorder[1], colBorder[2])
+		b.gp.SetLineWidth(0.3)
+		b.gp.Line(left, frameTop, left, b.y)
+		b.gp.Line(right, frameTop, right, b.y)
+		b.gp.AddPage()
+		b.y = margin
+		frameTop = b.y
+		b.gp.SetStrokeColor(colBorder[0], colBorder[1], colBorder[2])
+		b.gp.SetLineWidth(0.25)
+		b.gp.Line(left, b.y, right, b.y)
+		drawHead()
+	}
+
 	for i := range g.Dimensions {
-		need := b.dimRowHeight(&g.Dimensions[i], valW)
-		if b.y+need > pageH-margin-8 {
-			// 封闭当前页组框，换页后重开框并重复组头
-			b.gp.SetStrokeColor(colBorder[0], colBorder[1], colBorder[2])
-			b.gp.SetLineWidth(0.3)
-			b.gp.Line(left, frameTop, left, b.y)
-			b.gp.Line(right, frameTop, right, b.y)
-			b.gp.AddPage()
-			b.y = margin
-			frameTop = b.y
-			b.gp.SetStrokeColor(colBorder[0], colBorder[1], colBorder[2])
-			b.gp.SetLineWidth(0.25)
-			b.gp.Line(left, b.y, right, b.y)
-			drawHead()
+		dim := &g.Dimensions[i]
+		if dim.FieldType != "image" && dim.FieldType != "file" && dim.FieldType != "score" {
+			// 文本维度：按当前页剩余高度切段绘制，放不下的续到下一页——长评语完整展示，不截断
+			lines := b.wrapText(dim.Display, valW-2, 11)
+			for seg := 0; seg < len(lines); {
+				fits := int((pageBottom - b.y - 1.6) / 4.4)
+				if fits < 1 {
+					breakPage()
+					fits = int((pageBottom - b.y - 1.6) / 4.4)
+					if fits < 1 {
+						fits = 1 // 单行高过一页的病态行高：至少推进一行，避免死循环
+					}
+				}
+				n := len(lines) - seg
+				if n > fits {
+					n = fits
+				}
+				h := dimTextHeight(n)
+				var nameLines []string
+				if seg == 0 {
+					nameLines = b.dimLabelLines(dim.Name)
+					h = b.dimLabelHeight(dim.Name, h)
+				}
+				b.drawDimRowText(left, right, nameW, valX, lines[seg:seg+n], h, nameLines)
+				seg += n
+			}
+			continue
 		}
-		b.drawDimRow(left, right, nameW, valX, valW, &g.Dimensions[i])
+		if b.y+b.dimRowHeight(dim, valW) > pageBottom {
+			breakPage()
+		}
+		b.drawDimRow(left, right, nameW, valX, valW, dim)
 	}
 	// 闭合组框：左右竖线
 	b.gp.SetStrokeColor(colBorder[0], colBorder[1], colBorder[2])
@@ -336,51 +369,75 @@ func (b *evalPainter) drawGroup(g *EvalDetailGroup) {
 	b.y += 3.0
 }
 
-// dimRowHeight 维度行高（值按实际折行数、图片行按缩略图高；超长维度名折行抬高行高）
-func (b *evalPainter) dimRowHeight(dim *EvalDetailDim, valW float64) float64 {
-	h := 6.0
-	switch dim.FieldType {
-	case "image":
-		if len(stringSlice(dim.Value)) > 0 {
-			h = 15.5
-		}
-	case "file":
+// dimTextHeight 文本行数对应的行高（行距 4.4mm + 上下内边距 1.6mm，单行保底 6.0mm）
+func dimTextHeight(lines int) float64 {
+	h := float64(lines)*4.4 + 1.6
+	if h < 6.0 {
 		h = 6.0
-	default:
-		// 与 drawDimRow 绘制时同宽（valW-2）折行，保证行高预算和实际行槽数一致
-		n := len(b.wrapText(dim.Display, valW-2, 11))
-		if n > 3 { // 3 行正文 + 省略号行
-			n = 4
-		}
-		if n > 1 {
-			h = float64(n)*4.4 + 1.6
-		}
-	}
-	// 标签折行所需高度（单行不抬高，保持既有 6.0mm 基准）
-	if n := len(b.dimLabelLines(dim.Name)); n > 1 {
-		if lh := float64(n)*dimLabelLineH + 1.8; lh > h {
-			h = lh
-		}
 	}
 	return h
 }
 
-// drawDimRow 维度行（两列表格）：名称单元格灰底折行居中，值单元格左对齐；分数右对齐；图片缩略图、文件显示文件名
-func (b *evalPainter) drawDimRow(left, right, nameW, valX, valW float64, dim *EvalDetailDim) {
-	h := b.dimRowHeight(dim, valW)
-
-	// 名称单元格（浅灰底，对齐打印模板 td 背景 #f5f7fa）；超长维度名折行、整块垂直居中
-	b.fillRect(left, b.y, nameW, h, colInfoBG)
-	nameLines := b.dimLabelLines(dim.Name)
-	for i, ln := range nameLines {
-		b.text(left+dimLabelPad, baseLine(b.y, h, 10)+(float64(i)-float64(len(nameLines)-1)/2)*dimLabelLineH, ln, 10, colText)
+// dimLabelHeight 维度名折行所需高度（单行标签保持 base 基准，不抬高行高）
+func (b *evalPainter) dimLabelHeight(name string, base float64) float64 {
+	if n := len(b.dimLabelLines(name)); n > 1 {
+		if lh := float64(n)*dimLabelLineH + 1.8; lh > base {
+			return lh
+		}
 	}
+	return base
+}
 
-	// 名称/值分隔竖线 + 行底横线
+// dimRowHeight 维度行高（值按实际折行数全额计算、图片行按缩略图高；超长维度名折行抬高行高）。
+// 自由文本维度不设行数上限：评语必须完整展示，单页放不下的部分由 drawGroup 分段续到下一页。
+func (b *evalPainter) dimRowHeight(dim *EvalDetailDim, valW float64) float64 {
+	switch dim.FieldType {
+	case "image":
+		if len(stringSlice(dim.Value)) > 0 {
+			return b.dimLabelHeight(dim.Name, 15.5)
+		}
+		return b.dimLabelHeight(dim.Name, 6.0)
+	case "file":
+		return b.dimLabelHeight(dim.Name, 6.0)
+	default:
+		// 与 drawDimRow 绘制时同宽（valW-2）折行，保证行高预算和实际行槽数一致
+		return b.dimLabelHeight(dim.Name, dimTextHeight(len(b.wrapText(dim.Display, valW-2, 11))))
+	}
+}
+
+// drawDimRowFrame 行框：名称单元格灰底折行居中 + 名称/值分隔竖线 + 行底横线（不推进游标）。
+// nameLines 为空表示跨页续段：不填标签底色、不画维度名。
+func (b *evalPainter) drawDimRowFrame(left, right, nameW, valX, h float64, nameLines []string) {
+	if len(nameLines) > 0 {
+		// 浅灰底，对齐打印模板 td 背景 #f5f7fa
+		b.fillRect(left, b.y, nameW, h, colInfoBG)
+		for i, ln := range nameLines {
+			b.text(left+dimLabelPad,
+				baseLine(b.y, h, 10)+(float64(i)-float64(len(nameLines)-1)/2)*dimLabelLineH,
+				ln, 10, colText)
+		}
+	}
 	b.gp.SetStrokeColor(colBorder[0], colBorder[1], colBorder[2])
 	b.gp.SetLineWidth(0.25)
 	b.gp.Line(valX, b.y, valX, b.y+h)
 	b.gp.Line(left, b.y+h, right, b.y+h)
+}
+
+// drawDimRowText 文本值的一段：行框内左对齐逐行绘制，然后推进游标。
+func (b *evalPainter) drawDimRowText(left, right, nameW, valX float64, lines []string, h float64, nameLines []string) {
+	b.drawDimRowFrame(left, right, nameW, valX, h, nameLines)
+	slots := float64(len(lines))
+	for i, ln := range lines {
+		b.text(valX+2, baseLine(b.y, h, 11)+(float64(i)-(slots-1)/2)*4.4, ln, 11, colText)
+	}
+	b.y += h
+}
+
+// drawDimRow 维度行（两列表格）：名称单元格灰底折行居中，值单元格左对齐；分数右对齐；图片缩略图、文件显示文件名。
+// 文本值按实际折行数全额绘制；单页放不下的超长文本由 drawGroup 分段续到下一页。
+func (b *evalPainter) drawDimRow(left, right, nameW, valX, valW float64, dim *EvalDetailDim) {
+	h := b.dimRowHeight(dim, valW)
+	b.drawDimRowFrame(left, right, nameW, valX, h, b.dimLabelLines(dim.Name))
 
 	switch dim.FieldType {
 	case "image":
@@ -394,21 +451,11 @@ func (b *evalPainter) drawDimRow(left, right, nameW, valX, valW float64, dim *Ev
 			b.textRight(right-2, baseLine(b.y, h, 11), dim.Display, 11, colText)
 		}
 	default:
+		// 行距 4.4mm，整块在行高内垂直居中
 		lines := b.wrapText(dim.Display, valW-2, 11)
-		n := len(lines)
-		if n > 3 {
-			n = 3
-		}
-		// 行距 4.4mm，整块（含截断省略号行）在行高内垂直居中
-		slots := float64(n)
-		if len(lines) > 3 {
-			slots++
-		}
-		for i := 0; i < n; i++ {
-			b.text(valX+2, baseLine(b.y, h, 11)+(float64(i)-(slots-1)/2)*4.4, lines[i], 11, colText)
-		}
-		if len(lines) > 3 { // 超出截断（对齐旧端 50 字截断），省略号独占末行
-			b.text(valX+2, baseLine(b.y, h, 11)+(float64(n)-(slots-1)/2)*4.4, "…", 11, colText)
+		slots := float64(len(lines))
+		for i, ln := range lines {
+			b.text(valX+2, baseLine(b.y, h, 11)+(float64(i)-(slots-1)/2)*4.4, ln, 11, colText)
 		}
 	}
 	b.y += h

@@ -42,6 +42,7 @@ var PermissionCatalog = []PermissionGroup{
 	}},
 	{Group: "评教任务", Permissions: []PermissionItem{
 		{Code: "task:view", Name: "查看评教任务"},
+		{Code: "task:view_all", Name: "查看他人评教任务"},
 		{Code: "task:create", Name: "创建评教任务"},
 		{Code: "task:update", Name: "编辑评教任务"},
 		{Code: "task:delete", Name: "删除评教任务"},

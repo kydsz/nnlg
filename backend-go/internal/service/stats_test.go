@@ -93,6 +93,74 @@ func TestRecordsAvgScore(t *testing.T) {
 	})
 }
 
+// TestAttendanceRateOf 锁定评教记录批量导出的「出勤率」取值口径：
+// 记录里存了 attendance_rate 就以记录为准（显式 0 也算填过，不被现算覆盖）；
+// 没存则按「实到 ÷ 应到 × 100」现算并保留一位小数；两边都拿不到时留空，不臆造 0%。
+// 背景：历史记录/PC 端/督导端提交的作答里往往没有 attendance_rate 键，
+// 只看记录里存的值会让导出整列恒空。
+func TestAttendanceRateOf(t *testing.T) {
+	cases := []struct {
+		name       string
+		values     map[string]interface{}
+		schedCount int
+		hasSched   bool
+		want       interface{}
+	}{
+		{
+			"记录里有值以记录为准",
+			map[string]interface{}{"attendance_rate": 88.5, "actual_count": 40.0, "expected_count": 50.0},
+			0, false, 88.5,
+		},
+		{
+			"显式的0不被现算覆盖",
+			map[string]interface{}{"attendance_rate": 0.0, "actual_count": 40.0, "expected_count": 50.0},
+			0, false, 0.0,
+		},
+		{
+			"缺记录值按实到÷应到现算",
+			map[string]interface{}{"actual_count": 45.0, "expected_count": 50.0},
+			0, false, 90.0,
+		},
+		{
+			"现算四舍五入到一位小数",
+			map[string]interface{}{"actual_count": 2.0, "expected_count": 3.0},
+			0, false, 66.7,
+		},
+		{
+			"无应到时回退课表上课人数",
+			map[string]interface{}{"actual_count": 30.0},
+			50, true, 60.0,
+		},
+		{
+			"应到为0时回退课表上课人数",
+			map[string]interface{}{"actual_count": 30.0, "expected_count": 0.0},
+			60, true, 50.0,
+		},
+		{
+			"缺实到时留空",
+			map[string]interface{}{"expected_count": 50.0},
+			50, true, "",
+		},
+		{
+			"既无应到也无课表人数时留空",
+			map[string]interface{}{"actual_count": 30.0},
+			0, false, "",
+		},
+		{
+			"应到为0且无课表人数时留空",
+			map[string]interface{}{"actual_count": 30.0, "expected_count": 0.0},
+			0, false, "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := attendanceRateOf(c.values, c.schedCount, c.hasSched); got != c.want {
+				t.Fatalf("attendanceRateOf() = %#v, 期望 %#v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestNumOf(t *testing.T) {
 	f := 2.5
 	cases := []struct {

@@ -16,7 +16,7 @@ export default function Stats() {
     <div>
       <h3 className="page-title">统计分析</h3>
       <div style={{ marginBottom: 12, fontSize: 12, color: '#8c8c8c' }}>
-        统计口径：按评教任务的「上课时间」（class_time）归属所选时间段汇总；未选择时间段时默认取当前学期。评教记录的「提交时间」仅作展示，不参与统计筛选，因此各页签同一时间段下数据一致。
+        统计口径：按评教任务的「上课时间」（class_time）归属所选时间段汇总；未选择时间段时默认取当前学期。评教记录的「提交时间」仅作展示，不参与统计筛选，因此各页签同一时间段下数据一致。「有课教师数」指当前学期课表中有课的教师（在岗且具备教师角色、主学院属于该学院），无课教师不计入；导出中的「全部教师数」不要求有课。
       </div>
       <Tabs
         items={[
@@ -116,7 +116,7 @@ function CollegeStatsTab() {
 
   const columns: ColumnsType<CollegeStat> = [
     { title: '学院', dataIndex: 'college_name' },
-    { title: '教师数', dataIndex: 'teacher_count', width: 90 },
+    { title: '有课教师数', dataIndex: 'teacher_count', width: 110 },
     { title: '总任务', dataIndex: 'total_tasks', width: 90 },
     { title: '已评', dataIndex: 'evaluated_tasks', width: 80 },
     { title: '待评', dataIndex: 'pending_tasks', width: 80 },
@@ -177,7 +177,7 @@ function CampusStatsTab() {
         dataSource={rows}
         columns={[
           { title: '校区', dataIndex: 'campus_name' },
-          { title: '教师数', dataIndex: 'teacher_count', width: 90 },
+          { title: '有课教师数', dataIndex: 'teacher_count', width: 110 },
           { title: '总任务', dataIndex: 'total_tasks', width: 90 },
           { title: '已评', dataIndex: 'evaluated_tasks', width: 80 },
           { title: '评教记录数', dataIndex: 'total_evaluations', width: 100 },

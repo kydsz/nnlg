@@ -445,19 +445,8 @@ func (h *Task) Export(c *gin.Context) {
 		}
 	}
 	collegeNames := map[int]string{}
-	if len(tids) > 0 {
-		var rows []struct {
-			ID          int
-			CollegeName *string
-		}
-		h.db.Table("`user` u").Select("u.id, c.name AS college_name").
-			Joins("LEFT JOIN college c ON c.id = u.college_id").
-			Where("u.id IN ?", tids).Scan(&rows)
-		for _, r := range rows {
-			if r.CollegeName != nil {
-				collegeNames[r.ID] = *r.CollegeName
-			}
-		}
+	for id, c := range service.TeacherCollegeMap(h.db, tids) {
+		collegeNames[id] = c.Name
 	}
 
 	rows := make([]map[string]interface{}, 0, len(tasks))

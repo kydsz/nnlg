@@ -175,6 +175,8 @@ export interface EvaluationRecord {
   course_name: string
   class_time?: string | null
   classroom?: string | null
+  /** 被评教师所属学院（口径：被评教师主学院，与任务可见范围、统计报表一致） */
+  college_id?: number | null
   college_name?: string | null
   evaluator_id: number
   evaluator_name: string

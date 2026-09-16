@@ -98,6 +98,53 @@ func CanViewOthersEvaluation(db *gorm.DB, u *model.User) bool {
 	return false
 }
 
+// CanViewAllTasks 是否可查看「与我无关」的评教任务（task:view_all）。
+//
+// 系统管理员恒可；其他角色需被分配 task:view_all 权限（管理员可在「角色管理」页勾选分配）。
+// 未获授权者只能看到与我相关的任务：我创建的、我被评的、我评过的（见 relatedToMeCond）。
+// 注意：授权只是取消「仅本人相关」这一层收敛，可见的他人任务仍受学院数据范围
+// （AccessibleCollegeIDs + applyCollegeFilter）约束，两者是「且」的关系。
+func CanViewAllTasks(db *gorm.DB, u *model.User) bool {
+	if u.HasRole(model.RoleSystemAdmin) {
+		return true
+	}
+	for _, p := range u.Permissions(db) {
+		if p == "task:view_all" {
+			return true
+		}
+	}
+	return false
+}
+
+// CanViewTask 是否可查看单个评教任务（详情接口用）。
+// 与列表的可见范围同一口径，两层是「且」的关系：
+//  1. 学院数据范围——被评教师须在 caller 的可访问学院内（与 applyCollegeFilter 等价，
+//     含「教师未绑定学院则不在任何人的范围内」这一点）；
+//  2. 是否与我相关——我创建的、我被评的、我评过的；否则需要 task:view_all（见 CanViewAllTasks）。
+func CanViewTask(db *gorm.DB, caller *model.User, t *model.EvaluationTask) bool {
+	teacher, err := LoadTeacherUser(db, t.TeacherID)
+	if err != nil {
+		return false
+	}
+	if !CollegeInScope(caller, teacher.CollegeID) {
+		return false
+	}
+	if t.CreateBy != nil && *t.CreateBy == caller.ID {
+		return true
+	}
+	if t.TeacherID == caller.ID {
+		return true
+	}
+	if CanViewAllTasks(db, caller) {
+		return true
+	}
+	var n int64
+	db.Model(&model.EvaluationRecord{}).
+		Where("task_id = ? AND evaluator_id = ? AND is_deleted = 0", t.ID, caller.ID).
+		Count(&n)
+	return n > 0
+}
+
 // CanDeleteEvaluation 是否可删除任意评教记录
 // 系统管理员恒可；其他角色需被分配 evaluation:delete 权限（评教人本人不再默认可删，避免抹掉已提交评教影响接收人数据）
 func CanDeleteEvaluation(db *gorm.DB, u *model.User) bool {

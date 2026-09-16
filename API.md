@@ -34,7 +34,7 @@
 | 组织架构 | `org:view` / `campus:manage` / `college:manage` / `research_room:manage`                                                                      |
 | 角色管理 | `role:manage`                                                                                                                                 |
 | 评教维度 | `dimension:manage`                                                                                                                            |
-| 评教任务 | `task:view` / `task:create` / `task:update` / `task:delete` / `task:delete_own` |
+| 评教任务 | `task:view` / `task:view_all` / `task:create` / `task:update` / `task:delete` / `task:delete_own` |
 | 评教记录 | `evaluation:view` / `evaluation:create` / `evaluation:view_anonymous` / `evaluation:view_all` / `evaluation:delete` / `evaluation:delete_own` |
 | 统计报表 | `stats:view`                                                                                                                                  |
 | 课程表  | `schedule:view` / `schedule:view_college`                                                                                                     |
@@ -636,6 +636,8 @@ GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1
         "id": 1,
         "teacher_id": 1,
         "teacher_name": "张老师",
+        "teacher_college_id": 3,
+        "teacher_college_name": "文理学院",
         "course_name": "高等数学",
         "class_time": "2024-01-15T08:00:00",
         "classroom": "A101",
@@ -661,13 +663,17 @@ GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1
 
 > 注意：`evaluation_records` 汇总按评教可见性过滤（督导默认看不到其他人的评教记录），`current_user_evaluated` 不受影响。
 
+**返回字段**：列表项含 `teacher_college_id` / `teacher_college_name`（被评教师所属学院，与可见范围、统计报表同口径）。同课汇总字段 `course_supervisor_evaluated` / `course_evaluator_count` 仅在能统计时下发，字段缺省表示「无法统计」而非「未评 / 0 人」。
+
+**可见范围**：未持 `task:view_all`（查看他人评教任务）者只能看到与我相关的任务——我创建的、我被评的、我评过的。该收敛在服务端强制生效，`create_by` / `create_by_not` 等筛选参数无法绕过；持 `task:view_all` 者再按其学院数据范围查看（管理员=本学院，三类督导=负责学院 / 全校）。`task:view_all` 由管理员在「角色管理」页按角色分配，接口侧只认权限码。
+
 ### 获取任务详情
 
 ```http
 GET /tasks/{task_id}
 ```
 
-返回字段在列表基础上增加 `teacher_college_id` / `teacher_college_name`、`update_time`。
+返回字段与列表一致（含 `teacher_college_id` / `teacher_college_name`），另增加 `update_time` 与 `schedule`（加入待评时固化的课表快照）。可见范围与列表同一口径：不在可见范围内的任务返回 403。
 
 ### 创建评教任务
 
@@ -737,6 +743,10 @@ GET /evaluations?page=1&page_size=20&task_id=1&teacher_id=1&evaluator_id=1&evalu
 **查询参数**: `task_id`、`teacher_id`、`evaluator_id`、`evaluator_name`、`evaluator_role`、`college_id`、`teacher_name`、`type`、`keyword`、`start_date`、`end_date`、`page`、`page_size`（`start_date` / `end_date` 格式 `YYYY-MM-DD`，按评教任务的上课时间（听课时间）过滤，即「记录所属学期」口径）。`keyword` 匹配课程名 / 教师名 / 评教人名 / 作答文本；其中评教人名对匿名记录仅对可见身份者（评教人本人、系统管理员、数据范围内持 `evaluation:view_all` 权限者）可命中。
 
 **可见性**: 教师角色只能查看自己的评教记录；督导默认只能查看自己评教的记录，需 `evaluation:view_all` 权限码（在角色管理中分配）后按学院范围查看他人记录。
+
+**返回字段**: 列表项含 `college_id` / `college_name`（被评教师所属学院，与任务可见范围、统计报表同口径）。
+
+> `id` 为数据库自增主键，**不保证连续**：软删除的记录、以及落在筛选条件 / 可见范围之外的记录都会让列表出现跳号。列表默认按评教任务的上课时间（`class_time`）降序，而非按 `id` 排序，因此展示顺序与 `id` 大小不一定一致——需要按 `id` 排序时显式传 `order_by=id`。
 
 ### 提交评教
 
@@ -1075,6 +1085,8 @@ POST /stats/evaluation-records/export     # 评教记录导出
   "fields": ["teacher_name", "course_name", "class_time", "classroom", "evaluator_name", "submit_time"]
 }
 ```
+
+* `POST /stats/evaluation-records/export` 的考勤两列口径：`attendance_rate`（表头「出勤率(%)」）以评教记录里存下的值为准，记录里没有时按该次评教的「实到人数 ÷ 应到人数 × 100」现算（保留 1 位小数，应到优先取作答里的 `expected_count`，回退课表的上课人数）；`attendance_count`（表头「出勤人数」）取作答里的实到人数，不由出勤率反算。两者都拿不到时该格留空。
 
 导出均为 XLSX 附件下载。
 

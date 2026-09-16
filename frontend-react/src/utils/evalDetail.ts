@@ -223,6 +223,7 @@ export function buildEvalPrintHtml(detail: EvaluationRecord): string {
     ['教师', detail.teacher_name],
     ['课程', detail.course_name],
     ['上课时间', formatDate(detail.class_time)],
+    ['学院', detail.college_name || '-'],
     ['评教人', detail.evaluator_name],
     ['评教角色', detail.evaluator_role_name || detail.evaluator_role || '-'],
     ['提交时间', detail.submit_time || '-'],

@@ -43,6 +43,16 @@ func applyCollegeFilter(q *gorm.DB, ids []int) *gorm.DB {
 	return q.Where("teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)", ids)
 }
 
+// relatedToMeCond 「与我相关」的评教任务：我创建的、我被评的、我评过的。
+//
+// 未获 task:view_all 权限者（当前典型为普通教师）的可见范围收敛条件，
+// 三处占位符均为当前用户 ID。评教任务不是「广播」数据，而是每位评教人自己的
+// 待评课表：看不见他人任务，也就看不见督导是否把某位教师的课排进了待评计划。
+// 注：任务表在本查询中不带别名，子查询按表名 evaluation_task 关联。
+const relatedToMeCond = "(create_by = ? OR teacher_id = ? OR EXISTS (" +
+	"SELECT 1 FROM evaluation_record er " +
+	"WHERE er.task_id = evaluation_task.id AND er.evaluator_id = ? AND er.is_deleted = 0))"
+
 func (s *Task) buildQuery(db *gorm.DB, f TaskFilters, caller *model.User) (*gorm.DB, error) {
 	q := db.Model(&model.EvaluationTask{}).Where("is_deleted = 0")
 
@@ -95,6 +105,12 @@ func (s *Task) buildQuery(db *gorm.DB, f TaskFilters, caller *model.User) (*gorm
 		}
 	}
 	q = applyCollegeFilter(q, ids)
+
+	// 与我相关的任务收敛：未获 task:view_all 权限者只能看到自己创建的、自己被评的、自己评过的任务。
+	// 该条件在服务端强制生效，前端筛选参数（create_by / create_by_not）无法绕过——去掉参数也拿不到无关任务。
+	if !CanViewAllTasks(db, caller) {
+		q = q.Where(relatedToMeCond, caller.ID, caller.ID, caller.ID)
+	}
 	return q, nil
 }
 
@@ -140,6 +156,41 @@ func LoadTeacherUser(db *gorm.DB, id int) (*model.User, error) {
 		return nil, errors.New("被评教师不存在")
 	}
 	return u, nil
+}
+
+// TeacherCollegeMap 批量读取「被评教师 ID → 所属学院」。
+//
+// 学院口径全系统唯一：被评教师的**主学院**（user.college_id），与评教任务的可见范围
+// （AccessibleCollegeIDs/applyCollegeFilter）和统计报表一致。评教记录列表、评教任务
+// 列表与任务导出走这里，避免这几条链路各写一份 JOIN 造成口径漂移。
+// （统计明细与单任务详情仍有各自的预加载写法，未并入。）
+//
+// 教师不存在、未绑定学院、或学院行缺失时该键缺省，调用方按「无学院」处理。
+// 注意：model.User 含指针字段，必须用 Find 而非 Scan（Scan + Select 组合会报 unsupported data type）。
+func TeacherCollegeMap(db *gorm.DB, teacherIDs []int) map[int]model.College {
+	out := map[int]model.College{}
+	if len(teacherIDs) == 0 {
+		return out
+	}
+	var users []model.User
+	db.Select("id, college_id").Preload("College").Where("id IN ?", teacherIDs).Find(&users)
+	for _, u := range users {
+		if u.College != nil {
+			out[u.ID] = *u.College
+		}
+	}
+	return out
+}
+
+// TeacherCollegeDisplay 取某被评教师的学院展示信息：ID 指针与学院名，两者在教师无学院时均为 nil。
+// 返回 interface{} 是刻意的——JSON 序列化需要 null 而不是空串/0，前端据 null 渲染 "-"。
+func TeacherCollegeDisplay(colleges map[int]model.College, teacherID int) (*int, interface{}) {
+	college, ok := colleges[teacherID]
+	if !ok {
+		return nil, nil
+	}
+	id := college.ID
+	return &id, college.Name
 }
 
 // checkTaskTargetScope 校验 caller 对目标教师所在学院的操作权

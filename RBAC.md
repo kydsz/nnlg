@@ -14,7 +14,7 @@
 
 * **权限列表**：从系统预定义的权限集合中选择
 
-* **数据范围**：全部数据 / 本学院数据 / 仅个人数据（`data_scope`：all / college / self）。该字段只约束**个人数据**（评教记录、课表等），不决定**评教任务**的可见范围——任务范围由 `task:view` 按学院过滤（见下文说明）
+* **数据范围**：全部数据 / 本学院数据 / 仅个人数据（`data_scope`：all / college / self）。该字段只约束**个人数据**（评教记录、课表等），不决定**评教任务**的可见范围——任务范围先由 `task:view_all` 决定「是否可见他人的任务」，再由 `AccessibleCollegeIDs` 按学院过滤（见下文说明）
 
 * **优先级**：数字越小权限越高（用于推导主角色）
 
@@ -42,7 +42,7 @@
 | 校级督导  | school\_supervisor  | 20                            | all     | 可跨学院督导评教                                                                                                                                           |
 | 督导老师  | supervisor          | 22                            | college | 通用督导（向后兼容）；具备 `task:create`，可添加自己及负责学院教师的课程进待评任务（见 `task:create` 说明）                                                          |
 | 院级督导  | college\_supervisor | 25                            | college | 仅负责本学院督导                                                                                                                                           |
-| 教师    | teacher             | 50                            | self    | `data_scope = self`：仅能查看**自己**的评教记录和课表；**查看评教任务**不受此限制，教师可查看本学院全体教师的评教任务（见下方 `task:view` 说明）；具备 `task:create` 时可添加**自己及本学院其他教师**的课程进待评任务（见 `task:create` 说明）；具备 `schedule:view_college` 时可查看**本学院**其他教师的课表（见课程表说明）；具备 `evaluation:create`，可提交评教（不能评自己、只能评本学院教师，由后端校验） |
+| 教师    | teacher             | 50                            | self    | `data_scope = self`：仅能查看**自己**的评教记录和课表；**查看评教任务**另有 `task:view_all` 把关，教师默认不持有，只能看到与我相关的任务（我创建的 / 我被评的 / 我评过的，见下方 `task:view_all` 说明）；具备 `task:create` 时可添加**自己及本学院其他教师**的课程进待评任务（见 `task:create` 说明）；具备 `schedule:view_college` 时可查看**本学院**其他教师的课表（见课程表说明）；具备 `evaluation:create`，可提交评教（不能评自己、只能评本学院教师，由后端校验） |
 
 > 说明：`school_admin` 是兼容旧数据的角色编码，显示名同为"学院管理员"，与 `college_admin` 等价处理；具体优先级以 `migration_rbac_roles.sql` 初始化数据为准。
 
@@ -66,11 +66,13 @@
 
 ### 评教任务
 
-* task:view / task:create / task:update / task:delete / task:delete\_own
+* task:view / task:view\_all / task:create / task:update / task:delete / task:delete\_own
 
-> `task:view`：查看评教任务列表/详情/导出。`teacher` / `supervisor` / `college_supervisor` 等内置角色默认分配该权限；教师按「被评教师所属学院」查看本学院全体教师的评教任务，督导按「负责学院 / 教研室」查看，管理员按「学院」查看，系统管理员 / 校级督导为全校。历史数据缺失 `task:view` 的角色由迁移 `002_add_task_view_to_builtin_roles.sql` 自动补齐（幂等）。
+> `task:view`：查看评教任务列表/详情/导出（能否进这块功能）。`teacher` / `supervisor` / `college_supervisor` 等内置角色默认分配该权限。历史数据缺失 `task:view` 的角色由迁移 `002_add_task_view_to_builtin_roles.sql` 自动补齐（幂等）。
 >
-> **关于** **`data_scope = self`** **与"查看评教任务"的差异**：角色的 `data_scope` 字段只约束**个人数据**的范围，即评教记录、课表这类直接关联到"我"的数据（教师为 `self`，只能看自己的）。而**评教任务**的查看范围由 `task:view` 的数据过滤逻辑决定——它不直接用 `data_scope`，而是通过 `AccessibleCollegeIDs` 按「被评教师所属学院」过滤。因此教师即使 `data_scope = self`，查看评教任务时仍能看到**本学院全体教师**的任务。这两者并不冲突：`data_scope = self` 限制的是教师"查看自己评教记录/课表"，`task:view` 则允许教师"查看本学院全体教师的评教任务"。其余角色同理，任务数据范围始终由学院过滤逻辑（`AccessibleCollegeIDs` + `applyCollegeFilter`）而非 `data_scope` 决定。
+> **`task:view_all`：查看他人评教任务。**未持有该权限者只能看到**与我相关的任务**——我创建的、我被评的、我评过的三者并集（服务端收敛条件 `relatedToMeCond`；`GET /tasks`、`GET /tasks/:id`、`POST /tasks/export` 同一口径，越权详情返回 403）。持有者再按其学院数据范围查看：管理员=本学院，三类督导=负责学院 / 全校，系统管理员 / 校级督导=全校。该收敛在**服务端查询构造处强制生效**——前端的「我创建的 / 其他创建的 / 全部任务」只是移动端拼的 `create_by` / `create_by_not` 参数，去掉也拿不到无关任务。默认授予 `college_admin` / `school_admin` / `school_supervisor` / `college_supervisor` / `supervisor`（迁移 `015_add_task_view_all_to_builtin_roles.sql` 幂等补码），**`teacher` 不授予**——需要放开时由管理员在「角色管理」页勾选「评教任务·查看他人评教任务」，无需改代码。移动端在无该权限时不展示「全部任务 / 其他创建的」两个视图。
+>
+> **关于** **`data_scope = self`** **与"查看评教任务"的差异**：角色的 `data_scope` 字段只约束**个人数据**的范围，即评教记录、课表这类直接关联到"我"的数据（教师为 `self`，只能看自己的）。**评教任务**不走 `data_scope`，而是两层过滤叠加：`task:view_all` 决定「是否可见他人的任务」，`AccessibleCollegeIDs` + `applyCollegeFilter` 决定「可见哪些学院的任务」。因此教师（无 `task:view_all`）只能看到与自己相关的任务，看不到本学院其他教师的待评计划。
 
 > `task:create`：创建评教任务。接口 `POST /tasks`（含批量 `POST /tasks/batch`）均需该权限。教师默认分配该权限后，可在移动端课表页将课程加入"待评课表"；后端 `checkTaskTargetScope` 教师分支天然限定**只能为本学院教师（含自己）创建任务**，无法跨学院操作。`supervisor`（督导老师）同样分配 `task:create`，可添加自己及负责学院教师的课程进待评任务（督导分支按负责学院限定）。历史角色缺失 `task:create` 的由迁移 `004_add_task_create_to_teacher.sql`（teacher）、`005_add_task_create_to_supervisor.sql`（supervisor）自动补齐（幂等）。
 
@@ -197,9 +199,15 @@
 
 * 删除自定义角色（有用户关联时不可删）
 
+权限勾选项由 `GET /roles/permissions` 动态渲染（分组来自 `internal/service/role.go` 的 `PermissionCatalog`），因此在角色目录中新增权限码后，管理员**无需等待前端发版**即可在页面上勾选分配（`task:view_all` 即按此方式下发）。
+
 ### 用户管理页面（/admin/users）
 
 角色选择下拉已包含校级督导、院级督导等新增角色。
+
+### 移动端首页（/mobile）
+
+任务视图切换「我创建的 / 其他创建的 / 全部任务」在持有 `task:view_all` 时才展示；未持有时只显示「我创建的」，空态文案改为引导联系管理员分配权限。
 
 ## 匿名评教查看权限
 
@@ -214,4 +222,10 @@
 
 ## 迁移
 
-执行 migration\_rbac\_roles.sql 创建角色表并初始化内置角色。
+执行 migration\_rbac\_roles.sql 创建角色表并初始化内置角色。此后每次需要的内置角色默认权限调整，都以 `internal/database/migrations/NNN_*.sql` 增量补码，服务启动时经 `//go:embed` + `Migrate()` 自动执行（幂等，可重复启动）：
+
+* `002_add_task_view_to_builtin_roles.sql`：teacher / supervisor / college\_supervisor 补 `task:view`
+* `003_add_schedule_view_college_to_teacher.sql`：teacher 补 `schedule:view_college`
+* `004_add_task_create_to_teacher.sql` / `005_add_task_create_to_supervisor.sql`：补 `task:create`
+* `008_add_evaluation_create_to_teacher.sql`：teacher 补 `evaluation:create`
+* `015_add_task_view_all_to_builtin_roles.sql`：college\_admin / school\_admin / school\_supervisor / college\_supervisor / supervisor 补 `task:view_all`（teacher 不补）
