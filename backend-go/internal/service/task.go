@@ -485,7 +485,11 @@ func (s *Task) Update(db *gorm.DB, caller *model.User, id int, p UpdateTaskParam
 	return s.Get(db, id)
 }
 
-// Delete 软删除（任务及名下评教记录一并软删，数据保留、可恢复）
+// Delete 软删除任务（仅清理任务本身：数据保留、可恢复）
+// 任务名下已提交的评教记录不受影响：评教记录是既成的评教事实，其存续与可见性
+// 不随任务删除而变化（记录列表/详情/统计均只按记录自身状态过滤）；删除任务只清理
+// 排课/待评安排这一层，任何人（无论持 task:delete 还是 task:delete_own）都无法
+// 通过删任务抹掉评教事实。
 // 有 task:delete 权限可删任意；仅有 task:delete_own 权限仅能删除自己创建的任务
 func (s *Task) Delete(db *gorm.DB, caller *model.User, id int) error {
 	t, err := s.Get(db, id)
@@ -501,13 +505,5 @@ func (s *Task) Delete(db *gorm.DB, caller *model.User, id int) error {
 	} else {
 		return errors.New("无权删除评教任务")
 	}
-	// 同步软删该任务名下评教记录，避免任务删除后记录仍残留于记录列表/统计
-	return db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.EvaluationRecord{}).
-			Where("task_id = ? AND is_deleted = 0", id).
-			Update("is_deleted", true).Error; err != nil {
-			return err
-		}
-		return tx.Model(t).Update("is_deleted", true).Error
-	})
+	return db.Model(t).Update("is_deleted", true).Error
 }

@@ -379,7 +379,7 @@ func (h *Evaluation) SubmitWithFiles(c *gin.Context) {
 	})
 }
 
-// Delete 删除评教记录
+// Delete 作废评教记录（软删除：数据保留可追溯，评教人可重新提交）
 func (h *Evaluation) Delete(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {

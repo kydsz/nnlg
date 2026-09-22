@@ -40,7 +40,7 @@ func IsAdminRole(u *model.User) bool {
 
 // IsSupervisor 是否督导类角色
 func IsSupervisor(u *model.User) bool {
-	return u.HasAnyRole(model.RoleSupervisor, model.RoleSchoolSupervisor, model.RoleCollegeSupervisor)
+	return u.HasAnyRole(model.SupervisorRoleCodes...)
 }
 
 // AccessibleCollegeIDs 用户可访问的学院 ID 集合（主学院 + 督导负责学院）；nil 表示全校
@@ -145,9 +145,9 @@ func CanViewTask(db *gorm.DB, caller *model.User, t *model.EvaluationTask) bool 
 	return n > 0
 }
 
-// CanDeleteEvaluation 是否可删除任意评教记录
-// 系统管理员恒可；其他角色需被分配 evaluation:delete 权限（评教人本人不再默认可删，避免抹掉已提交评教影响接收人数据）
-func CanDeleteEvaluation(db *gorm.DB, u *model.User) bool {
+// CanVoidEvaluation 是否可作废任意评教记录（evaluation:delete）
+// 系统管理员恒可；其他角色需被分配 evaluation:delete 权限（评教人本人不再默认可作废，避免抹掉已提交评教影响接收人数据）
+func CanVoidEvaluation(db *gorm.DB, u *model.User) bool {
 	if u.HasRole(model.RoleSystemAdmin) {
 		return true
 	}
@@ -159,8 +159,8 @@ func CanDeleteEvaluation(db *gorm.DB, u *model.User) bool {
 	return false
 }
 
-// CanDeleteOwnEvaluation 是否可删除自己提交的评教记录（evaluation:delete_own）
-func CanDeleteOwnEvaluation(db *gorm.DB, u *model.User) bool {
+// CanVoidOwnEvaluation 是否可作废自己提交的评教记录（evaluation:delete_own）
+func CanVoidOwnEvaluation(db *gorm.DB, u *model.User) bool {
 	for _, p := range u.Permissions(db) {
 		if p == "evaluation:delete_own" {
 			return true

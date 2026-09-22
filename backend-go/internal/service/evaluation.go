@@ -838,26 +838,68 @@ func keysOf(m map[int]bool) []int {
 	return out
 }
 
-// Delete 删除评教记录（软删除：标记 is_deleted，数据保留可恢复）
-// 删除会影响接收人（被评教师）侧的列表/统计/汇总，故仅系统管理员或被分配 evaluation:delete 权限的角色可操作
-// 返回被删记录快照，供调用方（如操作日志）使用
+// Delete 作废评教记录（软删除：标记 is_deleted，数据保留可恢复、可追溯）
+// 作废会影响接收人（被评教师）侧的列表/统计/汇总，故仅系统管理员或被分配 evaluation:delete 权限的角色可操作
+// 同一事务内同步回退任务上的聚合值，保证「任务上的数字 = 当前有效评教记录」
+// 返回被作废记录快照，供调用方（如操作日志）使用
 func (s *Evaluation) Delete(db *gorm.DB, viewer *model.User, id int) (*model.EvaluationRecord, error) {
 	var rec model.EvaluationRecord
 	if err := db.Where("id = ? AND is_deleted = 0", id).First(&rec).Error; err != nil {
 		return nil, errors.New("评教记录不存在")
 	}
-	if !CanDeleteEvaluation(db, viewer) {
-		if !CanDeleteOwnEvaluation(db, viewer) {
-			return nil, errors.New("无权删除评教记录")
+	if !CanVoidEvaluation(db, viewer) {
+		if !CanVoidOwnEvaluation(db, viewer) {
+			return nil, errors.New("无权作废评教记录")
 		}
 		if rec.EvaluatorID == nil || *rec.EvaluatorID != viewer.ID {
-			return nil, errors.New("只能删除自己提交的评教记录")
+			return nil, errors.New("只能作废自己提交的评教记录")
 		}
 	}
-	if err := db.Model(&model.EvaluationRecord{}).Where("id = ?", id).Update("is_deleted", true).Error; err != nil {
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.EvaluationRecord{}).Where("id = ?", id).
+			Update("is_deleted", true).Error; err != nil {
+			return err
+		}
+		return syncTaskAggregatesAfterVoid(tx, rec.TaskID)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &rec, nil
+}
+
+// syncTaskAggregatesAfterVoid 作废记录后同步任务聚合值：
+//   - 评教数按当前有效记录整表重算（而非自减）：重复作废不会扣成负数，也不需要
+//     依赖脏值；两个作废并发时的极端窗口可能少算一次，但该任务上的下一次写入
+//     （再作废/提交）会整表重算修正，属自愈口径；
+//   - 任务下已无有效督导记录时，「督导已评」回退为否；
+//   - 任务为「已评」且已无任何有效记录时，状态回到「待评」（取消状态不复活）。
+func syncTaskAggregatesAfterVoid(tx *gorm.DB, taskID int) error {
+	var activeCount, supervisorCount int64
+	if err := tx.Model(&model.EvaluationRecord{}).
+		Where("task_id = ? AND is_deleted = 0", taskID).Count(&activeCount).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&model.EvaluationRecord{}).
+		Where("task_id = ? AND is_deleted = 0 AND evaluator_role IN ?", taskID,
+			model.SupervisorRoleCodes).
+		Count(&supervisorCount).Error; err != nil {
+		return err
+	}
+	updates := map[string]interface{}{
+		"evaluation_count":    activeCount,
+		"has_supervisor_eval": supervisorCount > 0,
+	}
+	if activeCount == 0 {
+		// 仅「已评」任务回退为待评；已取消/不存在/已软删的任务不动
+		var task model.EvaluationTask
+		if err := tx.Where("id = ? AND is_deleted = 0", taskID).First(&task).Error; err == nil {
+			if task.Status == model.TaskStatusEvaluated {
+				updates["status"] = model.TaskStatusPending
+			}
+		}
+	}
+	return tx.Model(&model.EvaluationTask{}).Where("id = ?", taskID).Updates(updates).Error
 }
 
 // UpdateParams 修改评教记录参数（仅维度值与匿名标记可改；评教人/角色/提交时间/任务关联不可改）
@@ -866,13 +908,13 @@ type UpdateParams struct {
 	IsAnonymous     bool                   `json:"is_anonymous"`
 }
 
-// Update 修改评教记录（权限与删除一致：仅系统管理员或被分配 evaluation:delete 权限的角色可操作）
+// Update 修改评教记录（权限与作废一致：仅系统管理员或被分配 evaluation:delete 权限的角色可操作）
 func (s *Evaluation) Update(db *gorm.DB, viewer *model.User, id int, p UpdateParams) (*model.EvaluationRecord, error) {
 	var rec model.EvaluationRecord
 	if err := db.Where("id = ? AND is_deleted = 0", id).First(&rec).Error; err != nil {
 		return nil, errors.New("评教记录不存在")
 	}
-	if !CanDeleteEvaluation(db, viewer) {
+	if !CanVoidEvaluation(db, viewer) {
 		return nil, errors.New("无权修改评教记录")
 	}
 	if len(p.DimensionValues) == 0 {

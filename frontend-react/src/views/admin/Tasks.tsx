@@ -165,7 +165,14 @@ export default function Tasks() {
             编辑
           </Button>
           {canDeleteTask(record) && (
-            <Popconfirm title="确认删除？" onConfirm={() => delMut.mutate(record.id)}>
+            <Popconfirm
+              title={
+                (record.evaluation_count ?? 0) > 0
+                  ? `删除后任务从列表移除（可恢复），该任务下 ${record.evaluation_count} 条评教记录会保留。确认删除？`
+                  : '确认删除？'
+              }
+              onConfirm={() => delMut.mutate(record.id)}
+            >
               <Button size="small" danger>
                 删除
               </Button>

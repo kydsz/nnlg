@@ -51,7 +51,15 @@ type EvaluationRecord struct {
 
 func (EvaluationRecord) TableName() string { return "evaluation_record" }
 
+// SupervisorRoleCodes 督导类角色编码集合（校级督导 / 督导老师 / 院级督导）
+var SupervisorRoleCodes = []string{RoleSchoolSupervisor, RoleSupervisor, RoleCollegeSupervisor}
+
 // IsSupervisorRole 判断角色编码是否督导类
 func IsSupervisorRole(code string) bool {
-	return code == RoleSupervisor || code == RoleSchoolSupervisor || code == RoleCollegeSupervisor
+	for _, c := range SupervisorRoleCodes {
+		if code == c {
+			return true
+		}
+	}
+	return false
 }

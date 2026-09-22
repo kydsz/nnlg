@@ -216,7 +216,9 @@ func TestCourseEvalStatsForTasks(t *testing.T) {
 		}
 	})
 
-	t.Run("已删除任务与记录不计入", func(t *testing.T) {
+	t.Run("已作废记录不计入", func(t *testing.T) {
+		// 仅覆盖记录维度：已作废（is_deleted）的记录不进汇总；
+		// 任务软删不影响记录，见 TestStatsScopeIgnoresTaskSoftDelete
 		db := courseEvalTestDB(t)
 		t1 := createCourseTask(t, db, 1, "高等数学", sem1)
 		deleted := createCourseTask(t, db, 1, "高等数学", sem1.AddDate(0, 0, 1))

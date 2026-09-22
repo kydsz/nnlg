@@ -130,11 +130,11 @@ function RecordList({
   const delMut = async (id: number) => {
     try {
       await evaluationApi.remove(id)
-      Toast.show({ content: '删除成功', icon: 'success' })
+      Toast.show({ content: '作废成功', icon: 'success' })
       setDetail(null)
       await qc.invalidateQueries({ queryKey: ['evaluations', 'mobile', type] })
     } catch (e) {
-      Toast.show({ content: e instanceof Error ? e.message : '删除失败', icon: 'fail' })
+      Toast.show({ content: e instanceof Error ? e.message : '作废失败', icon: 'fail' })
     }
   }
 
@@ -274,16 +274,16 @@ function RecordList({
                 style={{ marginTop: 16 }}
                 onClick={() => {
                   Dialog.confirm({
-                    title: '确认删除',
+                    title: '确认作废',
                     content:
-                      '删除后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化。确定要删除这条评教记录吗？',
-                    confirmText: '删除',
+                      '作废后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化；数据会保留可追溯，您可对同一任务重新提交。确定要作废这条评教记录吗？',
+                    confirmText: '作废',
                     cancelText: '取消',
                     onConfirm: () => delMut(detail.id),
                   })
                 }}
               >
-                删除此记录
+                作废此记录
               </Button>
             )}
           </div>

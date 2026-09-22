@@ -112,8 +112,10 @@ func CourseEvalStatsForTasks(db *gorm.DB, tasks []model.EvaluationTask) (map[int
 		EvaluatorID   int              `gorm:"column:evaluator_id"`
 		EvaluatorRole string           `gorm:"column:evaluator_role"`
 	}
+	// 不按任务软删过滤：评教记录的统计口径独立于任务存续（删任务只清理排课安排，
+	// 不抹掉评教事实），只按记录自身的有效状态过滤。
 	q := db.Table("evaluation_record r").
-		Joins("JOIN evaluation_task t ON t.id = r.task_id AND t.is_deleted = 0").
+		Joins("JOIN evaluation_task t ON t.id = r.task_id").
 		Where("r.is_deleted = 0 AND r.evaluator_id IS NOT NULL")
 	var cond *gorm.DB
 	for _, g := range groups {

@@ -727,7 +727,7 @@ POST /tasks/export
 
 ```http
 PUT    /tasks/{task_id}          # 更新（task:update，仅创建者或管理员）
-DELETE /tasks/{task_id}          # 删除（task:delete 删任意；task:delete_own 仅删自己创建，软删除）
+DELETE /tasks/{task_id}          # 删除任务（task:delete 删任意；task:delete_own 仅删自己创建，软删除；不影响名下已提交的评教记录）
 ```
 
 ***
@@ -814,13 +814,15 @@ GET /evaluations/{record_id}/export?format=pdf
 
 * 不传 `format`：返回可打印 HTML（浏览器可直接另存/打印）。
 
-### 删除评教记录
+### 作废评教记录
 
 ```http
 DELETE /evaluations/{record_id}
 ```
 
-**权限**: 被分配 `evaluation:delete` 权限可删除任意记录；仅有 `evaluation:delete_own` 权限仅能删除评教人本人提交的记录。
+**权限**: 被分配 `evaluation:delete` 权限可作废任意记录；仅有 `evaluation:delete_own` 权限仅能作废评教人本人提交的记录。
+
+**语义**: 记录一经提交不可删除，本接口为"作废"（软删除）：记录退出列表与统计口径，物理数据保留、可追溯，同一评教人可对同一任务重新提交；作废后所属任务的评教数、「督导已评」与任务状态在同一事务内回退到与有效记录一致。
 
 ***
 

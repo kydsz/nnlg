@@ -75,7 +75,7 @@ export default function Evaluations() {
   const delMut = useMutation({
     mutationFn: (id: number) => evaluationApi.remove(id),
     onSuccess: () => {
-      message.success('删除成功')
+      message.success('作废成功')
       qc.invalidateQueries({ queryKey: ['evaluations'] })
       setDetailId(null)
     },
@@ -137,15 +137,15 @@ export default function Evaluations() {
           </Button>
           {canDeleteRecord(record) && (
             <Popconfirm
-              title="确认删除该评教记录？"
-              description="删除后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化，且该操作不可恢复。"
-              okText="删除"
+              title="确认作废该评教记录？"
+              description="作废后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化；数据会保留可追溯，评教人可对同一任务重新提交。"
+              okText="作废"
               cancelText="取消"
               okButtonProps={{ danger: true }}
               onConfirm={() => delMut.mutate(record.id)}
             >
               <Button size="small" danger>
-                删除
+                作废
               </Button>
             </Popconfirm>
           )}
@@ -242,15 +242,15 @@ export default function Evaluations() {
               </Button>
               {canDeleteRecord(detail) && (
                 <Popconfirm
-                  title="确认删除该评教记录？"
-                  description="删除后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化，且该操作不可恢复。"
-                  okText="删除"
+                  title="确认作废该评教记录？"
+                  description="作废后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化；数据会保留可追溯，评教人可对同一任务重新提交。"
+                  okText="作废"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
                   onConfirm={() => delMut.mutate(detail.id)}
                 >
                   <Button danger size="small">
-                    删除
+                    作废
                   </Button>
                 </Popconfirm>
               )}
