@@ -110,12 +110,14 @@
 | PUT    | /tasks/:id                                        | task:update                                          |
 
 | DELETE | /tasks/:id                                        | task:delete（任意）或 task:delete\_own（仅自己创建）             |
+| POST   | /tasks/:id/restore                                | task:restore（任意）或 task:restore\_own（仅自己创建）           |
 | GET    | /evaluations                                      | evaluation:view                                      |
 | POST   | /evaluations                                      | evaluation:create                                    |
 | POST   | /evaluations/with-files                           | evaluation:create                                    |
 | GET    | /evaluations/:id                                  | evaluation:view                                      |
 | GET    | /evaluations/:id/export                           | evaluation:view                                      |
 | DELETE | /evaluations/:id                                  | evaluation:delete（任意）或 evaluation:delete\_own（仅自己提交） |
+| POST   | /evaluations/:id/restore                          | evaluation:restore（任意）或 evaluation:restore\_own（仅自己提交） |
 | POST   | /upload                                           | 学院管理员及以上                                             |
 | POST   | /upload/evaluation/:task\_id/:dim\_code           | -                                                    |
 | DELETE | /upload/evaluation/:task\_id/:dim\_code/:filename | 管理员或提交者                                              |
@@ -621,6 +623,7 @@ GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1
 | has\_supervisor\_eval | bool   | 否  | 按督导已评筛选                                         |
 | create\_by            | int    | 否  | 按创建者筛选                                          |
 | create\_by\_not       | int    | 否  | 排除创建者                                           |
+| deleted               | string | 否  | 传 `1` 只看已删除任务（供恢复入口）；**仅对持 `task:restore` 或 `task:restore_own` 权限者生效**，无权限者传参也被忽略（强制只看未删除） |
 | start\_date           | string | 否  | 开始日期 `YYYY-MM-DD`，按上课时间（class\_time）筛选          |
 | end\_date             | string | 否  | 结束日期 `YYYY-MM-DD`（含当天），按上课时间筛选；须不早于 start\_date |
 
@@ -728,7 +731,10 @@ POST /tasks/export
 ```http
 PUT    /tasks/{task_id}          # 更新（task:update，仅创建者或管理员）
 DELETE /tasks/{task_id}          # 删除任务（task:delete 删任意；task:delete_own 仅删自己创建，软删除；不影响名下已提交的评教记录）
+POST   /tasks/{task_id}/restore  # 恢复任务（task:restore 恢复任意；task:restore_own 仅恢复自己创建，清软删标记）
 ```
+
+**恢复语义**：`POST /tasks/{task_id}/restore` 仅还原任务本身（`is_deleted=0`），不回补任何聚合数据（删除从未改动任务聚合值，名下评教记录也不随任务删除变化）。目标任务不存在或未被删除时返回 400。若恢复后会与某个「未删除、未取消」的同教师+同课程+同上课时间任务撞唯一索引 `uk_task_dedupe_active`，接口返回 400 并给出**可读提示**（含冲突任务 ID），而非裸数据库错误；需先取消或删除该冲突任务再恢复。**成功响应**：`{ "code": 200, "message": "恢复成功", "data": null }`。
 
 ***
 
@@ -740,11 +746,13 @@ DELETE /tasks/{task_id}          # 删除任务（task:delete 删任意；task:d
 GET /evaluations?page=1&page_size=20&task_id=1&teacher_id=1&evaluator_id=1&evaluator_name=张&evaluator_role=supervisor&college_id=1&teacher_name=&type=&keyword=&start_date=&end_date=
 ```
 
-**查询参数**: `task_id`、`teacher_id`、`evaluator_id`、`evaluator_name`、`evaluator_role`、`college_id`、`teacher_name`、`type`、`keyword`、`start_date`、`end_date`、`page`、`page_size`（`start_date` / `end_date` 格式 `YYYY-MM-DD`，按评教任务的上课时间（听课时间）过滤，即「记录所属学期」口径）。`keyword` 匹配课程名 / 教师名 / 评教人名 / 作答文本；其中评教人名对匿名记录仅对可见身份者（评教人本人、系统管理员、数据范围内持 `evaluation:view_all` 权限者）可命中。
+**查询参数**: `task_id`、`teacher_id`、`evaluator_id`、`evaluator_name`、`evaluator_role`、`college_id`、`teacher_name`、`type`、`keyword`、`start_date`、`end_date`、`deleted`、`page`、`page_size`（`start_date` / `end_date` 格式 `YYYY-MM-DD`，按评教任务的上课时间（听课时间）过滤，即「记录所属学期」口径）。`keyword` 匹配课程名 / 教师名 / 评教人名 / 作答文本；其中评教人名对匿名记录仅对可见身份者（评教人本人、系统管理员、数据范围内持 `evaluation:view_all` 权限者）可命中。
+
+**已作废筛选**: 传 `deleted=1` 只看已作废（软删除）的记录，供恢复入口使用；**仅对持 `evaluation:restore` 或 `evaluation:restore_own` 权限者生效**，无权限者传参也被服务端强制忽略（只看未作废）。已作废视图下：仅有 `evaluation:restore_own`（无 `evaluation:restore`）者只暴露本人提交的记录；教师角色按「本人提交」（`evaluator_id`）收敛而非「被评教师」，以免自己提交、被作废的记录被挡在恢复入口外。
 
 **可见性**: 教师角色只能查看自己的评教记录；督导默认只能查看自己评教的记录，需 `evaluation:view_all` 权限码（在角色管理中分配）后按学院范围查看他人记录。
 
-**返回字段**: 列表项含 `college_id` / `college_name`（被评教师所属学院，与任务可见范围、统计报表同口径）。
+**返回字段**: 列表项含 `college_id` / `college_name`（被评教师所属学院，与任务可见范围、统计报表同口径）、`is_deleted`（是否已作废：正常视图恒 `false`，`deleted=1` 视图恒 `true`）、`can_restore`（当前用户是否可恢复本条：服务端按 `evaluation:restore` / `evaluation:restore_own` 与记录归属计算——已作废视图下匿名记录的 `evaluator_id` 被脱敏为 `null`，前端无法自行判断归属，故由服务端下发；前端据此决定是否渲染「恢复」按钮）。
 
 > `id` 为数据库自增主键，**不保证连续**：软删除的记录、以及落在筛选条件 / 可见范围之外的记录都会让列表出现跳号。列表默认按评教任务的上课时间（`class_time`）降序，而非按 `id` 排序，因此展示顺序与 `id` 大小不一定一致——需要按 `id` 排序时显式传 `order_by=id`。
 
@@ -822,7 +830,23 @@ DELETE /evaluations/{record_id}
 
 **权限**: 被分配 `evaluation:delete` 权限可作废任意记录；仅有 `evaluation:delete_own` 权限仅能作废评教人本人提交的记录。
 
-**语义**: 记录一经提交不可删除，本接口为"作废"（软删除）：记录退出列表与统计口径，物理数据保留、可追溯，同一评教人可对同一任务重新提交；作废后所属任务的评教数、「督导已评」与任务状态在同一事务内回退到与有效记录一致。
+**语义**: 记录一经提交不可删除，本接口为"作废"（软删除）：记录退出列表与统计口径，物理数据保留、可追溯，同一评教人可对同一任务重新提交；作废后所属任务的评教数、「督导已评」与任务状态在同一事务内回退到与有效记录一致。作废成功后**立即释放**该评教人在此任务上的提交幂等键（Redis `tev:dup:{task_id}:{user_id}`），因此评教人可**立刻**重新提交，无需等待幂等键 30 分钟 TTL 过期。
+
+### 恢复评教记录
+
+```http
+POST /evaluations/{record_id}/restore
+```
+
+**权限**: 被分配 `evaluation:restore` 权限可恢复任意记录；仅有 `evaluation:restore_own` 权限仅能恢复评教人本人提交的记录。
+
+**语义**: 与作废对称的清软删标记（`is_deleted=0`），记录重新入列与统计口径；同一事务内按「整表重算」回补所属任务的聚合值（评教数、督导已评；并在有效记录数 > 0 且任务未删且仍为「待评」时推进回「已评」，取消状态不复活），幂等自愈。目标记录不存在或未被作废时返回 400。若同一评教人在该任务下已存在有效（未作废）记录，恢复会触发唯一索引 `uk_task_evaluator_active` 冲突，接口返回 400 并给出**可读提示**（而非裸数据库错误）：需先作废那条有效记录再恢复本条。
+
+**响应示例**:
+
+```json
+{ "code": 200, "message": "恢复成功", "data": null }
+```
 
 ***
 

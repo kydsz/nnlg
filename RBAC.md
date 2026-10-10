@@ -66,7 +66,7 @@
 
 ### 评教任务
 
-* task:view / task:view\_all / task:create / task:update / task:delete / task:delete\_own
+* task:view / task:view\_all / task:create / task:update / task:delete / task:delete\_own / task:restore / task:restore\_own
 
 > `task:view`：查看评教任务列表/详情/导出（能否进这块功能）。`teacher` / `supervisor` / `college_supervisor` 等内置角色默认分配该权限。历史数据缺失 `task:view` 的角色由迁移 `002_add_task_view_to_builtin_roles.sql` 自动补齐（幂等）。
 >
@@ -78,15 +78,19 @@
 
 > `task:delete`：删除任意评教任务；`task:delete_own`：仅能删除自己创建的评教任务。两者可并存，系统管理员恒可删任意。删除任务只软删任务本身（数据保留、可恢复），任务名下已提交的评教记录不受影响——记录的存续、可见性与统计口径不随任务删除变化（见 CONTEXT.md「删除评教任务」）。因此删除任务权限不构成"删除评教记录"的旁路。
 
+> `task:restore`：恢复任意已删除的评教任务；`task:restore_own`：仅能恢复自己创建的已删除任务。两者可并存，系统管理员恒可恢复任意。恢复即清掉软删标记（`is_deleted=0`），只还原任务本身——删除从未改动任务聚合值、任务名下评教记录也不随任务删除变化，故恢复无需回补任何聚合数据（见 `internal/service/task.go` 的 `Restore`）。迁移 `016_add_restore_perms_to_builtin_roles.sql` 只为已持有**完整** `task:delete` 的角色镜像下发 `task:restore`（幂等）；`task:restore_own` **不再自动镜像**——恢复入口在管理端（`AdminGate` 之后），持 `task:delete_own` 的非管理端角色（teacher / 督导）进不了该 UI，自动下发只会造出「能删不能恢复」的死权限，这类角色删除后如需恢复统一联系管理员（与移动端删除文案一致），`task:restore_own` 仍保留在权限目录中供管理员手动分配；该迁移并对历史已下发 `task:restore_own` 的非管理端内置角色做幂等移除（自愈）。恢复若与现存「未删除、未取消」的同教师+同课程+同上课时间任务冲突（唯一索引 `uk_task_dedupe_active`），返回可读的 400 提示而非裸数据库错误。此外，任务列表新增 `deleted=1` 查询参数（只看已删除，供恢复入口使用），**仅对持 `task:restore` 或 `task:restore_own` 者生效**；无权限者即便传参也被服务端强制 `is_deleted=0`，看不到已删数据。
+
 ### 评教记录
 
-* evaluation:view / evaluation:create / evaluation:view\_anonymous / evaluation:view\_all / evaluation:delete / evaluation:delete\_own
+* evaluation:view / evaluation:create / evaluation:view\_anonymous / evaluation:view\_all / evaluation:delete / evaluation:delete\_own / evaluation:restore / evaluation:restore\_own
 
 > `evaluation:create`：提交评教。接口 `POST /evaluations`（含 `POST /evaluations/with-files`）均需该权限。教师默认分配该权限后可提交同行评教；业务约束（不能评自己、只能评本学院教师、任务未取消/未重复提交）由后端 `ValidateSubmit` 校验，与路由权限门分离。历史数据缺失 `evaluation:create` 的 teacher 角色由迁移 `008_add_evaluation_create_to_teacher.sql` 自动补齐（幂等）。
 
 > `evaluation:view_all`：查看他人评教记录（含匿名详情）的权限码，由系统管理员在角色管理中按需分配；分配后督导等角色可按其学院数据范围查看他人评教记录/详情/导出。
 
 > `evaluation:delete`：作废任意评教记录；`evaluation:delete_own`：仅能作废评教人本人提交的记录。两者可并存，系统管理员恒可作废任意。作废即软删（数据保留、可追溯），记录退出列表与统计口径，同一评教人可对同一任务重新提交；作废后任务上的评教数、「督导已评」与任务状态在同一事务内回退到与有效记录一致。删除评教任务**不**构成作废记录的旁路（见上条 `task:delete`）。
+
+> `evaluation:restore`：恢复任意已作废的评教记录；`evaluation:restore_own`：仅能恢复评教人本人提交的已作废记录。两者可并存，系统管理员恒可恢复任意。恢复即清掉软删标记（`is_deleted=0`），记录重新入列与统计口径；同一事务内按「整表重算」回补所属任务的聚合值（评教数、督导已评，并在有效记录数 > 0 且任务未删且仍为「待评」时推进回「已评」，取消状态不复活），幂等自愈（见 `internal/service/evaluation.go` 的 `Restore` 与 `syncTaskAggregatesAfterRestore`）。迁移 `016_add_restore_perms_to_builtin_roles.sql` 只为已持有**完整** `evaluation:delete` 的角色镜像下发 `evaluation:restore`；`evaluation:restore_own` 同理不再自动镜像（恢复入口 `Evaluations.tsx` 在管理端），保留在目录中供手动分配，并对历史残留做幂等移除。评教记录列表新增 `deleted=1` 查询参数（只看已作废，供恢复入口），**仅对持 `evaluation:restore` 或 `evaluation:restore_own` 者生效**，无权限者传参被强制忽略；列表项返回 `is_deleted` 与 `can_restore`（服务端按权限与归属计算，供前端决定是否渲染恢复按钮）。恢复若与该评教人在同任务下的现存有效记录冲突（唯一索引 `uk_task_evaluator_active`），返回可读的 400 提示。
 
 ### 统计报表
 
@@ -229,3 +233,4 @@
 * `004_add_task_create_to_teacher.sql` / `005_add_task_create_to_supervisor.sql`：补 `task:create`
 * `008_add_evaluation_create_to_teacher.sql`：teacher 补 `evaluation:create`
 * `015_add_task_view_all_to_builtin_roles.sql`：college\_admin / school\_admin / school\_supervisor / college\_supervisor / supervisor 补 `task:view_all`（teacher 不补）
+* `016_add_restore_perms_to_builtin_roles.sql`：为已持有**完整** delete 码的内置角色镜像下发对应 restore 码——持 `task:delete`→补 `task:restore`，持 `evaluation:delete`→补 `evaluation:restore`（幂等）。`*_own` 恢复码**不再自动镜像**：恢复入口在管理端（`AdminGate` 之后），持 `*_own` 删除码的非管理端角色（teacher / 督导）用不到，自动下发只会产生死权限；这两个码保留在目录中供管理员手动分配。迁移同时对历史已下发 `task:restore_own` / `evaluation:restore_own` 的非管理端内置角色做幂等移除（自愈）

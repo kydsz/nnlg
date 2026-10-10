@@ -193,4 +193,50 @@ func CanDeleteOwnTask(db *gorm.DB, u *model.User) bool {
 	return false
 }
 
+// CanRestoreTask 是否可恢复任意已删除的评教任务（task:restore）
+// 系统管理员恒可；其他角色需被分配 task:restore 权限
+func CanRestoreTask(db *gorm.DB, u *model.User) bool {
+	if u.HasRole(model.RoleSystemAdmin) {
+		return true
+	}
+	for _, p := range u.Permissions(db) {
+		if p == "task:restore" {
+			return true
+		}
+	}
+	return false
+}
 
+// CanRestoreOwnTask 是否可恢复自己创建的已删除评教任务（task:restore_own）
+func CanRestoreOwnTask(db *gorm.DB, u *model.User) bool {
+	for _, p := range u.Permissions(db) {
+		if p == "task:restore_own" {
+			return true
+		}
+	}
+	return false
+}
+
+// CanRestoreEvaluation 是否可恢复任意已作废的评教记录（evaluation:restore）
+// 系统管理员恒可；其他角色需被分配 evaluation:restore 权限
+func CanRestoreEvaluation(db *gorm.DB, u *model.User) bool {
+	if u.HasRole(model.RoleSystemAdmin) {
+		return true
+	}
+	for _, p := range u.Permissions(db) {
+		if p == "evaluation:restore" {
+			return true
+		}
+	}
+	return false
+}
+
+// CanRestoreOwnEvaluation 是否可恢复自己提交的已作废评教记录（evaluation:restore_own）
+func CanRestoreOwnEvaluation(db *gorm.DB, u *model.User) bool {
+	for _, p := range u.Permissions(db) {
+		if p == "evaluation:restore_own" {
+			return true
+		}
+	}
+	return false
+}

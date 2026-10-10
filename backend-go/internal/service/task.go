@@ -27,6 +27,7 @@ type TaskFilters struct {
 	HasSupervisorEval *bool
 	CreateBy          *int
 	CreateByNot       *int
+	Deleted           string     // "1" 只看已删除（仅持 task:restore / task:restore_own 者生效）
 	Start, End        *time.Time // 按上课时间（class_time）筛选学期区间
 	OrderBy, OrderDir string     // 排序字段白名单（id/class_time）与方向（asc/desc）
 	Page, PageSize    int
@@ -54,7 +55,16 @@ const relatedToMeCond = "(create_by = ? OR teacher_id = ? OR EXISTS (" +
 	"WHERE er.task_id = evaluation_task.id AND er.evaluator_id = ? AND er.is_deleted = 0))"
 
 func (s *Task) buildQuery(db *gorm.DB, f TaskFilters, caller *model.User) (*gorm.DB, error) {
-	q := db.Model(&model.EvaluationTask{}).Where("is_deleted = 0")
+	// 「已删除」筛选：仅当调用者持 task:restore 或 task:restore_own 时 deleted=1 生效
+	// （只看已删除，供恢复入口使用）；无权限则忽略该参数强制 is_deleted = 0，
+	// 避免越权看到已删数据。现有 scope 可见性规则照常叠加。
+	showDeleted := f.Deleted == "1" && (CanRestoreTask(db, caller) || CanRestoreOwnTask(db, caller))
+	q := db.Model(&model.EvaluationTask{})
+	if showDeleted {
+		q = q.Where("is_deleted = 1")
+	} else {
+		q = q.Where("is_deleted = 0")
+	}
 
 	if f.Keyword != "" {
 		// 同时匹配课程名与被评教师姓名（teacher_name 为建任务时冗余的快照字段）
@@ -506,4 +516,60 @@ func (s *Task) Delete(db *gorm.DB, caller *model.User, id int) error {
 		return errors.New("无权删除评教任务")
 	}
 	return db.Model(t).Update("is_deleted", true).Error
+}
+
+// Restore 恢复软删除的任务（与 Delete 对称：仅清 is_deleted 标记，不动聚合值——
+// Delete 从未改过任务聚合值，任务名下评教记录也不随任务删除变化，故无需回补）。
+// 不复用 s.Get（它带 is_deleted = 0 过滤），直接查已删除行。
+// 有 task:restore 权限可恢复任意；仅有 task:restore_own 权限仅能恢复自己创建的任务。
+//
+// 唯一索引 uk_task_dedupe_active 的生成列只在「未删除且未取消」时算 key，故恢复会把该行
+// 重新纳入去重范围：若删除后又建了同教师+同课程+同上课时间的任务，UPDATE 会以 1062
+// 失败。这里按 Create 的同口径先做预检查给出可读提示，并以 isDupKeyErr 兜底并发窗口，
+// 绝不把原始数据库错误透给调用方。
+func (s *Task) Restore(db *gorm.DB, caller *model.User, id int) error {
+	var t model.EvaluationTask
+	if err := db.Where("id = ? AND is_deleted = 1", id).First(&t).Error; err != nil {
+		return errors.New("记录不存在或未被删除")
+	}
+	if CanRestoreTask(db, caller) {
+		// 放行，允许恢复任意任务
+	} else if CanRestoreOwnTask(db, caller) {
+		if t.CreateBy == nil || *t.CreateBy != caller.ID {
+			return errors.New("只能恢复自己创建的评教任务")
+		}
+	} else {
+		return errors.New("无权恢复评教任务")
+	}
+	if err := checkTaskRestoreDedupe(db, &t); err != nil {
+		return err
+	}
+	if err := db.Model(&t).Update("is_deleted", false).Error; err != nil {
+		if isDupKeyErr(err) {
+			return ErrDuplicateTask
+		}
+		return err
+	}
+	return nil
+}
+
+// checkTaskRestoreDedupe 恢复前的去重预检查，口径与 buildTask 的预检查、唯一索引生成列
+// 完全一致（同教师 + 同课程 + 同上课时间，且未删除未取消）；已取消任务的生成列恒为
+// NULL，不参与去重，恢复不会撞唯一索引。
+func checkTaskRestoreDedupe(db *gorm.DB, t *model.EvaluationTask) error {
+	if t.Status == model.TaskStatusCancelled {
+		return nil
+	}
+	var dup model.EvaluationTask
+	q := db.Where("teacher_id = ? AND course_name = ? AND is_deleted = 0 AND status <> ? AND id <> ?",
+		t.TeacherID, t.CourseName, model.TaskStatusCancelled, t.ID)
+	if t.ClassTime != nil {
+		q = q.Where("class_time = ?", t.ClassTime)
+	} else {
+		q = q.Where("class_time IS NULL")
+	}
+	if err := q.First(&dup).Error; err == nil {
+		return fmt.Errorf("已存在该教师相同课程、相同上课时间的未删除任务（任务ID=%d），无法恢复；请先取消或删除该任务后重试", dup.ID)
+	}
+	return nil
 }

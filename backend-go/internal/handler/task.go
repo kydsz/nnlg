@@ -33,6 +33,7 @@ func (h *Task) List(c *gin.Context) {
 		Keyword: c.Query("keyword"), Status: qInt16(c, "status"), TeacherID: qInt(c, "teacher_id"),
 		HasSupervisorEval: qBool(c, "has_supervisor_eval"), CreateBy: qInt(c, "create_by"),
 		CreateByNot: qInt(c, "create_by_not"), Page: page, PageSize: pageSize,
+		Deleted: c.Query("deleted"),
 		OrderBy: c.Query("order_by"), OrderDir: c.Query("order"),
 	}
 	if v := c.Query("college_id"); v != "" {
@@ -136,6 +137,8 @@ func (h *Task) List(c *gin.Context) {
 			"current_user_evaluated": evaluated[t.ID],
 			"has_draft":              draftSet[t.ID],
 			"evaluation_records":     summary,
+			// 已删除视图（deleted=1）下恒为 true，供前端区分行状态与恢复入口
+			"is_deleted": t.IsDeleted,
 		}
 		// 三态：拿不到同课汇总（无学期归属或查询降级）时不发字段，前端呈现「无法统计」
 		// 而非伪装成「未评/0 人」
@@ -199,14 +202,14 @@ func (h *Task) Get(c *gin.Context) {
 }
 
 type taskReq struct {
-	TeacherID   int              `json:"teacher_id"`
-	TeacherName string           `json:"teacher_name"`
-	CourseName  string           `json:"course_name"`
-	ClassTime   *model.LocalTime `json:"class_time"`
-	Classroom   *string          `json:"classroom"`
-	StartTime   *model.LocalTime `json:"start_time"`
-	EndTime     *model.LocalTime `json:"end_time"`
-	Status      *int16           `json:"status"`
+	TeacherID   int                       `json:"teacher_id"`
+	TeacherName string                    `json:"teacher_name"`
+	CourseName  string                    `json:"course_name"`
+	ClassTime   *model.LocalTime          `json:"class_time"`
+	Classroom   *string                   `json:"classroom"`
+	StartTime   *model.LocalTime          `json:"start_time"`
+	EndTime     *model.LocalTime          `json:"end_time"`
+	Status      *int16                    `json:"status"`
 	Schedule    *service.ScheduleSnapshot `json:"schedule"`
 }
 
@@ -359,6 +362,22 @@ func (h *Task) Delete(c *gin.Context) {
 	}
 	service.LogRecord(h.db, &u.ID, u.Username, "delete", "task", &id, "evaluation_task", nil)
 	response.OKMsg(c, "删除成功", nil)
+}
+
+// Restore 恢复软删除的任务
+func (h *Task) Restore(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		badReq(c, "无效的任务 ID")
+		return
+	}
+	u := middleware.CurrentUser(c)
+	if err := h.svc.Restore(h.db, u, id); err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	service.LogRecord(h.db, &u.ID, u.Username, "restore", "task", &id, "evaluation_task", nil)
+	response.OKMsg(c, "恢复成功", nil)
 }
 
 // splitIntsHandler 逗号分隔 ID

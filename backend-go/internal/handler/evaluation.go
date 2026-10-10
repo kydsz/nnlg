@@ -156,7 +156,8 @@ func (h *Evaluation) List(c *gin.Context) {
 		EvaluatorRole: c.Query("evaluator_role"), CollegeID: c.Query("college_id"),
 		TeacherName: c.Query("teacher_name"), Type: c.Query("type"),
 		OrderBy: c.Query("order_by"), OrderDir: c.Query("order"),
-		Page: page, PageSize: pageSize,
+		Deleted: c.Query("deleted"),
+		Page:    page, PageSize: pageSize,
 	}
 	var err error
 	if f.Start, err = parseDatePtr(c.Query("start_date")); err != nil {
@@ -408,7 +409,44 @@ func (h *Evaluation) Delete(c *gin.Context) {
 		content["course_name"] = t.CourseName
 	}
 	service.LogRecord(h.db, &u.ID, u.Username, "delete", "evaluation", &rec.ID, "evaluation_record", content)
+	// 作废后释放该评教人的提交幂等键（而非调用者的）：否则 Redis tev:dup 的 30 分钟
+	// TTL 会拦住「作废后重新评教」，与“作废后评教人可重新提交”的语义相矛盾。
+	if rec.EvaluatorID != nil {
+		releaseDupKey(c, rec.TaskID, *rec.EvaluatorID)
+	}
 	response.OKMsg(c, "删除成功", nil)
+}
+
+// Restore 恢复已作废的评教记录（与 Delete 对称：数据未丢，重新入列与统计口径）
+func (h *Evaluation) Restore(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		badReq(c, "无效的记录 ID")
+		return
+	}
+	u := middleware.CurrentUser(c)
+	rec, err := h.svc.Restore(h.db, u, id)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	// 操作日志：与作废日志同口径，记录被恢复评教的教师/课程/评教人上下文，便于审计追查
+	content := map[string]interface{}{
+		"task_id":        rec.TaskID,
+		"evaluator_name": rec.EvaluatorName,
+		"is_anonymous":   rec.IsAnonymous,
+	}
+	if rec.SubmitTime != nil {
+		content["submit_time"] = rec.SubmitTime
+	}
+	var t model.EvaluationTask
+	if err := h.db.Where("id = ?", rec.TaskID).First(&t).Error; err == nil {
+		content["teacher_id"] = t.TeacherID
+		content["teacher_name"] = t.TeacherName
+		content["course_name"] = t.CourseName
+	}
+	service.LogRecord(h.db, &u.ID, u.Username, "restore", "evaluation", &rec.ID, "evaluation_record", content)
+	response.OKMsg(c, "恢复成功", nil)
 }
 
 // Update 修改评教记录（仅系统管理员或被分配 evaluation:delete 权限的角色；仅维度值与匿名标记可改）

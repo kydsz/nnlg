@@ -13,6 +13,8 @@ export interface EvaluationListParams {
   end_date?: string
   order_by?: string
   order?: 'asc' | 'desc'
+  /** 1=只看已作废记录（后端仅对持 evaluation:restore/evaluation:restore_own 权限者生效）；缺省/0=正常记录 */
+  deleted?: 0 | 1
 }
 
 export interface SubmitPayload {
@@ -77,6 +79,8 @@ export const evaluationApi = {
     requestBlob({ url: `/evaluations/${id}/export`, method: 'GET', params: { format } }),
 
   remove: (id: number) => request<null>({ url: `/evaluations/${id}`, method: 'DELETE' }),
+
+  restore: (id: number) => request<null>({ url: `/evaluations/${id}/restore`, method: 'POST' }),
 
   update: (id: number, data: UpdatePayload) =>
     request<EvaluationRecord>({ url: `/evaluations/${id}`, method: 'PUT', data }),

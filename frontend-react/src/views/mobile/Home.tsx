@@ -113,7 +113,7 @@ export default function Home() {
       title: '确认删除',
       content:
         count > 0
-          ? `删除后任务会从任务列表移除（数据可恢复）；该任务下已提交的 ${count} 条评教记录会保留。确定删除"${t.course_name}"吗？`
+          ? `删除后任务会从任务列表移除，如需恢复请联系管理员；该任务下已提交的 ${count} 条评教记录会保留。确定删除"${t.course_name}"吗？`
           : `确定要删除任务"${t.course_name}"吗？`,
       confirmText: '删除',
       cancelText: '取消',

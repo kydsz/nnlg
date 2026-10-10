@@ -144,6 +144,7 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		tasks.POST("/export", middleware.RequirePermission(db, "task:view"), taskH.Export)
 		tasks.PUT("/:id", middleware.RequirePermission(db, "task:update"), taskH.Update)
 		tasks.DELETE("/:id", middleware.RequireAnyPermission(db, "task:delete", "task:delete_own"), taskH.Delete)
+		tasks.POST("/:id/restore", middleware.RequireAnyPermission(db, "task:restore", "task:restore_own"), taskH.Restore)
 	}
 
 	// 评教记录
@@ -159,6 +160,7 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		evaluations.GET("/:id", middleware.RequirePermission(db, "evaluation:view"), evalH.Detail)
 		evaluations.GET("/:id/export", middleware.RequirePermission(db, "evaluation:view"), evalH.Export)
 		evaluations.DELETE("/:id", authMW, evalH.Delete)
+		evaluations.POST("/:id/restore", authMW, evalH.Restore)
 		evaluations.PUT("/:id", authMW, evalH.Update)
 	}
 

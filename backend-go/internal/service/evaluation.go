@@ -33,6 +33,10 @@ func isDupKeyErr(err error) bool {
 	return strings.Contains(msg, "duplicate") || strings.Contains(msg, "unique constraint failed")
 }
 
+// ErrActiveRecordExists 恢复作废记录时，同一评教人在该任务下已有有效记录
+// （撞唯一索引 uk_task_evaluator_active），返回可读文案而非裸 1062。
+var ErrActiveRecordExists = errors.New("该评教人在此任务下已有有效评教记录，无法恢复本条作废记录；如需替换请先作废该有效记录")
+
 // SubmitParams 提交评教参数
 type SubmitParams struct {
 	TaskID          int                    `json:"task_id"`
@@ -368,6 +372,7 @@ type EvaluationFilters struct {
 	Start, End     *time.Time
 	OrderBy        string // 排序字段（白名单：id / class_time / submit_time）
 	OrderDir       string // asc / desc
+	Deleted        string // "1" 只看已作废记录（仅持 evaluation:restore / evaluation:restore_own 者生效）
 	Page, PageSize int
 }
 
@@ -413,10 +418,17 @@ func evaluatorNameCond(viewer *model.User, viewAll bool) (string, []interface{})
 // buildRecordQuery 构造记录查询（t = evaluation_task, r = evaluation_record）
 func (s *Evaluation) buildRecordQuery(db *gorm.DB, viewer *model.User, f EvaluationFilters) (*gorm.DB, error) {
 	// 记录可见性不随任务软删除消失（对齐旧端：列表/详情均不过滤任务 is_deleted）；
-	// 但已软删除的记录本身不展示
+	// 已作废（软删除）的记录默认不展示，仅当调用者持 evaluation:restore 或
+	// evaluation:restore_own 时 deleted=1 生效（只看已作废，供恢复入口使用）；
+	// 无权限则忽略该参数强制 r.is_deleted = 0，避免越权看到已作废数据。
+	showDeleted := f.Deleted == "1" && (CanRestoreEvaluation(db, viewer) || CanRestoreOwnEvaluation(db, viewer))
 	q := db.Table("evaluation_record AS r").
-		Joins("JOIN evaluation_task AS t ON t.id = r.task_id").
-		Where("r.is_deleted = 0")
+		Joins("JOIN evaluation_task AS t ON t.id = r.task_id")
+	if showDeleted {
+		q = q.Where("r.is_deleted = 1")
+	} else {
+		q = q.Where("r.is_deleted = 0")
+	}
 
 	// 类型与数据范围
 	isTeacherOnly := viewer.HasRole(model.RoleTeacher) && !IsAdminRole(viewer) && !IsSupervisor(viewer)
@@ -426,7 +438,13 @@ func (s *Evaluation) buildRecordQuery(db *gorm.DB, viewer *model.User, f Evaluat
 	case f.Type == "sent":
 		q = q.Where("r.evaluator_id = ?", viewer.ID)
 	case isTeacherOnly:
-		q = q.Where("t.teacher_id = ?", viewer.ID)
+		// 已作废视图下按「本人提交」收敛：教师同行评教评的是别人的课，
+		// 沿用被评教师过滤会把自己提交、被作废的记录挡在恢复入口之外
+		if showDeleted {
+			q = q.Where("r.evaluator_id = ?", viewer.ID)
+		} else {
+			q = q.Where("t.teacher_id = ?", viewer.ID)
+		}
 	default:
 		switch {
 		case viewer.HasRole(model.RoleSystemAdmin):
@@ -447,6 +465,11 @@ func (s *Evaluation) buildRecordQuery(db *gorm.DB, viewer *model.User, f Evaluat
 
 	if isTeacherOnly && f.EvaluatorID != nil && *f.EvaluatorID != viewer.ID {
 		return nil, errors.New("教师只能查询自己的评教记录")
+	}
+
+	// 仅有 evaluation:restore_own（无 evaluation:restore）者：已作废视图只暴露本人提交的记录
+	if showDeleted && !CanRestoreEvaluation(db, viewer) {
+		q = q.Where("r.evaluator_id = ?", viewer.ID)
 	}
 
 	if f.TaskID != nil {
@@ -553,6 +576,12 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 	scoreCodes := scoreDimCodeSet(db)
 	maxTotal := totalMaxScoreOfSchema(db)
 	viewAll := CanViewOthersEvaluation(db, viewer)
+	// 恢复权限：与 service.Restore 同口径（evaluation:restore 可恢复任意，系统管理员恒可；
+	// 仅有 evaluation:restore_own 者只能恢复本人提交的记录）。前端按该标记决定是否
+	// 渲染「恢复」按钮——已作废视图下匿名记录的 evaluator_id 被脱敏为 null，
+	// 前端无法自行判断归属，故必须由服务端下发。
+	canRestoreAny := CanRestoreEvaluation(db, viewer)
+	canRestoreOwn := !canRestoreAny && CanRestoreOwnEvaluation(db, viewer)
 
 	for i := range recs {
 		r := &recs[i]
@@ -563,6 +592,11 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 			"evaluator_role": r.EvaluatorRole, "evaluator_role_name": model.RoleName(r.EvaluatorRole),
 			"total_score":     totalScoreOfValues(r.DimensionValues, scoreCodes),
 			"max_total_score": maxTotal, "submit_time": r.SubmitTime,
+			// 已作废标记：正常视图恒为 false，已作废视图（deleted=1）恒为 true，
+			// 供前端区分行状态与恢复入口
+			"is_deleted": r.IsDeleted,
+			"can_restore": canRestoreAny ||
+				(canRestoreOwn && r.EvaluatorID != nil && *r.EvaluatorID == viewer.ID),
 		}
 		if ok {
 			item["teacher_id"] = task.TeacherID
@@ -718,7 +752,8 @@ func strOrNil(s string) interface{} {
 	return s
 }
 
-// GetDetail 详情（含维度 schema）
+// GetDetail 详情（含维度 schema）。仅未作废（is_deleted = 0）的记录可查详情；
+// 已作废记录不再参与评教流程，前端「已作废」视图只提供恢复入口（无需看详情）。
 func (s *Evaluation) GetDetail(db *gorm.DB, viewer *model.User, id int) (map[string]interface{}, error) {
 	var rec model.EvaluationRecord
 	if err := db.Where("id = ? AND is_deleted = 0", id).First(&rec).Error; err != nil {
@@ -896,6 +931,87 @@ func syncTaskAggregatesAfterVoid(tx *gorm.DB, taskID int) error {
 		if err := tx.Where("id = ? AND is_deleted = 0", taskID).First(&task).Error; err == nil {
 			if task.Status == model.TaskStatusEvaluated {
 				updates["status"] = model.TaskStatusPending
+			}
+		}
+	}
+	return tx.Model(&model.EvaluationTask{}).Where("id = ?", taskID).Updates(updates).Error
+}
+
+// Restore 恢复已作废（软删除）的评教记录（与 Delete 对称）。
+// 权限：系统管理员 / 持 evaluation:restore 者可恢复任意；仅有 evaluation:restore_own
+// 者只能恢复本人提交的记录。同一事务内同步回补任务上的聚合值（整表重算，幂等自愈），
+// 保证「任务上的数字 = 当前有效评教记录」。返回被恢复记录快照，供调用方（如操作日志）使用。
+func (s *Evaluation) Restore(db *gorm.DB, viewer *model.User, id int) (*model.EvaluationRecord, error) {
+	var rec model.EvaluationRecord
+	if err := db.Where("id = ? AND is_deleted = 1", id).First(&rec).Error; err != nil {
+		return nil, errors.New("记录不存在或未被作废")
+	}
+	if !CanRestoreEvaluation(db, viewer) {
+		if !CanRestoreOwnEvaluation(db, viewer) {
+			return nil, errors.New("无权恢复评教记录")
+		}
+		if rec.EvaluatorID == nil || *rec.EvaluatorID != viewer.ID {
+			return nil, errors.New("只能恢复自己提交的评教记录")
+		}
+	}
+	// 恢复前预检查：同一评教人在该任务下若已有有效记录，恢复会撞唯一索引
+	// uk_task_evaluator_active（active_key 生成列），提前转成可读文案而非裸 1062。
+	if rec.EvaluatorID != nil {
+		var active int64
+		if err := db.Model(&model.EvaluationRecord{}).
+			Where("task_id = ? AND evaluator_id = ? AND is_deleted = 0 AND id <> ?",
+				rec.TaskID, *rec.EvaluatorID, rec.ID).Count(&active).Error; err != nil {
+			return nil, err
+		}
+		if active > 0 {
+			return nil, ErrActiveRecordExists
+		}
+	}
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.EvaluationRecord{}).Where("id = ?", id).
+			Update("is_deleted", false).Error; err != nil {
+			if isDupKeyErr(err) {
+				return ErrActiveRecordExists
+			}
+			return err
+		}
+		return syncTaskAggregatesAfterRestore(tx, rec.TaskID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	rec.IsDeleted = false
+	return &rec, nil
+}
+
+// syncTaskAggregatesAfterRestore 恢复记录后同步任务聚合值，与 syncTaskAggregatesAfterVoid
+// 同源的整表重算口径（幂等自愈，重复恢复不会算错）：
+//   - evaluation_count = 当前有效记录总数（is_deleted = 0）；
+//   - has_supervisor_eval = 任务下存在有效督导记录（督导角色判定与作废同源）；
+//   - 状态推进：若有效记录数 > 0 且任务未删（is_deleted = 0）且仍为「待评」，置回「已评」；
+//     「取消」状态不复活（与作废侧「取消不动」对称）。
+func syncTaskAggregatesAfterRestore(tx *gorm.DB, taskID int) error {
+	var activeCount, supervisorCount int64
+	if err := tx.Model(&model.EvaluationRecord{}).
+		Where("task_id = ? AND is_deleted = 0", taskID).Count(&activeCount).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&model.EvaluationRecord{}).
+		Where("task_id = ? AND is_deleted = 0 AND evaluator_role IN ?", taskID,
+			model.SupervisorRoleCodes).
+		Count(&supervisorCount).Error; err != nil {
+		return err
+	}
+	updates := map[string]interface{}{
+		"evaluation_count":    activeCount,
+		"has_supervisor_eval": supervisorCount > 0,
+	}
+	if activeCount > 0 {
+		// 仅未删且处于「待评」的任务推进为「已评」；已取消/已删的任务不动
+		var task model.EvaluationTask
+		if err := tx.Where("id = ? AND is_deleted = 0", taskID).First(&task).Error; err == nil {
+			if task.Status == model.TaskStatusPending {
+				updates["status"] = model.TaskStatusEvaluated
 			}
 		}
 	}

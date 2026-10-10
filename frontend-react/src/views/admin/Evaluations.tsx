@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Table, Button, Space, App, Popconfirm, Tag, Drawer, Input, Descriptions, DatePicker, Image, Slider, InputNumber, Radio, Checkbox, Switch, Spin } from 'antd'
+import { Table, Button, Space, App, Popconfirm, Tag, Drawer, Input, Descriptions, DatePicker, Image, Slider, InputNumber, Radio, Checkbox, Switch, Spin, Select, Tooltip } from 'antd'
 import { DownloadOutlined, PrinterOutlined, SearchOutlined, EditOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import type { ColumnsType } from 'antd/es/table'
@@ -30,7 +30,9 @@ export default function Evaluations() {
   const canDeleteOwn = useAuthStore((s) => s.hasPermission('evaluation:delete_own'))
   const canDeleteRecord = (r: EvaluationRecord) =>
     canDeleteAny || (canDeleteOwn && userId != null && r.evaluator_id === userId)
-  const [params, setParams] = useState<{ page: number; page_size: number; keyword?: string; teacher_id?: number; order_by?: string; order?: 'asc' | 'desc' }>({ page: 1, page_size: 20 })
+  const canRestoreAny = useAuthStore((s) => s.hasPermission('evaluation:restore'))
+  const canRestoreOwn = useAuthStore((s) => s.hasPermission('evaluation:restore_own'))
+  const [params, setParams] = useState<{ page: number; page_size: number; keyword?: string; teacher_id?: number; order_by?: string; order?: 'asc' | 'desc'; deleted?: 0 | 1 }>({ page: 1, page_size: 20 })
   const [keyword, setKeyword] = useState('')
   const [sortState, setSortState] = useState<{ field?: string; order?: 'ascend' | 'descend' }>({})
   const [detailId, setDetailId] = useState<number | null>(null)
@@ -82,6 +84,15 @@ export default function Evaluations() {
     onError: (e) => message.error(e.message),
   })
 
+  const restoreMut = useMutation({
+    mutationFn: (id: number) => evaluationApi.restore(id),
+    onSuccess: () => {
+      message.success('恢复成功')
+      qc.invalidateQueries({ queryKey: ['evaluations'] })
+    },
+    onError: (e) => message.error(e.message),
+  })
+
   const columns: ColumnsType<EvaluationRecord> = [
     {
       title: 'ID',
@@ -125,32 +136,52 @@ export default function Evaluations() {
     {
       title: '操作',
       width: 210,
-      render: (_, record) => (
-        <Space>
-          {canDeleteAny && (
-            <Button size="small" icon={<EditOutlined />} onClick={() => setEditId(record.id)}>
-              编辑
-            </Button>
-          )}
-          <Button size="small" onClick={() => setDetailId(record.id)}>
-            详情
-          </Button>
-          {canDeleteRecord(record) && (
-            <Popconfirm
-              title="确认作废该评教记录？"
-              description="作废后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化；数据会保留可追溯，评教人可对同一任务重新提交。"
-              okText="作废"
-              cancelText="取消"
-              okButtonProps={{ danger: true }}
-              onConfirm={() => delMut.mutate(record.id)}
-            >
-              <Button size="small" danger>
-                作废
+      render: (_, record) =>
+        params.deleted === 1 ? (
+          <Space>
+            {record.can_restore && (
+              <Popconfirm
+                title="确认恢复该评教记录？"
+                description="恢复后该记录将重新计入列表、统计与汇总，被评教师的评分统计会随之变化。"
+                okText="恢复"
+                cancelText="取消"
+                onConfirm={() => restoreMut.mutate(record.id)}
+              >
+                <Button
+                  size="small"
+                  loading={restoreMut.isPending && restoreMut.variables === record.id}
+                >
+                  恢复
+                </Button>
+              </Popconfirm>
+            )}
+          </Space>
+        ) : (
+          <Space>
+            {canDeleteAny && (
+              <Button size="small" icon={<EditOutlined />} onClick={() => setEditId(record.id)}>
+                编辑
               </Button>
-            </Popconfirm>
-          )}
-        </Space>
-      ),
+            )}
+            <Button size="small" onClick={() => setDetailId(record.id)}>
+              详情
+            </Button>
+            {canDeleteRecord(record) && (
+              <Popconfirm
+                title="确认作废该评教记录？"
+                description="作废后该记录将从列表、统计与汇总中移除，被评教师的评分统计会随之变化；数据会保留可追溯，评教人可对同一任务重新提交。"
+                okText="作废"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => delMut.mutate(record.id)}
+              >
+                <Button size="small" danger>
+                  作废
+                </Button>
+              </Popconfirm>
+            )}
+          </Space>
+        ),
     },
   ]
 
@@ -164,13 +195,31 @@ export default function Evaluations() {
             onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
           }
         />
-        <Button
-          icon={<DownloadOutlined />}
-          style={{ width: 220 }}
-          onClick={() => setExportOpen(true)}
-        >
-          批量导出（xlsx）
-        </Button>
+        {(canRestoreAny || canRestoreOwn) && (
+          <Select
+            style={{ width: 130 }}
+            value={params.deleted === 1 ? 1 : 0}
+            options={[
+              { label: '正常记录', value: 0 },
+              { label: '已作废记录', value: 1 },
+            ]}
+            onChange={(v) =>
+              setParams((p) => ({ ...p, page: 1, deleted: v === 1 ? 1 : undefined }))
+            }
+          />
+        )}
+        <Tooltip title={params.deleted === 1 ? '已作废视图不支持导出' : undefined}>
+          <span>
+            <Button
+              icon={<DownloadOutlined />}
+              style={{ width: 220 }}
+              disabled={params.deleted === 1}
+              onClick={() => setExportOpen(true)}
+            >
+              批量导出（xlsx）
+            </Button>
+          </span>
+        </Tooltip>
         <Input
           allowClear
           prefix={<SearchOutlined />}

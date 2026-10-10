@@ -162,6 +162,8 @@ export interface Task {
   create_by?: number
   create_by_name?: string
   create_time?: string
+  /** 任务是否已被软删除（仅「已删除」视图或具恢复权限时返回） */
+  is_deleted?: boolean
   /** 加入待评时固化的课表信息快照（上课时间/教室/班级/应到人数/周次） */
   schedule?: EvalScheduleInfo
 }
@@ -196,6 +198,10 @@ export interface EvaluationRecord {
   files?: EvaluationFile[]
   /** 详情返回的课表信息（提交时展示的那份：上课时间/教室/班级/应到人数/周次） */
   schedule?: EvalScheduleInfo
+  /** 是否已作废（软删除）：仅「已作废」视图（deleted=1）下为 true */
+  is_deleted?: boolean
+  /** 当前用户是否可恢复本条（服务端按 evaluation:restore / restore_own 与归属计算，匿名记录脱敏后前端无法自判） */
+  can_restore?: boolean
 }
 
 /** 评教记录详情中的课表信息（对齐提交页展示） */

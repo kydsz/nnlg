@@ -14,6 +14,8 @@ export interface TaskListParams {
   end_date?: string
   order_by?: string
   order?: 'asc' | 'desc'
+  /** 1=只看已删除任务（后端仅对持 task:restore/task:restore_own 权限者生效）；缺省/0=正常任务 */
+  deleted?: 0 | 1
 }
 
 export interface TaskPayload {
@@ -49,6 +51,8 @@ export const taskApi = {
 
 
   remove: (id: number) => request<null>({ url: `/tasks/${id}`, method: 'DELETE' }),
+
+  restore: (id: number) => request<null>({ url: `/tasks/${id}/restore`, method: 'POST' }),
 
   export: (params: TaskListParams & { format?: string }) =>
     requestBlob({ url: '/tasks/export', method: 'POST', data: params }),

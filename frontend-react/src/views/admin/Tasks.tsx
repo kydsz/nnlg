@@ -11,6 +11,7 @@ import {
   App,
   Popconfirm,
   Tag,
+  Tooltip,
   DatePicker,
   type GetProp,
 } from 'antd'
@@ -34,6 +35,10 @@ export default function Tasks() {
   const canDeleteOwn = useAuthStore((s) => s.hasPermission('task:delete_own'))
   const canDeleteTask = (r: Task) =>
     canDeleteAny || (canDeleteOwn && userId != null && r.create_by === userId)
+  const canRestoreAny = useAuthStore((s) => s.hasPermission('task:restore'))
+  const canRestoreOwn = useAuthStore((s) => s.hasPermission('task:restore_own'))
+  const canRestoreTask = (r: Task) =>
+    canRestoreAny || (canRestoreOwn && userId != null && r.create_by === userId)
   const [params, setParams] = useState<{
     page: number
     page_size: number
@@ -43,11 +48,15 @@ export default function Tasks() {
     end_date?: string
     order_by?: string
     order?: 'asc' | 'desc'
+    deleted?: 0 | 1
   }>({
     page: 1,
     page_size: 20,
   })
   const [sortState, setSortState] = useState<{ field?: string; order?: 'ascend' | 'descend' }>({})
+  // 切到「已删除」视图时状态筛选无意义（已删数据多为历史快照），会临时清空；
+  // 这里记住原选择，切回「正常任务」时原样回显，避免用户的筛选条件被静默丢弃
+  const savedStatusRef = useRef<number | undefined>(undefined)
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebounce(search, 300)
   const [modalOpen, setModalOpen] = useState(false)
@@ -87,6 +96,15 @@ export default function Tasks() {
     mutationFn: (id: number) => taskApi.remove(id),
     onSuccess: () => {
       message.success('删除成功')
+      invalidate()
+    },
+    onError: (e) => message.error(e.message),
+  })
+
+  const restoreMut = useMutation({
+    mutationFn: (id: number) => taskApi.restore(id),
+    onSuccess: () => {
+      message.success('恢复成功')
       invalidate()
     },
     onError: (e) => message.error(e.message),
@@ -148,38 +166,55 @@ export default function Tasks() {
     {
       title: '操作',
       width: 200,
-      render: (_, record) => (
-        <Space>
-          <Button
-            size="small"
-            onClick={() => {
-              setEditing(record)
-              form.setFieldsValue({
-                course_name: record.course_name,
-                teacher_id: record.teacher_id,
-                classroom: record.classroom,
-              })
-              setModalOpen(true)
-            }}
-          >
-            编辑
-          </Button>
-          {canDeleteTask(record) && (
-            <Popconfirm
-              title={
-                (record.evaluation_count ?? 0) > 0
-                  ? `删除后任务从列表移除（可恢复），该任务下 ${record.evaluation_count} 条评教记录会保留。确认删除？`
-                  : '确认删除？'
-              }
-              onConfirm={() => delMut.mutate(record.id)}
+      render: (_, record) =>
+        params.deleted === 1 ? (
+          <Space>
+            {canRestoreTask(record) && (
+              <Popconfirm
+                title="确认恢复该任务？恢复后将重新出现在任务列表中。"
+                onConfirm={() => restoreMut.mutate(record.id)}
+              >
+                <Button
+                  size="small"
+                  loading={restoreMut.isPending && restoreMut.variables === record.id}
+                >
+                  恢复
+                </Button>
+              </Popconfirm>
+            )}
+          </Space>
+        ) : (
+          <Space>
+            <Button
+              size="small"
+              onClick={() => {
+                setEditing(record)
+                form.setFieldsValue({
+                  course_name: record.course_name,
+                  teacher_id: record.teacher_id,
+                  classroom: record.classroom,
+                })
+                setModalOpen(true)
+              }}
             >
-              <Button size="small" danger>
-                删除
-              </Button>
-            </Popconfirm>
-          )}
-        </Space>
-      ),
+              编辑
+            </Button>
+            {canDeleteTask(record) && (
+              <Popconfirm
+                title={
+                  (record.evaluation_count ?? 0) > 0
+                    ? `删除后任务将从列表移除，可由具备恢复权限的管理员在“已删除”筛选中恢复；该任务下 ${record.evaluation_count} 条评教记录会保留。确认删除？`
+                    : '删除后任务将从列表移除，可由具备恢复权限的管理员在“已删除”筛选中恢复。确认删除？'
+                }
+                onConfirm={() => delMut.mutate(record.id)}
+              >
+                <Button size="small" danger>
+                  删除
+                </Button>
+              </Popconfirm>
+            )}
+          </Space>
+        ),
     },
   ]
 
@@ -205,6 +240,8 @@ export default function Tasks() {
           allowClear
           placeholder="状态"
           style={{ width: 120 }}
+          value={params.status}
+          disabled={params.deleted === 1}
           options={[
             { label: '待评', value: 1 },
             { label: '已评', value: 2 },
@@ -214,45 +251,80 @@ export default function Tasks() {
             setParams((p) => ({
               ...p,
               page: 1,
-              // status 存入 params
-              ...(v != null ? { status: v } : {}),
+              // status 存入 params；清空时置 undefined 以生效 allowClear/X
+              status: v ?? undefined,
             }))
           }
         />
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => {
-            setEditing(null)
-            form.resetFields()
-            setModalOpen(true)
-          }}
-        >
-          创建任务
-        </Button>
-        <Button
-          icon={<PlusOutlined />}
-          onClick={() => {
-            batchForm.resetFields()
-            setBatchOpen(true)
-          }}
-        >
-          批量创建
-        </Button>
-        <Button
-          icon={<DownloadOutlined />}
-          loading={exportMut.isPending}
-          onClick={() =>
-            exportMut.mutate({
-              ...params,
-              keyword: effectiveKeyword,
-              start_date: dates[0],
-              end_date: dates[1],
-            })
-          }
-        >
-          导出
-        </Button>
+        {(canRestoreAny || canRestoreOwn) && (
+          <Select
+            style={{ width: 130 }}
+            value={params.deleted === 1 ? 1 : 0}
+            options={[
+              { label: '正常任务', value: 0 },
+              { label: '已删除任务', value: 1 },
+            ]}
+            onChange={(v) => {
+              if (v === 1) savedStatusRef.current = params.status
+              setParams((p) =>
+                v === 1
+                  ? // 切到已删除视图：暂存并清空 status 筛选
+                    { ...p, page: 1, deleted: 1, status: undefined }
+                  : // 切回正常视图：回显切走前的 status
+                    { ...p, page: 1, deleted: undefined, status: savedStatusRef.current }
+              )
+            }}
+          />
+        )}
+        <Tooltip title={params.deleted === 1 ? '已删除视图不支持新建任务' : undefined}>
+          <span>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              disabled={params.deleted === 1}
+              onClick={() => {
+                setEditing(null)
+                form.resetFields()
+                setModalOpen(true)
+              }}
+            >
+              创建任务
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title={params.deleted === 1 ? '已删除视图不支持批量创建' : undefined}>
+          <span>
+            <Button
+              icon={<PlusOutlined />}
+              disabled={params.deleted === 1}
+              onClick={() => {
+                batchForm.resetFields()
+                setBatchOpen(true)
+              }}
+            >
+              批量创建
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title={params.deleted === 1 ? '已删除视图不支持导出' : undefined}>
+          <span>
+            <Button
+              icon={<DownloadOutlined />}
+              loading={exportMut.isPending}
+              disabled={params.deleted === 1}
+              onClick={() =>
+                exportMut.mutate({
+                  ...params,
+                  keyword: effectiveKeyword,
+                  start_date: dates[0],
+                  end_date: dates[1],
+                })
+              }
+            >
+              导出
+            </Button>
+          </span>
+        </Tooltip>
       </div>
       <Table<Task>
         rowKey="id"
