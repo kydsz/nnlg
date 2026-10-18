@@ -82,11 +82,13 @@
 
 ### 评教记录
 
-* evaluation:view / evaluation:create / evaluation:view\_anonymous / evaluation:view\_all / evaluation:delete / evaluation:delete\_own / evaluation:restore / evaluation:restore\_own
+* evaluation:view / evaluation:create / evaluation:view\_anonymous / evaluation:view\_all / evaluation:update / evaluation:delete / evaluation:delete\_own / evaluation:restore / evaluation:restore\_own
 
 > `evaluation:create`：提交评教。接口 `POST /evaluations`（含 `POST /evaluations/with-files`）均需该权限。教师默认分配该权限后可提交同行评教；业务约束（不能评自己、只能评本学院教师、任务未取消/未重复提交）由后端 `ValidateSubmit` 校验，与路由权限门分离。历史数据缺失 `evaluation:create` 的 teacher 角色由迁移 `008_add_evaluation_create_to_teacher.sql` 自动补齐（幂等）。
 
 > `evaluation:view_all`：查看他人评教记录（含匿名详情）的权限码，由系统管理员在角色管理中按需分配；分配后督导等角色可按其学院数据范围查看他人评教记录/详情/导出。
+
+> `evaluation:update`：修改评教记录（`PUT /evaluations/:id`）。可改维度作答、匿名标记，以及记录所挂课堂的课程信息（被评教师 / 课程名 / 上课时间 / 教室 / 课表快照）——改的是任务本身（记录 `task_id` 不变），该任务下全部记录同步显示新课程信息，任务评教数 / 督导已评 / 状态不变；课程信息另需 `task:update`，且**已有评教提交的任务仅管理员可编辑**（督导持 `task:update` 也不放行）。评教人 / 评教角色 / 提交时间一律不可改。非系统管理员按被评教师主学院收敛数据范围；保存为单事务（记录侧 + 任务侧同时生效或整体回滚），操作日志记录修改前后值。该码替换了此前借用 `evaluation:delete` 的编辑入口；内置角色中仅 `college_admin` / `school_admin` 默认持有（`system_admin` 恒有全部权限），由迁移 `017_add_evaluation_update_to_admin_roles.sql` 幂等下发。
 
 > `evaluation:delete`：作废任意评教记录；`evaluation:delete_own`：仅能作废评教人本人提交的记录。两者可并存，系统管理员恒可作废任意。作废即软删（数据保留、可追溯），记录退出列表与统计口径，同一评教人可对同一任务重新提交；作废后任务上的评教数、「督导已评」与任务状态在同一事务内回退到与有效记录一致。删除评教任务**不**构成作废记录的旁路（见上条 `task:delete`）。
 
@@ -234,3 +236,4 @@
 * `008_add_evaluation_create_to_teacher.sql`：teacher 补 `evaluation:create`
 * `015_add_task_view_all_to_builtin_roles.sql`：college\_admin / school\_admin / school\_supervisor / college\_supervisor / supervisor 补 `task:view_all`（teacher 不补）
 * `016_add_restore_perms_to_builtin_roles.sql`：为已持有**完整** delete 码的内置角色镜像下发对应 restore 码——持 `task:delete`→补 `task:restore`，持 `evaluation:delete`→补 `evaluation:restore`（幂等）。`*_own` 恢复码**不再自动镜像**：恢复入口在管理端（`AdminGate` 之后），持 `*_own` 删除码的非管理端角色（teacher / 督导）用不到，自动下发只会产生死权限；这两个码保留在目录中供管理员手动分配。迁移同时对历史已下发 `task:restore_own` / `evaluation:restore_own` 的非管理端内置角色做幂等移除（自愈）
+* `017_add_evaluation_update_to_admin_roles.sql`：给内置管理员角色（`college_admin` / `school_admin`；`system_admin` 恒有全部权限）补 `evaluation:update`（幂等）

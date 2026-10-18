@@ -198,6 +198,8 @@ export interface EvaluationRecord {
   files?: EvaluationFile[]
   /** 详情返回的课表信息（提交时展示的那份：上课时间/教室/班级/应到人数/周次） */
   schedule?: EvalScheduleInfo
+  /** 详情返回：该课堂下有效评教数（编辑课堂信息时的影响范围提示） */
+  evaluation_count?: number
   /** 是否已作废（软删除）：仅「已作废」视图（deleted=1）下为 true */
   is_deleted?: boolean
   /** 当前用户是否可恢复本条（服务端按 evaluation:restore / restore_own 与归属计算，匿名记录脱敏后前端无法自判） */

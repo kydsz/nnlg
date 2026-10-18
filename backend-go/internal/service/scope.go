@@ -169,6 +169,34 @@ func CanVoidOwnEvaluation(db *gorm.DB, u *model.User) bool {
 	return false
 }
 
+// CanUpdateEvaluation 是否可修改评教记录（evaluation:update）
+// 系统管理员恒可；其他角色需被分配 evaluation:update 权限（内置角色中仅管理员默认持有）
+func CanUpdateEvaluation(db *gorm.DB, u *model.User) bool {
+	if u.HasRole(model.RoleSystemAdmin) {
+		return true
+	}
+	for _, p := range u.Permissions(db) {
+		if p == "evaluation:update" {
+			return true
+		}
+	}
+	return false
+}
+
+// CanUpdateTask 是否可编辑评教任务（task:update）
+// 系统管理员恒可；其他角色需被分配 task:update 权限（路由侧另有同码中间件把关）
+func CanUpdateTask(db *gorm.DB, u *model.User) bool {
+	if u.HasRole(model.RoleSystemAdmin) {
+		return true
+	}
+	for _, p := range u.Permissions(db) {
+		if p == "task:update" {
+			return true
+		}
+	}
+	return false
+}
+
 // CanDeleteTask 是否可删除任意评教任务
 // 系统管理员恒可；其他角色需被分配 task:delete 权限
 func CanDeleteTask(db *gorm.DB, u *model.User) bool {

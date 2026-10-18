@@ -280,16 +280,10 @@ func (s *Task) buildTask(db *gorm.DB, caller *model.User, p CreateTaskParams) (*
 	// 去重预检查：同教师+同课程+同上课时间，未删除且未取消。
 	// class_time 参与比较：不同时间（同一天不同节次、不同周）的课程不算重复。
 	// 预检查只为「友好提示 + 批量跳过」，并发安全由唯一索引 uk_task_dedupe_active 兜底。
-	var dup model.EvaluationTask
-	q := db.Where("teacher_id = ? AND course_name = ? AND is_deleted = 0 AND status <> ?",
-		p.TeacherID, p.CourseName, model.TaskStatusCancelled)
-	if p.ClassTime != nil {
-		q = q.Where("class_time = ?", p.ClassTime)
-	} else {
-		q = q.Where("class_time IS NULL")
-	}
-	if err := q.First(&dup).Error; err == nil {
-		return nil, fmt.Errorf("该教师已存在相同课程的任务（任务ID=%d）", dup.ID)
+	if dupID, err := taskDedupeConflict(db, 0, p.TeacherID, p.CourseName, p.ClassTime); err != nil {
+		return nil, err
+	} else if dupID > 0 {
+		return nil, fmt.Errorf("该教师已存在相同课程的任务（任务ID=%d）", dupID)
 	}
 
 	name := p.TeacherName
@@ -392,6 +386,7 @@ func (s *Task) BatchCreate(db *gorm.DB, caller *model.User, items []CreateTaskPa
 
 // UpdateTaskParams 编辑参数
 type UpdateTaskParams struct {
+	TeacherID  *int             `json:"teacher_id"`
 	CourseName *string          `json:"course_name"`
 	ClassTime  *model.LocalTime `json:"class_time"`
 	Classroom  *string          `json:"classroom"`
@@ -402,7 +397,36 @@ type UpdateTaskParams struct {
 	ScheduleSnapshot *ScheduleSnapshot `json:"schedule"`
 }
 
-// Update 编辑任务（状态机见需求文档 13.2）
+// localTimeEqual 两个可空时间是否相等（同为空视为相等）
+func localTimeEqual(a, b *model.LocalTime) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.ToTime().Equal(b.ToTime())
+}
+
+// taskDedupeConflict 查询与 (teacher, course, class_time) 重复的其它「未删除未取消」
+// 任务 ID（口径与唯一索引 uk_task_dedupe_active 一致，excludeID 用于编辑时排除自身；
+// 创建场景传 0）。无重复返回 0。
+func taskDedupeConflict(db *gorm.DB, excludeID, teacherID int, courseName string, classTime *model.LocalTime) (int, error) {
+	q := db.Model(&model.EvaluationTask{}).
+		Where("id <> ? AND teacher_id = ? AND course_name = ? AND is_deleted = 0 AND status <> ?",
+			excludeID, teacherID, courseName, model.TaskStatusCancelled)
+	if classTime == nil {
+		q = q.Where("class_time IS NULL")
+	} else {
+		q = q.Where("class_time = ?", *classTime)
+	}
+	var id int
+	if err := q.Select("id").Order("id ASC").Limit(1).Scan(&id).Error; err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// Update 编辑任务（状态机见需求文档 13.2）。
+// 已有评教提交的任务（evaluation_count > 0）仅管理员可编辑：课程信息直接影响已评记录，
+// 督导/创建者一律拒绝。换教师需目标教师在操作者范围内，并同步 teacher_name 快照。
 func (s *Task) Update(db *gorm.DB, caller *model.User, id int, p UpdateTaskParams) (*model.EvaluationTask, error) {
 	t, err := s.Get(db, id)
 	if err != nil {
@@ -411,6 +435,11 @@ func (s *Task) Update(db *gorm.DB, caller *model.User, id int, p UpdateTaskParam
 	teacher, err := LoadTeacherUser(db, t.TeacherID)
 	if err != nil {
 		return nil, err
+	}
+
+	// 已有评教提交的任务仅管理员可编辑（督导持 task:update 也不放行）
+	if t.EvaluationCount > 0 && !IsAdminRole(caller) {
+		return nil, errors.New("已有评教提交的任务仅管理员可编辑")
 	}
 
 	// 编辑权限
@@ -434,6 +463,21 @@ func (s *Task) Update(db *gorm.DB, caller *model.User, id int, p UpdateTaskParam
 
 	updates := map[string]interface{}{}
 	hasOther := false
+	if p.TeacherID != nil && *p.TeacherID != t.TeacherID {
+		newTeacher, err := LoadTeacherUser(db, *p.TeacherID)
+		if err != nil {
+			return nil, err
+		}
+		if newTeacher.Status != 1 {
+			return nil, errors.New("被评教师已停用")
+		}
+		if err := checkTaskTargetScope(caller, newTeacher); err != nil {
+			return nil, err
+		}
+		updates["teacher_id"] = newTeacher.ID
+		updates["teacher_name"] = newTeacher.Username
+		hasOther = true
+	}
 	if p.CourseName != nil {
 		updates["course_name"] = *p.CourseName
 		hasOther = true
@@ -487,8 +531,45 @@ func (s *Task) Update(db *gorm.DB, caller *model.User, id int, p UpdateTaskParam
 		}
 	}
 
+	// 去重预检查：去重键（教师/课程/上课时间）实际变化，或取消任务恢复为待评
+	// （重新激活）后，若与其它有效任务重复，给出与创建一致的友好提示；并发兜底由
+	// uk_task_dedupe_active 唯一索引承担（下方 isDupKeyErr）。
+	// 键未变化的编辑（如只改教室/课表快照）不查重：否则历史重复数据下连无关编辑都会被拦；
+	// 改为「取消」的任务退出有效集合（generated column 置 NULL），同样不查重——
+	// 否则历史重复数据将无法通过取消来化解。
+	newTeacher := t.TeacherID
+	if p.TeacherID != nil {
+		newTeacher = *p.TeacherID
+	}
+	newCourse := t.CourseName
+	if p.CourseName != nil {
+		newCourse = *p.CourseName
+	}
+	newTime := t.ClassTime
+	if p.ClassTime != nil {
+		newTime = p.ClassTime
+	}
+	keyChanged := newTeacher != t.TeacherID || newCourse != t.CourseName ||
+		!localTimeEqual(newTime, t.ClassTime)
+	reactivating := false
+	if st, ok := updates["status"]; ok && st.(int16) == model.TaskStatusPending {
+		reactivating = true
+	}
+	if keyChanged || reactivating {
+		dupID, err := taskDedupeConflict(db, t.ID, newTeacher, newCourse, newTime)
+		if err != nil {
+			return nil, err
+		}
+		if dupID > 0 {
+			return nil, ErrDuplicateTask
+		}
+	}
+
 	if len(updates) > 0 {
 		if err := db.Model(t).Updates(updates).Error; err != nil {
+			if isDupKeyErr(err) {
+				return nil, ErrDuplicateTask
+			}
 			return nil, err
 		}
 	}

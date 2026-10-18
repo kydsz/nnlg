@@ -804,6 +804,11 @@ func (s *Evaluation) GetDetail(db *gorm.DB, viewer *model.User, id int) (map[str
 	item["class_time"] = task.ClassTime
 	item["classroom"] = task.Classroom
 	item["task_status"] = task.Status
+	// 该课堂下的**有效**评教记录数：编辑课堂信息的影响范围提示（现算，不依赖任务聚合字段）
+	var evalCount int64
+	db.Model(&model.EvaluationRecord{}).
+		Where("task_id = ? AND is_deleted = 0", task.ID).Count(&evalCount)
+	item["evaluation_count"] = evalCount
 	// 课表信息（上课时间/教室/班级/应到人数/周次）：与提交页一致，供详情完整展示
 	item["schedule"] = matchScheduleForTask(db, &task)
 	return item, nil
@@ -1018,39 +1023,108 @@ func syncTaskAggregatesAfterRestore(tx *gorm.DB, taskID int) error {
 	return tx.Model(&model.EvaluationTask{}).Where("id = ?", taskID).Updates(updates).Error
 }
 
-// UpdateParams 修改评教记录参数（仅维度值与匿名标记可改；评教人/角色/提交时间/任务关联不可改）
+// UpdateParams 修改评教记录参数。
+// 可改：维度作答、匿名标记、关联课堂的课程信息（Task——改任务本身，影响该任务下全部记录）。
+// 不可改：评教人 / 评教角色 / 提交时间 / 任务关联（task_id 不变）。
 type UpdateParams struct {
 	DimensionValues map[string]interface{} `json:"dimension_values"`
-	IsAnonymous     bool                   `json:"is_anonymous"`
+	IsAnonymous     *bool                  `json:"is_anonymous"`
+	Task            *TaskCourseUpdate      `json:"task"`
 }
 
-// Update 修改评教记录（权限与作废一致：仅系统管理员或被分配 evaluation:delete 权限的角色可操作）
+// TaskCourseUpdate 记录编辑附带的课堂课程信息（教师/课程/上课时间/教室/课表快照）
+type TaskCourseUpdate struct {
+	TeacherID        *int              `json:"teacher_id"`
+	CourseName       *string           `json:"course_name"`
+	ClassTime        *model.LocalTime  `json:"class_time"`
+	Classroom        *string           `json:"classroom"`
+	ScheduleSnapshot *ScheduleSnapshot `json:"schedule"`
+}
+
+// Update 修改评教记录（权限：evaluation:update；改课程信息另需 task:update）。
+// 记录侧改动与任务侧课程信息在同一事务内生效：任一侧失败整体回滚，不留半更新。
 func (s *Evaluation) Update(db *gorm.DB, viewer *model.User, id int, p UpdateParams) (*model.EvaluationRecord, error) {
 	var rec model.EvaluationRecord
 	if err := db.Where("id = ? AND is_deleted = 0", id).First(&rec).Error; err != nil {
 		return nil, errors.New("评教记录不存在")
 	}
-	if !CanVoidEvaluation(db, viewer) {
+	if !CanUpdateEvaluation(db, viewer) {
 		return nil, errors.New("无权修改评教记录")
 	}
-	if len(p.DimensionValues) == 0 {
-		return nil, errors.New("dimension_values 不能为空")
+	// 关联任务按记录实际归属加载（含已删除，用于给出「先恢复」的可读提示）
+	var task model.EvaluationTask
+	if err := db.First(&task, rec.TaskID).Error; err != nil {
+		return nil, errors.New("关联任务不存在")
 	}
-	if _, err := validateDimensionValues(db, p.DimensionValues); err != nil {
-		return nil, err
-	}
-	raw, err := marshalJSON(p.DimensionValues)
+	// 数据范围：按被评教师主学院收敛（系统管理员不受限）
+	teacher, err := LoadTeacherUser(db, task.TeacherID)
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Model(&model.EvaluationRecord{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"dimension_values": raw,
-		"is_anonymous":     p.IsAnonymous,
-	}).Error; err != nil {
+	if !CollegeInScope(viewer, teacher.CollegeID) {
+		return nil, errors.New("您只能修改本学院的评教记录")
+	}
+
+	if p.Task == nil && len(p.DimensionValues) == 0 && p.IsAnonymous == nil {
+		return nil, errors.New("dimension_values 不能为空")
+	}
+
+	// 维度先同步校验（无写入）
+	var raw json.RawMessage
+	if len(p.DimensionValues) > 0 {
+		if _, err := validateDimensionValues(db, p.DimensionValues); err != nil {
+			return nil, err
+		}
+		raw, err = marshalJSON(p.DimensionValues)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if p.Task != nil {
+		if !CanUpdateTask(db, viewer) {
+			return nil, errors.New("无权修改课堂信息")
+		}
+		if task.IsDeleted {
+			return nil, errors.New("关联任务已删除，请先恢复任务后再修改")
+		}
+	}
+
+	recordUpdates := map[string]interface{}{}
+	if raw != nil {
+		recordUpdates["dimension_values"] = raw
+	}
+	if p.IsAnonymous != nil {
+		recordUpdates["is_anonymous"] = *p.IsAnonymous
+	}
+
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if p.Task != nil {
+			up := UpdateTaskParams{
+				TeacherID: p.Task.TeacherID, CourseName: p.Task.CourseName,
+				ClassTime: p.Task.ClassTime, Classroom: p.Task.Classroom,
+				ScheduleSnapshot: p.Task.ScheduleSnapshot,
+			}
+			if _, err := NewTask().Update(tx, viewer, task.ID, up); err != nil {
+				return err
+			}
+		}
+		if len(recordUpdates) > 0 {
+			if err := tx.Model(&model.EvaluationRecord{}).Where("id = ?", id).Updates(recordUpdates).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	rec.DimensionValues = raw
-	rec.IsAnonymous = p.IsAnonymous
+
+	if raw != nil {
+		rec.DimensionValues = raw
+	}
+	if p.IsAnonymous != nil {
+		rec.IsAnonymous = *p.IsAnonymous
+	}
 	return &rec, nil
 }
 

@@ -340,16 +340,38 @@ func (h *Task) Update(c *gin.Context) {
 	if p.CourseName == "" {
 		up.CourseName = nil
 	}
+	// teacher_id = 0 表示不修改（前端编辑弹窗未变更教师时原样回传，0 仅出现在未选择场景）
+	if p.TeacherID > 0 {
+		up.TeacherID = &p.TeacherID
+	}
 
 	u := middleware.CurrentUser(c)
+	var before model.EvaluationTask
+	beforeOK := h.db.First(&before, id).Error == nil
 	t, err := h.svc.Update(h.db, u, id, up)
 	if err != nil {
 		badReq(c, err.Error())
 		return
 	}
+	// 课程信息变更会影响统计/同课汇总，主动失效统计缓存（无需等 TTL）
+	invalidateAllStats(c)
 	teacher, _ := service.LoadTeacherUser(h.db, t.TeacherID)
-	service.LogRecord(h.db, &u.ID, u.Username, "update", "task", &t.ID, "evaluation_task", nil)
+	content := map[string]interface{}{"after": taskAuditSnapshot(*t)}
+	if beforeOK {
+		content["before"] = taskAuditSnapshot(before)
+	}
+	service.LogRecord(h.db, &u.ID, u.Username, "update", "task", &t.ID, "evaluation_task", content)
 	response.OKMsg(c, "更新成功", taskUpdatePayload(t, teacher))
+}
+
+// taskAuditSnapshot 任务审计快照（课程信息 + 状态，操作日志 before/after 用）
+func taskAuditSnapshot(t model.EvaluationTask) map[string]interface{} {
+	return map[string]interface{}{
+		"teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
+		"course_name": t.CourseName, "class_time": t.ClassTime,
+		"classroom": t.Classroom, "schedule_snapshot": t.ScheduleSnapshot,
+		"status": t.Status,
+	}
 }
 
 // Delete 软删除任务

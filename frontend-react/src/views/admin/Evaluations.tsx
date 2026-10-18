@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Table, Button, Space, App, Popconfirm, Tag, Drawer, Input, Descriptions, DatePicker, Image, Slider, InputNumber, Radio, Checkbox, Switch, Spin, Select, Tooltip } from 'antd'
+import { Table, Button, Space, App, Popconfirm, Tag, Drawer, Input, Descriptions, DatePicker, Image, Slider, InputNumber, Radio, Checkbox, Switch, Spin, Select, Tooltip, Alert } from 'antd'
 import { DownloadOutlined, PrinterOutlined, SearchOutlined, EditOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import type { ColumnsType } from 'antd/es/table'
@@ -9,6 +9,8 @@ import { statsApi } from '@/api/modules/stats'
 import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
 import { downloadBlob, exportFilename } from '@/utils/download'
 import ExportFieldSelector from '@/components/ExportFieldSelector'
+import TeacherSelect from '@/components/TeacherSelect'
+import { buildTaskUpdatePayload, isTaskChanged, taskFieldsFromRecord, type TaskFormFields } from '@/utils/evalTaskEdit'
 import {
   groupEvaluationDimensions,
   buildEvalPrintHtml,
@@ -28,6 +30,9 @@ export default function Evaluations() {
   const userId = useAuthStore((s) => s.user?.id)
   const canDeleteAny = useAuthStore((s) => s.hasPermission('evaluation:delete'))
   const canDeleteOwn = useAuthStore((s) => s.hasPermission('evaluation:delete_own'))
+  // 编辑记录（evaluation:update）：管理员可改评教内容；另持 task:update 时同页可改课堂课程信息
+  const canUpdate = useAuthStore((s) => s.hasPermission('evaluation:update'))
+  const canEditTaskInfo = useAuthStore((s) => s.hasPermission('task:update'))
   const canDeleteRecord = (r: EvaluationRecord) =>
     canDeleteAny || (canDeleteOwn && userId != null && r.evaluator_id === userId)
   const canRestoreAny = useAuthStore((s) => s.hasPermission('evaluation:restore'))
@@ -158,7 +163,7 @@ export default function Evaluations() {
           </Space>
         ) : (
           <Space>
-            {canDeleteAny && (
+            {canUpdate && (
               <Button size="small" icon={<EditOutlined />} onClick={() => setEditId(record.id)}>
                 编辑
               </Button>
@@ -262,7 +267,7 @@ export default function Evaluations() {
         extra={
           detail && (
             <Space>
-              {canDeleteAny && (
+              {canUpdate && (
                 <Button
                   size="small"
                   icon={<EditOutlined />}
@@ -393,7 +398,11 @@ export default function Evaluations() {
             <Spin />
           </div>
         ) : (
-          <EvaluationEditForm evalData={editQ.data} onClose={() => setEditId(null)} />
+          <EvaluationEditForm
+            evalData={editQ.data}
+            canEditTaskInfo={canEditTaskInfo}
+            onClose={() => setEditId(null)}
+          />
         )}
       </Drawer>
 
@@ -473,13 +482,17 @@ const toNum = (v: unknown, fallback: number) => {
   return Number.isFinite(n) ? n : fallback
 }
 
-/** 编辑评教表单：按维度 schema 动态渲染控件；image/file 维度只读保留现有附件 */
+/** 编辑评教表单：按维度 schema 动态渲染控件；image/file 维度只读保留现有附件。
+ *  另持 task:update 时可改课堂课程信息（改任务本身，影响该任务下全部记录），
+ *  仅回传发生变化的字段，未改动时不触碰任务。 */
 function EvaluationEditForm({
   evalData,
   onClose,
+  canEditTaskInfo,
 }: {
   evalData: EvaluationRecord
   onClose: () => void
+  canEditTaskInfo: boolean
 }) {
   const { message } = App.useApp()
   const qc = useQueryClient()
@@ -497,6 +510,18 @@ function EvaluationEditForm({
     ...(evalData.dimension_values || {}),
   }))
   const [isAnonymous, setIsAnonymous] = useState(!!evalData.is_anonymous)
+  const [task, setTask] = useState<TaskFormFields>(() => taskFieldsFromRecord(evalData))
+  const patchTask = (patch: Partial<TaskFormFields>) =>
+    setTask((prev) => ({ ...prev, ...patch }))
+
+  const taskChanged = useMemo(
+    () => canEditTaskInfo && isTaskChanged(evalData, task),
+    [task, evalData, canEditTaskInfo]
+  )
+
+  /** 仅回传发生变化的课堂字段；未改动返回 undefined（避免误触任务侧校验） */
+  const buildTaskPayload = () =>
+    canEditTaskInfo ? buildTaskUpdatePayload(evalData, task) : undefined
 
   const editMut = useMutation({
     mutationFn: (data: UpdatePayload) => evaluationApi.update(evalData.id, data),
@@ -505,6 +530,7 @@ function EvaluationEditForm({
       qc.invalidateQueries({ queryKey: ['evaluations'] })
       qc.invalidateQueries({ queryKey: ['eval-detail'] })
       qc.invalidateQueries({ queryKey: ['eval-edit'] })
+      qc.invalidateQueries({ queryKey: ['tasks'] })
       onClose()
     },
     onError: (e) => message.error(e.message),
@@ -524,7 +550,19 @@ function EvaluationEditForm({
         return
       }
     }
-    editMut.mutate({ dimension_values: values, is_anonymous: isAnonymous })
+    if (taskChanged && !task.teacherId) {
+      message.error('请选择被评教师')
+      return
+    }
+    if (taskChanged && !task.courseName.trim()) {
+      message.error('请填写课程名称')
+      return
+    }
+    editMut.mutate({
+      dimension_values: values,
+      is_anonymous: isAnonymous,
+      task: buildTaskPayload(),
+    })
   }
 
   return (
@@ -535,6 +573,77 @@ function EvaluationEditForm({
         <Descriptions.Item label="评教人">{evalData.evaluator_name}</Descriptions.Item>
         <Descriptions.Item label="提交时间">{formatDate(evalData.submit_time)}</Descriptions.Item>
       </Descriptions>
+
+      {canEditTaskInfo && (
+        <>
+          <h4 style={{ margin: '0 0 8px' }}>课堂信息</h4>
+          {taskChanged && (evalData.evaluation_count ?? 0) > 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={`该课堂下共 ${evalData.evaluation_count} 条评教记录`}
+              description="保存后将同步修改全部记录显示的课程信息，统计、同课汇总与学期归属随之变化。"
+            />
+          )}
+          <Field label="被评教师">
+            <TeacherSelect
+              value={task.teacherId}
+              style={{ width: '100%' }}
+              onChange={(v) => patchTask({ teacherId: v })}
+            />
+          </Field>
+          <Field label="课程名称">
+            <Input
+              value={task.courseName}
+              onChange={(e) => patchTask({ courseName: e.target.value })}
+            />
+          </Field>
+          <Field label="上课时间">
+            <DatePicker
+              showTime
+              allowClear={false}
+              style={{ width: '100%' }}
+              value={task.classTime}
+              onChange={(d) => patchTask({ classTime: d ?? null })}
+            />
+          </Field>
+          <Field label="教室">
+            <Input
+              value={task.classroom}
+              onChange={(e) => patchTask({ classroom: e.target.value })}
+            />
+          </Field>
+          <Field label="上课时间文本（课表）">
+            <Input
+              placeholder="如：周一 第1-2节"
+              value={task.classTimeText}
+              onChange={(e) => patchTask({ classTimeText: e.target.value })}
+            />
+          </Field>
+          <Field label="班级">
+            <Input
+              value={task.classInfo}
+              onChange={(e) => patchTask({ classInfo: e.target.value })}
+            />
+          </Field>
+          <Field label="应到人数">
+            <InputNumber
+              style={{ width: '100%' }}
+              min={0}
+              value={task.studentCount}
+              onChange={(v) => patchTask({ studentCount: v ?? null })}
+            />
+          </Field>
+          <Field label="周次">
+            <Input
+              placeholder="如：第1-16周"
+              value={task.weekPattern}
+              onChange={(e) => patchTask({ weekPattern: e.target.value })}
+            />
+          </Field>
+        </>
+      )}
 
       {dims.map((d) => (
         <div key={d.code} style={{ marginBottom: 16 }}>
@@ -574,6 +683,16 @@ function EvaluationEditForm({
           </Button>
         </Space>
       </div>
+    </div>
+  )
+}
+
+/** 表单字段（标签 + 控件） */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>{label}</div>
+      {children}
     </div>
   )
 }

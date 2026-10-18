@@ -15,7 +15,7 @@ import (
 // 已提交的评教记录删掉了。本测试逐条验证督导能触达的记录作废/修改入口：
 //
 //	1) DELETE /evaluations/:id —— 期望被拒（无 evaluation:delete*）
-//	2) PUT    /evaluations/:id —— 期望被拒（修改同样要求 evaluation:delete）
+//	2) PUT    /evaluations/:id —— 期望被拒（编辑记录要求 evaluation:update，该角色未持有）
 //	3) DELETE /tasks/:id       —— 期望放行（持 task:delete_own 且任务自建），
 //	                              且任务名下评教记录**保留**（删任务不抹掉评教事实）
 //

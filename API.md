@@ -35,7 +35,7 @@
 | 角色管理 | `role:manage`                                                                                                                                 |
 | 评教维度 | `dimension:manage`                                                                                                                            |
 | 评教任务 | `task:view` / `task:view_all` / `task:create` / `task:update` / `task:delete` / `task:delete_own` |
-| 评教记录 | `evaluation:view` / `evaluation:create` / `evaluation:view_anonymous` / `evaluation:view_all` / `evaluation:delete` / `evaluation:delete_own` |
+| 评教记录 | `evaluation:view` / `evaluation:create` / `evaluation:view_anonymous` / `evaluation:view_all` / `evaluation:update` / `evaluation:delete` / `evaluation:delete_own` |
 | 统计报表 | `stats:view`                                                                                                                                  |
 | 课程表  | `schedule:view` / `schedule:view_college`                                                                                                     |
 | 数据同步 | `sync:execute`                                                                                                                                |
@@ -116,6 +116,7 @@
 | POST   | /evaluations/with-files                           | evaluation:create                                    |
 | GET    | /evaluations/:id                                  | evaluation:view                                      |
 | GET    | /evaluations/:id/export                           | evaluation:view                                      |
+| PUT    | /evaluations/:id                                  | evaluation:update（评教内容）＋ task:update（课程信息）        |
 | DELETE | /evaluations/:id                                  | evaluation:delete（任意）或 evaluation:delete\_own（仅自己提交） |
 | POST   | /evaluations/:id/restore                          | evaluation:restore（任意）或 evaluation:restore\_own（仅自己提交） |
 | POST   | /upload                                           | 学院管理员及以上                                             |
@@ -821,6 +822,47 @@ GET /evaluations/{record_id}/export?format=pdf
 * `format=pdf`：返回 PDF 附件（`application/pdf`，文件名 `evaluation_{id}_{课程名}.pdf`，布局对齐旧端紧凑模板）。
 
 * 不传 `format`：返回可打印 HTML（浏览器可直接另存/打印）。
+
+### 修改评教记录
+
+```http
+PUT /evaluations/{record_id}
+```
+
+**权限**: 评教内容（维度作答、匿名标记）需 `evaluation:update`；关联课堂的课程信息另需 `task:update`。数据范围：非系统管理员只能修改**本学院**的评教记录（按被评教师主学院），改教师时目标教师也须在范围内。
+
+**请求体**:
+
+```json
+{
+  "dimension_values": { "score1": 90 },
+  "is_anonymous": false,
+  "task": {
+    "teacher_id": 123,
+    "course_name": "线性代数",
+    "class_time": "2026-03-03 10:00:00",
+    "classroom": "2-202",
+    "schedule": {
+      "class_time_text": "周二 第3-4节",
+      "classroom": "2-202",
+      "class_info": "2402(60)",
+      "student_count": 60,
+      "week_pattern": "第1-8周"
+    }
+  }
+}
+```
+
+* `task` 为可选：**只传发生变化的字段**，未传字段不改；不传 `task` 时只改评教内容（维度作答与匿名标记可单独提交）。改的是任务本身（记录 `task_id` 不变），该任务下全部评教记录同步显示新课程信息，任务评教数 / 督导已评 / 状态不受影响。
+* 不可改：评教人、评教角色、提交时间（请求中一律忽略）。
+* 携带 `task` 且关联任务已删除时返回 400，提示先恢复任务（仅改评教内容不受影响）；修改后与现存「未删除未取消」任务重复（同教师+课程+上课时间）返回可读 400。
+* 记录侧与任务侧同处一个事务：任一侧失败整体回滚，不留半更新；操作日志记录修改前后值。
+
+**响应示例**:
+
+```json
+{ "code": 200, "message": "更新成功", "data": { "id": 1, "is_anonymous": false, "total_score": 90 } }
+```
 
 ### 作废评教记录
 

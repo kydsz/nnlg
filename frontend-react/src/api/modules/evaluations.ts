@@ -39,9 +39,26 @@ export interface DraftPayload {
   is_anonymous?: boolean
 }
 
+/** 记录编辑附带的课堂课程信息（改任务本身，影响该任务下全部记录）；
+ *  仅传发生变化的字段，未传的字段不修改 */
+export interface EvaluationTaskPayload {
+  teacher_id?: number
+  course_name?: string
+  class_time?: string
+  classroom?: string
+  schedule?: {
+    class_time_text?: string | null
+    classroom?: string | null
+    class_info?: string | null
+    student_count?: number | null
+    week_pattern?: string | null
+  }
+}
+
 export interface UpdatePayload {
-  dimension_values: Record<string, unknown>
+  dimension_values?: Record<string, unknown>
   is_anonymous?: boolean
+  task?: EvaluationTaskPayload
 }
 
 export const evaluationApi = {

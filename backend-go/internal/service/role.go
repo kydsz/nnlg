@@ -55,6 +55,7 @@ var PermissionCatalog = []PermissionGroup{
 		{Code: "evaluation:create", Name: "提交评教"},
 		{Code: "evaluation:view_anonymous", Name: "查看匿名评教详情"},
 		{Code: "evaluation:view_all", Name: "查看他人评教详情"},
+		{Code: "evaluation:update", Name: "编辑评教记录"},
 		{Code: "evaluation:delete", Name: "作废评教记录"},
 		{Code: "evaluation:delete_own", Name: "仅作废自己的评教记录"},
 		{Code: "evaluation:restore", Name: "恢复评教记录"},

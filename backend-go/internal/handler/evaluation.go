@@ -449,7 +449,8 @@ func (h *Evaluation) Restore(c *gin.Context) {
 	response.OKMsg(c, "恢复成功", nil)
 }
 
-// Update 修改评教记录（仅系统管理员或被分配 evaluation:delete 权限的角色；仅维度值与匿名标记可改）
+// Update 修改评教记录（evaluation:update；改关联课堂的课程信息另需 task:update，
+// 课程信息改的是任务本身，影响该任务下全部记录）
 func (h *Evaluation) Update(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -462,24 +463,68 @@ func (h *Evaluation) Update(c *gin.Context) {
 		return
 	}
 	u := middleware.CurrentUser(c)
+
+	// 审计快照：修改前（评教内容 + 课堂课程信息）
+	var before *model.EvaluationRecord
+	{
+		var b model.EvaluationRecord
+		if err := h.db.Where("id = ?", id).First(&b).Error; err == nil {
+			before = &b
+		}
+	}
+	var beforeTask *model.EvaluationTask
+	if before != nil {
+		var t model.EvaluationTask
+		if err := h.db.First(&t, before.TaskID).Error; err == nil {
+			beforeTask = &t
+		}
+	}
+
 	rec, err := h.svc.Update(h.db, u, id, p)
 	if err != nil {
 		badReq(c, err.Error())
 		return
 	}
-	var t model.EvaluationTask
-	content := map[string]interface{}{"is_anonymous": rec.IsAnonymous}
-	if err := h.db.Where("id = ?", rec.TaskID).First(&t).Error; err == nil {
-		content["teacher_id"] = t.TeacherID
-		content["teacher_name"] = t.TeacherName
-		content["course_name"] = t.CourseName
+	// 记录内容/课堂课程信息变更会影响统计报表，主动失效统计缓存（无需等 TTL）
+	invalidateAllStats(c)
+	var afterTask *model.EvaluationTask
+	{
+		var t model.EvaluationTask
+		if err := h.db.First(&t, rec.TaskID).Error; err == nil {
+			afterTask = &t
+		}
 	}
-	service.LogRecord(h.db, &u.ID, u.Username, "update", "evaluation", &rec.ID, "evaluation_record", content)
+	service.LogRecord(h.db, &u.ID, u.Username, "update", "evaluation", &rec.ID, "evaluation_record",
+		map[string]interface{}{
+			"before": evalAuditSnapshot(before, beforeTask),
+			"after":  evalAuditSnapshot(rec, afterTask),
+		})
 	response.OKMsg(c, "更新成功", gin.H{
 		"id":           rec.ID,
 		"is_anonymous": rec.IsAnonymous,
 		"total_score":  h.svc.TotalScoreOf(h.db, rec),
 	})
+}
+
+// evalAuditSnapshot 评教记录审计快照：评教内容 + 课堂课程信息（操作日志 before/after 用）。
+// 快照对象不存在时返回 nil；任务指针为 nil 时只记记录侧字段，避免把零值课程信息写进日志。
+func evalAuditSnapshot(rec *model.EvaluationRecord, task *model.EvaluationTask) interface{} {
+	if rec == nil {
+		return nil
+	}
+	m := map[string]interface{}{
+		"task_id": rec.TaskID, "is_anonymous": rec.IsAnonymous,
+		"dimension_values": rec.DimensionValues,
+	}
+	if task != nil {
+		m["teacher_id"] = task.TeacherID
+		m["teacher_name"] = task.TeacherName
+		m["course_name"] = task.CourseName
+		m["class_time"] = task.ClassTime
+		m["classroom"] = task.Classroom
+		m["schedule_snapshot"] = task.ScheduleSnapshot
+	}
+	return m
 }
 
 // Export 单条记录导出：format=pdf 返回 PDF 文件；默认返回可打印 HTML
