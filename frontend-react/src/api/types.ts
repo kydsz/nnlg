@@ -25,6 +25,9 @@ export interface UserInfo {
   role: string
   role_name?: string
   roles: string[]
+  // 后端 /auth/login、/auth/refresh、/auth/me 返回的显式权限码清单（角色表权限并集）。
+  // 旧版本 localStorage 会话可能没有该字段，缺失时前端按角色兜底。
+  permissions?: string[]
   user_roles?: { role: string; role_name: string; assign_time?: string }[]
   college_id: number | null
   college_name: string | null

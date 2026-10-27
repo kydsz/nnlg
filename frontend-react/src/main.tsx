@@ -8,6 +8,7 @@ import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
 import { router } from './routes'
 import { setMustChangePasswordHandler, setUnauthorizedHandler } from './api/http'
+import { authApi } from './api/modules/auth'
 import { PWD_FORCE_CHANGE_DISMISS_KEY, useAuthStore } from './stores/auth'
 import 'antd/dist/reset.css'
 import './styles/global.css'
@@ -38,6 +39,18 @@ setMustChangePasswordHandler(() => {
   localStorage.removeItem(PWD_FORCE_CHANGE_DISMISS_KEY)
   window.dispatchEvent(new Event('tev:must-change-password'))
 })
+
+// 启动时用 /auth/me 刷新当前用户：旧版本 localStorage 会话可能没有 permissions 权限清单，
+// 且角色权限在服务端被修改后（不重新登录）也需要即时生效。仅在有 token 时发起；
+// 失败静默——401 由上面的拦截器统一处理（过期会自动刷新一次），404/403 也不阻塞渲染。
+if (useAuthStore.getState().token) {
+  authApi
+    .me()
+    .then((user) => useAuthStore.getState().setUser(user))
+    .catch(() => {
+      /* 静默：保留本地登录态，交给后续请求的 401 处理 */
+    })
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -28,13 +28,14 @@ export const useAuthStore = create<AuthState>()(
         if (!user) return false
         // 系统管理员拥有所有权限
         if (user.roles?.includes('system_admin')) return true
-        // 权限来自登录用户返回（后端 /auth/me 会带 permissions，如无则按角色估算）
-        const perms = (user as UserInfo & { permissions?: string[] }).permissions || []
-        if (perms.includes(perm)) return true
-        // 无显式权限列表时，管理员类角色放行查看类权限
+        // 权限码来自后端 /auth/login、/auth/refresh、/auth/me 返回的显式清单。
+        // 有清单（非空数组）时以清单为准：清单里没有就是没有，不再按角色放行。
+        const perms = user.permissions
+        if (Array.isArray(perms) && perms.length > 0) return perms.includes(perm)
+        // 清单缺失/为空（旧版本 localStorage 会话、历史数据）时才按角色兜底，
+        // 避免这些老会话在清单补齐前菜单被全部隐藏。
         const adminRoles = ['system_admin', 'school_admin', 'college_admin']
-        if (adminRoles.some((r) => user.roles?.includes(r))) return true
-        return false
+        return adminRoles.some((r) => user.roles?.includes(r))
       },
       isAdmin: () => {
         const user = get().user

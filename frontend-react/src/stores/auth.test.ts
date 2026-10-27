@@ -19,10 +19,7 @@ function makeUser(overrides: Partial<UserInfo> = {}): UserInfo {
   }
 }
 
-type UserWithPerms = UserInfo & { permissions?: string[] }
-
-beforeEach(() => {
-  localStorage.clear()
+beforeEach(() => {  localStorage.clear()
   useAuthStore.setState({ token: null, user: null })
 })
 
@@ -80,18 +77,50 @@ describe('hasPermission', () => {
     expect(useAuthStore.getState().hasPermission('anything:anything')).toBe(true)
   })
 
+  it('system_admin 即使显式清单不含该码也直通', () => {
+    useAuthStore
+      .getState()
+      .setAuth('tk', makeUser({ roles: ['system_admin'], permissions: ['user:view'] }))
+    expect(useAuthStore.getState().hasPermission('role:manage')).toBe(true)
+  })
+
   it('有显式权限列表时精确匹配', () => {
-    const user: UserWithPerms = { ...makeUser(), permissions: ['task:view'] }
-    useAuthStore.getState().setAuth('tk', user)
+    useAuthStore.getState().setAuth('tk', makeUser({ permissions: ['task:view'] }))
     expect(useAuthStore.getState().hasPermission('task:view')).toBe(true)
     expect(useAuthStore.getState().hasPermission('task:grade')).toBe(false)
   })
 
-  it('无显式权限时管理员类角色放行', () => {
+  // 回归：学院管理员带显式清单时以清单为准，不再无条件放行（菜单隐藏依赖此行为）
+  it('college_admin 带显式清单时以清单为准', () => {
+    useAuthStore
+      .getState()
+      .setAuth('tk', makeUser({ roles: ['college_admin'], permissions: ['user:view'] }))
+    expect(useAuthStore.getState().hasPermission('user:view')).toBe(true)
+    expect(useAuthStore.getState().hasPermission('campus:manage')).toBe(false)
+    expect(useAuthStore.getState().hasPermission('role:manage')).toBe(false)
+    expect(useAuthStore.getState().hasPermission('sync:execute')).toBe(false)
+  })
+
+  it('school_admin 带显式清单时同样以清单为准', () => {
+    useAuthStore
+      .getState()
+      .setAuth('tk', makeUser({ roles: ['school_admin'], permissions: ['stats:view'] }))
+    expect(useAuthStore.getState().hasPermission('stats:view')).toBe(true)
+    expect(useAuthStore.getState().hasPermission('dimension:manage')).toBe(false)
+  })
+
+  it('无显式权限时管理员类角色放行（旧会话兜底）', () => {
     for (const role of ['school_admin', 'college_admin']) {
       useAuthStore.getState().setAuth('tk', makeUser({ roles: [role] }))
       expect(useAuthStore.getState().hasPermission('college:view')).toBe(true)
     }
+  })
+
+  it('权限清单为空数组时同样走角色兜底', () => {
+    useAuthStore
+      .getState()
+      .setAuth('tk', makeUser({ roles: ['college_admin'], permissions: [] }))
+    expect(useAuthStore.getState().hasPermission('campus:manage')).toBe(true)
   })
 
   it('普通角色无权限时返回 false', () => {
@@ -99,6 +128,14 @@ describe('hasPermission', () => {
     expect(useAuthStore.getState().hasPermission('college:view')).toBe(false)
     useAuthStore.getState().setAuth('tk', makeUser({ roles: ['supervisor'] }))
     expect(useAuthStore.getState().hasPermission('college:view')).toBe(false)
+  })
+
+  it('普通角色带清单时按清单匹配，不再回退角色', () => {
+    useAuthStore
+      .getState()
+      .setAuth('tk', makeUser({ roles: ['teacher'], permissions: ['task:view'] }))
+    expect(useAuthStore.getState().hasPermission('task:view')).toBe(true)
+    expect(useAuthStore.getState().hasPermission('evaluation:create')).toBe(false)
   })
 })
 
