@@ -52,6 +52,10 @@
 
 * user:view / user:create / user:update / user:delete
 
+> **数据范围（用户管理口径）**：与 `data_scope` 无关，由 `service.UserManageCollegeIDs` 统一给出。系统管理员（`system_admin`）为全校；学院管理员（`college_admin` / `school_admin`）仅限**本人主学院**——归属按用户的 `college_id`（主学院）判定，不认 `user_college` 里的督导「负责学院」；管理类角色**未绑定学院时为空集（fail-closed）**，列表返回空、详情与写操作一律拒绝，不再沿用旧端「无学院视为全校」的兜底。其它角色（含校级督导）不享有用户管理范围。
+>
+> 该范围同时作用于：列表（`college_id` 筛选只能收窄，与范围取交集）、详情、督导范围查询、启用/禁用、批量启停用、新增用户（非系统管理员只能在本学院建号，未指定学院时默认本学院）、编辑/删除/加角色/改学院/改教研室。**同学院管理员账号之间仅系统管理员可互相操作**（防止同级之间改密、禁用、降权），操作自身账号与系统管理员的既有保护不受影响。
+
 ### 组织架构
 
 * org:view / campus:manage / college:manage / research\_room:manage
@@ -97,6 +101,10 @@
 ### 统计报表
 
 * stats:view
+
+* stats:view\_supervisors
+
+> `stats:view_supervisors`：查看/导出「督导统计」（`GET /stats/supervisors`、`GET /stats/export/supervisors`，整组仍需 `stats:view`）。督导统计是跨学院/校级口径——名单含「负责本范围的跨学院督导」（表格里的「学院」列是该督导的**主学院**），评教次数与平均分按其全校评教汇总，因此默认**只给系统管理员**（权限中间件直通，无需迁移补码），内置的 `college_admin` / `school_admin` 不持有；需要放开时由管理员在「角色管理」页勾选「统计报表·查看督导统计」，无需改代码。未持有该码时，前端统计报表页不渲染该页签，服务端对应接口返回 403。
 
 ### 课程表
 
@@ -193,6 +201,12 @@
 
 ## 前端页面
 
+### 管理端菜单与页签（按权限码渲染）
+
+管理端导航（`views/admin/Layout.tsx` 的 `MENU`）、概览页功能卡片（复用同一份 `MENU`）以及统计报表页签（`views/admin/Stats.tsx` 的 `statsTabItems`）都按权限码渲染，**不做角色硬编码**。判定统一走 `stores/auth.ts` 的 `hasPermission`：显式 `permissions` 清单（`/auth/login`、`/auth/refresh`、`/auth/me` 均返回）非空时以清单为准，清单里没有的权限码一律不放行；只有在清单缺失/为空（旧版本 localStorage 会话、角色未配置权限）时才退回按管理员角色放行。因此角色权限调整后刷新页面即生效（启动时会调 `/auth/me` 刷新当前用户），无需改代码。
+
+隐藏菜单/页签只是展示层收敛：**服务端仍按权限码与数据范围强制校验**，直接请求接口会返回 403（`middleware/permission.go`）。
+
 ### 角色管理页面（/admin/roles）
 
 仅系统管理员可见，支持：
@@ -210,6 +224,8 @@
 ### 用户管理页面（/admin/users）
 
 角色选择下拉已包含校级督导、院级督导等新增角色。
+
+页面数据范围由服务端按调用者收敛（见上文「用户管理」），前端不再依赖「学院」下拉来限定范围：学院管理员的 `GET /colleges` 只返回本学院，即便手工改请求参数也拿不到院外用户。
 
 ### 移动端首页（/mobile）
 
@@ -237,3 +253,5 @@
 * `015_add_task_view_all_to_builtin_roles.sql`：college\_admin / school\_admin / school\_supervisor / college\_supervisor / supervisor 补 `task:view_all`（teacher 不补）
 * `016_add_restore_perms_to_builtin_roles.sql`：为已持有**完整** delete 码的内置角色镜像下发对应 restore 码——持 `task:delete`→补 `task:restore`，持 `evaluation:delete`→补 `evaluation:restore`（幂等）。`*_own` 恢复码**不再自动镜像**：恢复入口在管理端（`AdminGate` 之后），持 `*_own` 删除码的非管理端角色（teacher / 督导）用不到，自动下发只会产生死权限；这两个码保留在目录中供管理员手动分配。迁移同时对历史已下发 `task:restore_own` / `evaluation:restore_own` 的非管理端内置角色做幂等移除（自愈）
 * `017_add_evaluation_update_to_admin_roles.sql`：给内置管理员角色（`college_admin` / `school_admin`；`system_admin` 恒有全部权限）补 `evaluation:update`（幂等）
+
+> `stats:view_supervisors`（统计报表·查看督导统计）**没有配套迁移**：系统管理员在权限中间件与 `/auth/me` 处恒有全部权限码，其它内置角色按产品口径**不默认授予**，新增迁移只会产生没人用的死权限。需要时由管理员在角色管理页勾选。

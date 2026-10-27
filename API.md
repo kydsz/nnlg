@@ -36,14 +36,14 @@
 | 评教维度 | `dimension:manage`                                                                                                                            |
 | 评教任务 | `task:view` / `task:view_all` / `task:create` / `task:update` / `task:delete` / `task:delete_own` |
 | 评教记录 | `evaluation:view` / `evaluation:create` / `evaluation:view_anonymous` / `evaluation:view_all` / `evaluation:update` / `evaluation:delete` / `evaluation:delete_own` |
-| 统计报表 | `stats:view`                                                                                                                                  |
+| 统计报表 | `stats:view` / `stats:view_supervisors`                                                                                                       |
 | 课程表  | `schedule:view` / `schedule:view_college`                                                                                                     |
 | 数据同步 | `sync:execute`                                                                                                                                |
 | 异步队列 | `role:manage`（系统运维，仅 system\_admin）                                                                                                   |
 
 ## 接口总览
 
-> 权限列：`-` = 仅需登录；权限码见上表。`/course-schedules` 整组需 `schedule:view`，`/stats` 整组需 `stats:view`。
+> 权限列：`-` = 仅需登录；权限码见上表。`/course-schedules` 整组需 `schedule:view`，`/stats` 整组需 `stats:view`（`GET /stats/supervisors` 与 `GET /stats/export/supervisors` 另需 `stats:view_supervisors`）。
 
 | 方法     | 路径                                                | 权限                                                   |
 | ------ | ------------------------------------------------- | ---------------------------------------------------- |
@@ -255,6 +255,8 @@ POST /auth/password
 ***
 
 ## 用户管理接口 (`/api/v1/users`)
+
+> **数据范围**：接口按调用者的管理范围强制收敛，`college_id` 等筛选参数只能在范围内**收窄**，无法扩大。系统管理员（`system_admin`）为全校；学院管理员（`college_admin` / `school_admin`）仅限**本人主学院**（按用户主学院归属，不看督导负责学院），未绑定学院时为**空集**（列表返回空、详情/写操作 403 或拒绝）；其它角色不享有用户管理范围。详情、督导范围查询、启用/禁用、批量启停用、新增用户与编辑/删除/加角色/改学院/改教研室的校验口径一致；同学院管理员账号之间仅系统管理员可互相操作。
 
 ### 获取用户列表
 
@@ -1002,7 +1004,7 @@ POST /crawl/llsykb                                          # 单教师 llsykb �
 
 ## 统计报表接口 (`/api/v1/stats`)
 
-整组路由均需 `stats:view` 权限码。除标注外，`page` 默认 1，`page_size` 默认 10。
+整组路由均需 `stats:view` 权限码；其中 `GET /stats/supervisors`、`GET /stats/export/supervisors`（督导统计）另需 `stats:view_supervisors`——督导统计是跨学院/校级口径（名单含负责本范围的跨学院督导，评教次数与平均分按该督导全校评教汇总），默认仅系统管理员可见。除标注外，`page` 默认 1，`page_size` 默认 10。
 
 未传 `start_date` / `end_date` 时，统计默认按当前学期区间汇总（开学日 \~ 开学日 + weeks×7 天，weeks 为学期配置的每学期周数）。
 
