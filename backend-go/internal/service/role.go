@@ -63,6 +63,13 @@ var PermissionCatalog = []PermissionGroup{
 	}},
 	{Group: "统计报表", Permissions: []PermissionItem{
 		{Code: "stats:view", Name: "查看统计报表"},
+		// stats:view_supervisors 控制「督导统计」页签与导出（GET /stats/supervisors、
+		// GET /stats/export/supervisors）。督导统计是跨学院/校级口径（名单含负责本范围的
+		// 跨学院督导，评教次数与平均分按该督导全校评教汇总），故默认仅系统管理员可见；
+		// 需要放开时由管理员在「角色管理」页勾选授予，内置的 college_admin / school_admin
+		// 不默认持有。系统管理员在权限中间件处直通（middleware/permission.go），无需迁移。
+		// 名称不含分组前缀：角色管理页按「分组·权限名」拼接展示（见 Roles.tsx）。
+		{Code: "stats:view_supervisors", Name: "查看督导统计"},
 	}},
 	{Group: "课程表", Permissions: []PermissionItem{
 		{Code: "schedule:view", Name: "查看课程表"},

@@ -234,14 +234,16 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		stats.GET("/campus", statsH.Campus)
 		stats.GET("/campuses", statsH.Campuses)
 		stats.GET("/college-teachers/:college_id", statsH.CollegeTeachers)
-		stats.GET("/supervisors", statsH.Supervisors)
+		// 督导统计为跨学院/校级口径：除组级 stats:view 外，另需 stats:view_supervisors
+		// （默认仅系统管理员；由管理员在「角色管理」页按需授予）
+		stats.GET("/supervisors", middleware.RequirePermission(db, "stats:view_supervisors"), statsH.Supervisors)
 		stats.GET("/evaluators", statsH.Evaluators)
 		stats.GET("/unteached-teachers", statsH.UnteachedTeachers)
 		stats.GET("/evaluation-records", statsH.EvaluationRecords)
 		stats.GET("/teacher-evaluation-summary", statsH.TeacherSummary)
 		stats.GET("/export/teachers", statsH.ExportTeachers)
 		stats.GET("/export/colleges", statsH.ExportColleges)
-		stats.GET("/export/supervisors", statsH.ExportSupervisors)
+		stats.GET("/export/supervisors", middleware.RequirePermission(db, "stats:view_supervisors"), statsH.ExportSupervisors)
 		stats.GET("/export/teacher-evaluation-summary", statsH.ExportTeacherSummary)
 		stats.POST("/evaluation-records/export", statsH.ExportEvaluationRecords)
 	}
