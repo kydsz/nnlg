@@ -7,7 +7,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { evaluationApi, type UpdatePayload } from '@/api/modules/evaluations'
 import { statsApi } from '@/api/modules/stats'
 import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
-import { downloadBlob, exportFilename } from '@/utils/download'
+import { downloadAttachment, downloadBlob, exportFilename } from '@/utils/download'
 import ExportFieldSelector from '@/components/ExportFieldSelector'
 import TeacherSelect from '@/components/TeacherSelect'
 import { buildTaskUpdatePayload, isTaskChanged, taskFieldsFromRecord, type TaskFormFields } from '@/utils/evalTaskEdit'
@@ -418,6 +418,65 @@ export default function Evaluations() {
   )
 }
 
+/** 图片附件：点击缩略图看大图，大图工具栏与缩略图下方均可下载 */
+function ImageAttachments({ urls }: { urls: string[] }) {
+  const { message } = App.useApp()
+  const [downloading, setDownloading] = useState<string | null>(null)
+
+  const download = async (url: string) => {
+    setDownloading(url)
+    try {
+      await downloadAttachment(url)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '下载失败')
+    } finally {
+      setDownloading(null)
+    }
+  }
+
+  return (
+    <Image.PreviewGroup
+      preview={{
+        toolbarRender: (node, info) => (
+          <>
+            {node}
+            <Button
+              type="text"
+              size="small"
+              icon={<DownloadOutlined />}
+              style={{ marginLeft: 8, color: '#fff' }}
+              onClick={() => void download(info.image.url)}
+            >
+              下载
+            </Button>
+          </>
+        ),
+      }}
+    >
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {urls.map((u) => (
+          <div
+            key={u}
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}
+          >
+            <Image src={u} width={64} height={64} style={{ objectFit: 'cover' }} />
+            <Button
+              type="link"
+              size="small"
+              icon={<DownloadOutlined />}
+              loading={downloading === u}
+              onClick={() => void download(u)}
+              style={{ padding: 0, height: 20, fontSize: 12 }}
+            >
+              下载
+            </Button>
+          </div>
+        ))}
+      </div>
+    </Image.PreviewGroup>
+  )
+}
+
 /** 详情值渲染：图片预览 / 文件下载 / 文本 */
 function ValueRender({
   value,
@@ -427,15 +486,7 @@ function ValueRender({
   displayValue?: string
 }) {
   if (isImageArray(value)) {
-    return (
-      <Image.PreviewGroup>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-          {(value as string[]).map((u) => (
-            <Image key={u} src={u} width={64} height={64} style={{ objectFit: 'cover' }} />
-          ))}
-        </div>
-      </Image.PreviewGroup>
-    )
+    return <ImageAttachments urls={value as string[]} />
   }
   if (isFileArray(value)) {
     return (
@@ -792,15 +843,7 @@ function EditDimControl({
 /** 只读展示现有附件（编辑时不做增删） */
 function ReadonlyFiles({ value }: { value: unknown }) {
   if (isImageArray(value)) {
-    return (
-      <Image.PreviewGroup>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-          {(value as string[]).map((u) => (
-            <Image key={u} src={u} width={64} height={64} style={{ objectFit: 'cover' }} />
-          ))}
-        </div>
-      </Image.PreviewGroup>
-    )
+    return <ImageAttachments urls={value as string[]} />
   }
   if (isFileArray(value)) {
     return (

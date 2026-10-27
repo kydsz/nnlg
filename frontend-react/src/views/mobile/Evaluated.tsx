@@ -19,7 +19,7 @@ import { useAuthStore } from '@/stores/auth'
 import type { EvaluationRecord } from '@/api/types'
 import { formatDate, formatSemester } from '@/utils/format'
 import { semesterRangeOf } from '@/utils/semester'
-import { downloadBlob } from '@/utils/download'
+import { downloadAttachment, downloadBlob } from '@/utils/download'
 import {
   groupEvaluationDimensions,
   isImageArray,
@@ -350,8 +350,21 @@ function EvalDetailBody({ detail }: { detail: EvaluationRecord }) {
 
 function ValueRow({ row }: { row: EvalDetailRow }) {
   const [viewerIdx, setViewerIdx] = useState<number | null>(null)
+  const [downloading, setDownloading] = useState<string | null>(null)
   const images = isImageArray(row.value) ? (row.value as string[]) : null
   const files = !images && isFileArray(row.value) ? (row.value as string[]) : null
+
+  const download = async (url: string) => {
+    setDownloading(url)
+    try {
+      await downloadAttachment(url)
+      Toast.show({ content: '已开始下载', icon: 'success' })
+    } catch (e) {
+      Toast.show({ content: e instanceof Error ? e.message : '下载失败', icon: 'fail' })
+    } finally {
+      setDownloading(null)
+    }
+  }
 
   return (
     <div style={{ marginBottom: 8 }}>
@@ -360,18 +373,42 @@ function ValueRow({ row }: { row: EvalDetailRow }) {
         {images ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {images.map((u, i) => (
-              <img
+              <div
                 key={u}
-                src={u}
-                style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 4 }}
-                onClick={() => setViewerIdx(i)}
-              />
+                style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}
+              >
+                <img
+                  src={u}
+                  style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 4 }}
+                  onClick={() => setViewerIdx(i)}
+                />
+                <Button
+                  size="mini"
+                  fill="none"
+                  loading={downloading === u}
+                  onClick={() => void download(u)}
+                >
+                  下载
+                </Button>
+              </div>
             ))}
             {viewerIdx != null && (
               <ImageViewer
                 image={images[viewerIdx]}
                 visible
                 onClose={() => setViewerIdx(null)}
+                renderFooter={(img) => (
+                  <div style={{ textAlign: 'center', padding: 12 }}>
+                    <Button
+                      size="small"
+                      color="primary"
+                      loading={downloading === img}
+                      onClick={() => void download(img)}
+                    >
+                      下载图片
+                    </Button>
+                  </div>
+                )}
               />
             )}
           </div>

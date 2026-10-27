@@ -102,6 +102,14 @@ describe('getFileNameFromUrl', () => {
     expect(getFileNameFromUrl('/files/a.pdf')).toBe('a.pdf')
   })
 
+  it('去掉上传时添加的 uuid 前缀，保留用户原始文件名', () => {
+    expect(
+      getFileNameFromUrl(
+        '/api/v1/files/evaluations/12/class_photo/0f8fad5b-d9cb-469f-a165-70867728950e_现场照片.png'
+      )
+    ).toBe('现场照片.png')
+  })
+
   it('空路径回退为"未知文件"', () => {
     expect(getFileNameFromUrl('')).toBe('未知文件')
   })

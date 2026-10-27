@@ -94,12 +94,17 @@ export function isFileArray(v: unknown): v is string[] {
   )
 }
 
+/** 上传落盘文件名前缀：{uuid}_{原文件名}，展示/下载时去掉 uuid */
+const UPLOAD_UUID_PREFIX_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_/i
+
 export function getFileNameFromUrl(url: string): string {
   try {
     const p = new URL(url, window.location.origin).pathname
-    return decodeURIComponent(p.split('/').pop() || '未知文件')
+    const name = decodeURIComponent(p.split('/').pop() || '')
+    return name.replace(UPLOAD_UUID_PREFIX_RE, '') || '未知文件'
   } catch {
-    return url.split('/').pop() || '未知文件'
+    const name = url.split('/').pop() || ''
+    return name.replace(UPLOAD_UUID_PREFIX_RE, '') || '未知文件'
   }
 }
 

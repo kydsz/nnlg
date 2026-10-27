@@ -24,6 +24,7 @@ import { scheduleApi } from '@/api/modules/schedule'
 import FormulaEditor from '@/components/FormulaEditor'
 import type { Dimension, CourseItem } from '@/api/types'
 import { formatDate } from '@/utils/format'
+import { downloadAttachment } from '@/utils/download'
 
 export default function Evaluation() {
   const { id } = useParams<{ id: string }>()
@@ -529,6 +530,19 @@ function DimensionUpload({
   onChange: (urls: string[]) => void
 }) {
   const [uploadingCount, setUploadingCount] = useState(0)
+  const [downloading, setDownloading] = useState<string | null>(null)
+
+  const download = async (url: string) => {
+    setDownloading(url)
+    try {
+      await downloadAttachment(url)
+      Toast.show({ content: '已开始下载', icon: 'success' })
+    } catch (e) {
+      Toast.show({ content: e instanceof Error ? e.message : '下载失败', icon: 'fail' })
+    } finally {
+      setDownloading(null)
+    }
+  }
 
   const handleFiles = async (files: FileList) => {
     const room = maxCount - urls.length
@@ -581,7 +595,23 @@ function DimensionUpload({
         </div>
       )}
       {viewerUrl && (
-        <ImageViewer image={viewerUrl} visible onClose={() => setViewerUrl(null)} />
+        <ImageViewer
+          image={viewerUrl}
+          visible
+          onClose={() => setViewerUrl(null)}
+          renderFooter={(img) => (
+            <div style={{ textAlign: 'center', padding: 12 }}>
+              <Button
+                size="small"
+                color="primary"
+                loading={downloading === img}
+                onClick={() => void download(img)}
+              >
+                下载图片
+              </Button>
+            </div>
+          )}
+        />
       )}
       <label style={{ fontSize: 12, color: '#104186' }}>
         <input
@@ -599,15 +629,23 @@ function DimensionUpload({
       {urls.length > 0 && (
         <div style={{ marginTop: 4 }}>
           {urls.map((u, i) => (
-            <div key={u} style={{ fontSize: 12, color: '#666', display: 'flex', justifyContent: 'space-between' }}>
+            <div key={u} style={{ fontSize: 12, color: '#666', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {u.split('/').pop()}
               </span>
-              <span
-                style={{ color: '#ff3141', cursor: 'pointer' }}
-                onClick={() => onChange(urls.filter((_, j) => j !== i))}
-              >
-                删除
+              <span style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                <span
+                  style={{ color: '#104186', cursor: 'pointer' }}
+                  onClick={() => void download(u)}
+                >
+                  下载
+                </span>
+                <span
+                  style={{ color: '#ff3141', cursor: 'pointer' }}
+                  onClick={() => onChange(urls.filter((_, j) => j !== i))}
+                >
+                  删除
+                </span>
               </span>
             </div>
           ))}
