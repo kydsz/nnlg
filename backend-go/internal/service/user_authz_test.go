@@ -243,3 +243,199 @@ func roomID(t *testing.T, db *gorm.DB, name string) int {
 	}
 	return r.ID
 }
+
+// createUserInDB 灌入一个用户在测试库（返回带 ID 的记录）
+func createUserInDB(t *testing.T, db *gorm.DB, u model.User) *model.User {
+	t.Helper()
+	if err := db.Create(&u).Error; err != nil {
+		t.Fatalf("灌入用户 %s 失败: %v", u.Username, err)
+	}
+	return &u
+}
+
+// TestUserAuthzRead 详情/督导范围查询的读口径
+func TestUserAuthzRead(t *testing.T) {
+	db := userAuthzTestDB(t)
+	svc := &User{}
+
+	t.Run("学院管理员读跨学院用户详情返回 403", func(t *testing.T) {
+		caller := authzCaller(t, db, "文理管理员")
+		_, err := svc.GetScoped(db, caller, authzID(t, db, "马院教师B"))
+		code, ok := AsHTTPError(err)
+		if err == nil || !ok || code != 403 {
+			t.Fatalf("跨学院详情应返回 403, 得到 err=%v code=%d ok=%v", err, code, ok)
+		}
+	})
+
+	t.Run("学院管理员读本学院用户详情成功", func(t *testing.T) {
+		caller := authzCaller(t, db, "文理管理员")
+		u, err := svc.GetScoped(db, caller, authzID(t, db, "文理教师"))
+		if err != nil || u.UserNo != "T001" {
+			t.Fatalf("本学院详情应成功, 得到 u=%v err=%v", u, err)
+		}
+	})
+
+	t.Run("学院管理员读自己详情成功", func(t *testing.T) {
+		caller := authzCaller(t, db, "文理管理员")
+		if _, err := svc.GetScoped(db, caller, caller.ID); err != nil {
+			t.Fatalf("读自己应成功: %v", err)
+		}
+	})
+
+	t.Run("督导范围查询跨学院被拒", func(t *testing.T) {
+		caller := authzCaller(t, db, "文理管理员")
+		_, err := svc.SupervisorScope(db, caller, authzID(t, db, "马院教师B"))
+		if _, ok := AsHTTPError(err); err == nil || !ok {
+			t.Fatalf("跨学院督导范围应返回 403, 得到 %v", err)
+		}
+	})
+
+	t.Run("督导范围查询本学院成功", func(t *testing.T) {
+		caller := authzCaller(t, db, "文理管理员")
+		if _, err := svc.SupervisorScope(db, caller, authzID(t, db, "文理教师")); err != nil {
+			t.Fatalf("本学院督导范围应成功: %v", err)
+		}
+	})
+
+	t.Run("督导学院交叉不再扩大写范围", func(t *testing.T) {
+		// 马院督导主学院在马院，user_college 记为文理学院：用户管理只看主学院，不得据此越界管理
+		caller := authzCaller(t, db, "文理管理员")
+		_, err := svc.GetScoped(db, caller, authzID(t, db, "马院督导"))
+		if _, ok := AsHTTPError(err); err == nil || !ok {
+			t.Fatalf("仅督导学院命中不应放行, 得到 %v", err)
+		}
+	})
+}
+
+// TestUserAuthzStatus 启用/禁用与批量启停用
+func TestUserAuthzStatus(t *testing.T) {
+	db := userAuthzTestDB(t)
+	svc := &User{}
+
+	t.Run("学院管理员跨学院启用/禁用被拒", func(t *testing.T) {
+		caller := authzCaller(t, db, "文理管理员")
+		if _, err := svc.UpdateStatus(db, caller, authzID(t, db, "马院教师B"), 0); err == nil {
+			t.Fatalf("跨学院启停用应被拒绝")
+		}
+	})
+
+	t.Run("批量启停用越界账号计入失败", func(t *testing.T) {
+		caller := authzCaller(t, db, "文理管理员")
+		success, failed, changed := svc.BatchStatus(db, caller, []int{
+			authzID(t, db, "文理教师"), authzID(t, db, "马院教师B"),
+		}, 0)
+		if success != 1 || failed != 1 || len(changed) != 1 {
+			t.Fatalf("批量启停用应 1 成功 1 失败, 得到 success=%d failed=%d changed=%v", success, failed, changed)
+		}
+	})
+
+	t.Run("学院管理员禁用本学院用户成功", func(t *testing.T) {
+		caller := authzCaller(t, db, "文理管理员")
+		u, err := svc.UpdateStatus(db, caller, authzID(t, db, "文理教师"), 0)
+		if err != nil || u.Status != 0 {
+			t.Fatalf("本学院禁用应成功, 得到 u=%v err=%v", u, err)
+		}
+	})
+}
+
+// TestUserAuthzCreate 新增用户的数据范围
+func TestUserAuthzCreate(t *testing.T) {
+	db := userAuthzTestDB(t)
+	caller := authzCaller(t, db, "文理管理员")
+	sysAdmin := authzCaller(t, db, "系统管理员")
+	svc := NewUser("")
+	// 建号会校验角色是否存在：测试库没有 role 表，补一张并灌入 teacher
+	if err := db.AutoMigrate(&model.Role{}); err != nil {
+		t.Fatalf("建 role 表失败: %v", err)
+	}
+	if err := db.Create(&model.Role{Code: model.RoleTeacher, Name: "教师", Permissions: []byte("[]"), Status: 1}).Error; err != nil {
+		t.Fatalf("灌入 role 失败: %v", err)
+	}
+
+	t.Run("未指定学院时默认本学院", func(t *testing.T) {
+		u, err := svc.Create(db, caller, CreateUserParams{
+			UserNo: "N001", Username: "新教师", Roles: []string{model.RoleTeacher},
+		})
+		if err != nil {
+			t.Fatalf("本学院建号应成功: %v", err)
+		}
+		if u.CollegeID == nil || *u.CollegeID != 5 {
+			t.Fatalf("未指定学院应默认本学院, 得到 %v", u.CollegeID)
+		}
+	})
+
+	t.Run("指定外院建号被拒", func(t *testing.T) {
+		_, err := svc.Create(db, caller, CreateUserParams{
+			UserNo: "N002", Username: "外院教师", Roles: []string{model.RoleTeacher}, CollegeID: intPtr(6),
+		})
+		if err == nil {
+			t.Fatalf("外院建号应被拒绝")
+		}
+	})
+
+	t.Run("把督导学院授到院外被拒", func(t *testing.T) {
+		_, err := svc.Create(db, caller, CreateUserParams{
+			UserNo: "N003", Username: "督导教师", Roles: []string{model.RoleTeacher},
+			SupervisorColleges: []int{6},
+		})
+		if err == nil {
+			t.Fatalf("院外督导学院应被拒绝")
+		}
+	})
+
+	t.Run("系统管理员可建未绑定学院的用户", func(t *testing.T) {
+		u, err := svc.Create(db, sysAdmin, CreateUserParams{
+			UserNo: "N004", Username: "无学院用户", Roles: []string{model.RoleTeacher},
+		})
+		if err != nil || u.CollegeID != nil {
+			t.Fatalf("系统管理员建号应成功且可留空学院, 得到 u=%v err=%v", u, err)
+		}
+	})
+}
+
+// TestUserAuthzSameLevelAdmin 同级管理员互相操作保护
+func TestUserAuthzSameLevelAdmin(t *testing.T) {
+	db := userAuthzTestDB(t)
+	_ = createUserInDB(t, db, model.User{
+		UserNo: "A002", Username: "文理管理员2", Role: model.RoleCollegeAdmin, CollegeID: intPtr(5), Status: 1,
+	})
+	svc := &User{}
+
+	t.Run("同学院管理员不能改其他管理员密码", func(t *testing.T) {
+		caller := authzCaller(t, db, "文理管理员")
+		_, err := svc.Update(db, caller, authzID(t, db, "文理管理员2"), UpdateUserParams{Password: pwdParam("Other@123")})
+		if err == nil {
+			t.Fatalf("同级管理员互相改密应被拒绝")
+		}
+	})
+
+	t.Run("学院管理员可以改自己密码", func(t *testing.T) {
+		caller := authzCaller(t, db, "文理管理员")
+		if _, err := svc.Update(db, caller, caller.ID, UpdateUserParams{Password: pwdParam("Self@12345")}); err != nil {
+			t.Fatalf("改自己密码应成功: %v", err)
+		}
+	})
+
+	t.Run("系统管理员可操作学院管理员", func(t *testing.T) {
+		sysAdmin := authzCaller(t, db, "系统管理员")
+		if _, err := svc.Update(db, sysAdmin, authzID(t, db, "文理管理员2"), UpdateUserParams{Password: pwdParam("Sys@12345")}); err != nil {
+			t.Fatalf("系统管理员应可操作学院管理员: %v", err)
+		}
+	})
+}
+
+// TestUserAuthzNoCollegeAdmin 未绑定学院的学院管理员写操作 fail-closed
+func TestUserAuthzNoCollegeAdmin(t *testing.T) {
+	db := userAuthzTestDB(t)
+	caller := createUserInDB(t, db, model.User{
+		UserNo: "A003", Username: "无学院管理员", Role: model.RoleCollegeAdmin, Status: 1,
+	})
+	svc := &User{}
+
+	if _, err := svc.UpdateStatus(db, caller, authzID(t, db, "文理教师"), 0); err == nil {
+		t.Fatalf("无学院管理员不应能启停用任何用户")
+	}
+	if _, err := svc.GetScoped(db, caller, authzID(t, db, "文理教师")); err == nil {
+		t.Fatalf("无学院管理员不应能读任何用户详情")
+	}
+}

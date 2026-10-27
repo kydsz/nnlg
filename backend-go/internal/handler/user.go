@@ -47,7 +47,8 @@ func (h *User) List(c *gin.Context) {
 		}
 	}
 
-	users, total, err := h.svc.List(h.db, params)
+	// 数据范围由服务端按调用者收敛：学院管理员只返回本学院用户，前端传参无法扩大范围
+	users, total, err := h.svc.List(h.db, middleware.CurrentUser(c), params)
 	if err != nil {
 		serverErr(c, "查询失败")
 		return
@@ -70,8 +71,13 @@ func (h *User) Get(c *gin.Context) {
 		badReq(c, "无效的用户 ID")
 		return
 	}
-	u, err := h.svc.GetByID(h.db, id)
+	u, err := h.svc.GetScoped(h.db, middleware.CurrentUser(c), id)
 	if err != nil {
+		// 越界访问返回 403，不存在仍返回 404（与改造前语义一致）
+		if code, ok := service.AsHTTPError(err); ok {
+			response.Fail(c, code, err.Error())
+			return
+		}
 		response.Fail(c, http.StatusNotFound, err.Error())
 		return
 	}
@@ -326,8 +332,12 @@ func (h *User) GetSupervisorScope(c *gin.Context) {
 		badReq(c, "无效的用户 ID")
 		return
 	}
-	scope, err := h.svc.SupervisorScope(h.db, id)
+	scope, err := h.svc.SupervisorScope(h.db, middleware.CurrentUser(c), id)
 	if err != nil {
+		if code, ok := service.AsHTTPError(err); ok {
+			response.Fail(c, code, err.Error())
+			return
+		}
 		response.Fail(c, http.StatusNotFound, err.Error())
 		return
 	}

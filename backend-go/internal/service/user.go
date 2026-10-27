@@ -52,8 +52,16 @@ func NewUser(defaultPassword string) *User {
 	return &User{defaultPassword: defaultPassword}
 }
 
-// List 分页查询用户（预加载关联，排序/筛选语义与旧端一致）
-func (s *User) List(db *gorm.DB, p UserParams) ([]model.User, int64, error) {
+// List 分页查询用户（预加载关联，排序/筛选语义与旧端一致）。
+// 数据范围：system_admin 全量；学院管理员（college_admin/school_admin）仅本学院（主学院口径），
+// 未绑定学院时返回空集；其它角色（如督导）不授予用户管理范围，同样返回空集。
+// 前端传入的 college_id 只能在该范围内收窄，不能扩大（交集语义）。
+func (s *User) List(db *gorm.DB, caller *model.User, p UserParams) ([]model.User, int64, error) {
+	scope := UserManageCollegeIDs(caller)
+	if scope != nil && len(scope) == 0 {
+		return []model.User{}, 0, nil
+	}
+
 	q := db.Model(&model.User{})
 	if p.Keyword != "" {
 		kw := "%" + p.Keyword + "%"
@@ -69,10 +77,25 @@ func (s *User) List(db *gorm.DB, p UserParams) ([]model.User, int64, error) {
 		}
 		q = q.Where("`user`.`role` IN ? OR `user`.`id` IN (SELECT user_id FROM user_role WHERE role IN ?)", roles, roles)
 	}
-	if p.CollegeID != "" {
-		ids := splitInts(p.CollegeID)
-		// 学院筛选只匹配主学院：user_college 表混存了督导「负责学院」与部分教师的杂散关联，
-		// 用它匹配用户会把主学院不在该学院的用户漏出（与 applyTeacherScope / ListTeachers 保持一致）
+	// 学院筛选只匹配主学院：user_college 表混存了督导「负责学院」与部分教师的杂散关联，
+	// 用它匹配用户会把主学院不在该学院的用户漏出（与 applyTeacherScope / ListTeachers 保持一致）
+	requested := splitInts(p.CollegeID)
+	if scope == nil {
+		// 全校范围：前端筛选照旧生效
+		if len(requested) > 0 {
+			q = q.Where("`user`.`college_id` IN ?", requested)
+		}
+	} else {
+		// 学院范围：与调用者范围取交集，空交集直接返回空列表
+		ids := requested
+		if len(ids) == 0 {
+			ids = scope
+		} else {
+			ids = intersectIDs(ids, scope)
+		}
+		if len(ids) == 0 {
+			return []model.User{}, 0, nil
+		}
 		q = q.Where("`user`.`college_id` IN ?", ids)
 	}
 	if p.ResearchRoomID != "" {
@@ -134,6 +157,36 @@ func (s *User) GetByID(db *gorm.DB, id int) (*model.User, error) {
 		return nil, errors.New("用户不存在")
 	}
 	return &u, nil
+}
+
+// GetScoped 按 ID 查询用户并校验调用者的数据范围（详情/督导范围查询等读入口用）。
+// 越界返回 403（errForbidden），不存在返回 404（GetByID 的既有错误）。
+func (s *User) GetScoped(db *gorm.DB, caller *model.User, id int) (*model.User, error) {
+	u, err := s.GetByID(db, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkTargetUser(caller, u); err != nil {
+		return nil, errForbidden(err.Error())
+	}
+	return u, nil
+}
+
+// intersectIDs 返回 a ∩ b（保持 a 的顺序、去重）
+func intersectIDs(a, b []int) []int {
+	allowed := make(map[int]bool, len(b))
+	for _, v := range b {
+		allowed[v] = true
+	}
+	out := make([]int, 0, len(a))
+	seen := make(map[int]bool, len(a))
+	for _, v := range a {
+		if allowed[v] && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // assignableRoles 按当前操作者返回可分配的角色编码集合；nil 表示全部
@@ -202,6 +255,9 @@ func (s *User) Create(db *gorm.DB, caller *model.User, p CreateUserParams) (*mod
 		return nil, errors.New("至少分配一个角色")
 	}
 	if err := checkRoleAssignable(db, caller, roles); err != nil {
+		return nil, err
+	}
+	if err := checkCreateScope(db, caller, &p); err != nil {
 		return nil, err
 	}
 
@@ -317,6 +373,25 @@ func (s *User) Update(db *gorm.DB, caller *model.User, id int, p UpdateUserParam
 	}
 
 	updates := map[string]interface{}{}
+	// 督导学院/教研室同样受数据范围约束：非系统管理员不得把督导范围授到院外
+	if p.SupervisorColleges != nil {
+		for _, cid := range *p.SupervisorColleges {
+			if err := checkManageScope(caller, &cid); err != nil {
+				return nil, errors.New("无权授予该督导学院")
+			}
+		}
+	}
+	if p.SupervisorRooms != nil {
+		for _, rid := range *p.SupervisorRooms {
+			var room model.ResearchRoom
+			if err := db.First(&room, rid).Error; err != nil {
+				return nil, errors.New("教研室不存在")
+			}
+			if err := checkRoomScope(caller, &room); err != nil {
+				return nil, errors.New("无权授予该督导教研室")
+			}
+		}
+	}
 	if p.Username != nil {
 		updates["username"] = *p.Username
 	}
@@ -463,6 +538,9 @@ func (s *User) UpdateStatus(db *gorm.DB, caller *model.User, id, status int) (*m
 	if id == caller.ID {
 		return nil, errors.New("不能禁用自己")
 	}
+	if err := checkTargetUser(caller, u); err != nil {
+		return nil, err
+	}
 	if s.isAdminUser(db, u) && !caller.HasRole(model.RoleSystemAdmin) {
 		return nil, errors.New("无权操作系统管理员")
 	}
@@ -480,6 +558,11 @@ func (s *User) BatchStatus(db *gorm.DB, caller *model.User, ids []int, status in
 	for _, id := range ids {
 		u, err := s.GetByID(db, id)
 		if err != nil || id == caller.ID || s.isAdminUser(db, u) {
+			failed++
+			continue
+		}
+		// 批量启停用与单个操作同一数据范围口径，越界账号计入失败（不中断批处理）
+		if err := checkTargetUser(caller, u); err != nil {
 			failed++
 			continue
 		}
@@ -657,9 +740,9 @@ func (s *User) RemoveRoom(db *gorm.DB, caller *model.User, userID, roomID int) e
 	return nil
 }
 
-// SupervisorScope 督导负责范围查询
-func (s *User) SupervisorScope(db *gorm.DB, userID int) (*ScopeResult, error) {
-	u, err := s.GetByID(db, userID)
+// SupervisorScope 督导负责范围查询（受调用者数据范围约束）
+func (s *User) SupervisorScope(db *gorm.DB, caller *model.User, userID int) (*ScopeResult, error) {
+	u, err := s.GetScoped(db, caller, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -760,9 +843,11 @@ func containsInt(list []int, v int) bool {
 	return false
 }
 
-// checkTargetUser 用户管理数据范围与管理员保护统一入口：
-// 1) 非 system_admin 不得操作系统管理员；2) 目标用户主学院/督导学院
-// 至少一个在调用者可访问学院范围内（全校范围视为可操作任意用户）。
+// checkTargetUser 用户写操作的数据范围与管理员保护统一入口：
+//  1. system_admin 不受限；非 system_admin 不得操作系统管理员账号；
+//  2. 目标用户须归属调用者的管理范围（主学院口径，见 UserManageCollegeIDs），
+//     非 system_admin 一律 fail-closed——调用者没有可管理学院时拒绝，而不是放行全校；
+//  3. 同学院/上级管理员账号仅 system_admin 可操作，避免同级互相改密、禁用、降权；操作自身不受此限。
 func checkTargetUser(caller, target *model.User) error {
 	if caller.HasRole(model.RoleSystemAdmin) {
 		return nil
@@ -770,34 +855,73 @@ func checkTargetUser(caller, target *model.User) error {
 	if target.HasRole(model.RoleSystemAdmin) {
 		return errors.New("无权操作系统管理员")
 	}
-	ids := AccessibleCollegeIDs(caller)
+	if target.ID != caller.ID && target.HasAnyRole(model.RoleCollegeAdmin, model.RoleSchoolAdmin) {
+		return errors.New("无权操作其他管理员账号")
+	}
+	ids := UserManageCollegeIDs(caller)
 	if ids == nil {
 		return nil // 全校数据范围
 	}
-	if target.CollegeID != nil && containsInt(ids, *target.CollegeID) {
-		return nil
+	if len(ids) == 0 {
+		return errors.New("您没有可管理的学院")
 	}
-	for _, uc := range target.UserColleges {
-		if containsInt(ids, uc.CollegeID) {
-			return nil
-		}
+	if target.CollegeID == nil || !containsInt(ids, *target.CollegeID) {
+		return errors.New("目标用户不在您的管理范围内")
 	}
-	return errors.New("目标用户不在您的管理范围内")
+	return nil
 }
 
 // checkManageScope 校验调用者对目标单位（学院/教研室）的管理范围；
-// 教研室按所属学院判定，全校数据范围视为任意单位均可。
+// 与用户管理同一口径（主学院、fail-closed），system_admin 视为任意单位均可。
 func checkManageScope(caller *model.User, collegeID *int) error {
-	if !CollegeInScope(caller, collegeID) {
+	ids := UserManageCollegeIDs(caller)
+	if ids == nil {
+		return nil
+	}
+	if collegeID == nil || !containsInt(ids, *collegeID) {
 		return errors.New("无权管理该单位")
 	}
 	return nil
 }
 
-// checkRoomScope 校验教研室存在且所属学院在调用者管理范围内
+// checkRoomScope 校验教研室所属学院在调用者管理范围内
 func checkRoomScope(caller *model.User, room *model.ResearchRoom) error {
-	if !CollegeInScope(caller, &room.CollegeID) {
+	if err := checkManageScope(caller, &room.CollegeID); err != nil {
 		return errors.New("无权管理该教研室")
+	}
+	return nil
+}
+
+// checkCreateScope 新增用户时的数据范围校验（就地补默认主学院）：
+// 非系统管理员只能在本人管理范围内建号；未指定主学院时默认本人学院，
+// 督导学院/教研室同样不得授到范围外。系统管理员保持既有行为（可留空学院）。
+func checkCreateScope(db *gorm.DB, caller *model.User, p *CreateUserParams) error {
+	ids := UserManageCollegeIDs(caller)
+	if ids == nil {
+		return nil // 全校数据范围
+	}
+	if len(ids) == 0 {
+		return errors.New("您没有可管理的学院，无法新增用户")
+	}
+	if p.CollegeID == nil {
+		collegeID := ids[0]
+		p.CollegeID = &collegeID
+	} else if !containsInt(ids, *p.CollegeID) {
+		return errors.New("无权在该学院下新增用户")
+	}
+	for _, cid := range p.SupervisorColleges {
+		if !containsInt(ids, cid) {
+			return errors.New("无权授予该督导学院")
+		}
+	}
+	for _, rid := range p.SupervisorRooms {
+		var room model.ResearchRoom
+		if err := db.First(&room, rid).Error; err != nil {
+			return errors.New("教研室不存在")
+		}
+		if !containsInt(ids, room.CollegeID) {
+			return errors.New("无权授予该督导教研室")
+		}
 	}
 	return nil
 }

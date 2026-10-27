@@ -67,6 +67,25 @@ func AccessibleCollegeIDs(u *model.User) []int {
 	return ids
 }
 
+// UserManageCollegeIDs 用户管理的数据范围（只看主学院，与用户列表的「学院」列同一口径）。
+//
+// 与 AccessibleCollegeIDs 的区别：
+//   - 不含督导「负责学院」（user_college）：用户管理改的是人，人归属于主学院；
+//   - 管理类角色未绑定主学院时返回空集（fail-closed），不再回退为全校——
+//     旧端「无学院视为全校」的兜底会把配错学院的管理员放大成全校权限。
+//
+// 返回 nil 表示全校（仅 system_admin）；空切片表示没有任何管理范围。
+// 仅用于用户管理（列表/详情/写操作），不要复用到任务、评教、统计等既有收敛口径上。
+func UserManageCollegeIDs(u *model.User) []int {
+	if u.HasRole(model.RoleSystemAdmin) {
+		return nil
+	}
+	if u.HasAnyRole(model.RoleCollegeAdmin, model.RoleSchoolAdmin) && u.CollegeID != nil {
+		return []int{*u.CollegeID}
+	}
+	return []int{}
+}
+
 // CollegeInScope 判断学院是否在用户可访问范围内
 func CollegeInScope(u *model.User, collegeID *int) bool {
 	ids := AccessibleCollegeIDs(u)
