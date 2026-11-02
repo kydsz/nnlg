@@ -6,6 +6,8 @@ export interface EvaluationListParams {
   page_size?: number
   task_id?: number
   teacher_id?: number
+  /** 被评教师所属学院（支持逗号分隔多值，前端筛选单选传单个 id） */
+  college_id?: number
   evaluator_id?: number
   evaluator_name?: string
   keyword?: string

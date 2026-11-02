@@ -6,6 +6,7 @@ import dayjs from 'dayjs'
 import type { ColumnsType } from 'antd/es/table'
 import { evaluationApi, type UpdatePayload } from '@/api/modules/evaluations'
 import { statsApi } from '@/api/modules/stats'
+import { orgApi } from '@/api/modules/org'
 import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
 import { downloadAttachment, downloadBlob, exportFilename } from '@/utils/download'
 import ExportFieldSelector from '@/components/ExportFieldSelector'
@@ -37,7 +38,7 @@ export default function Evaluations() {
     canDeleteAny || (canDeleteOwn && userId != null && r.evaluator_id === userId)
   const canRestoreAny = useAuthStore((s) => s.hasPermission('evaluation:restore'))
   const canRestoreOwn = useAuthStore((s) => s.hasPermission('evaluation:restore_own'))
-  const [params, setParams] = useState<{ page: number; page_size: number; keyword?: string; teacher_id?: number; order_by?: string; order?: 'asc' | 'desc'; deleted?: 0 | 1 }>({ page: 1, page_size: 20 })
+  const [params, setParams] = useState<{ page: number; page_size: number; keyword?: string; teacher_id?: number; college_id?: number; order_by?: string; order?: 'asc' | 'desc'; deleted?: 0 | 1 }>({ page: 1, page_size: 20 })
   const [keyword, setKeyword] = useState('')
   const [sortState, setSortState] = useState<{ field?: string; order?: 'ascend' | 'descend' }>({})
   const [detailId, setDetailId] = useState<number | null>(null)
@@ -45,6 +46,13 @@ export default function Evaluations() {
   const [exportOpen, setExportOpen] = useState(false)
   // 默认日期区间：当前学期（开学日 ~ 开学日+20周）
   const { effective: dates, onRange } = useSemesterRangePicker()
+
+  // 学院选项：复用组织机构的学院列表（与用户管理页同源）
+  const { data: colleges } = useQuery({
+    queryKey: ['colleges', undefined],
+    queryFn: () => orgApi.collegeList(),
+  })
+  const collegeOptions = (colleges?.list || []).map((c) => ({ label: c.name, value: c.id }))
 
   const { data, isLoading } = useQuery({
     queryKey: ['evaluations', params, dates],
@@ -74,7 +82,14 @@ export default function Evaluations() {
 
   const exportMut = useMutation({
     mutationFn: (fields: string[]) =>
-      statsApi.exportEvaluationRecords({ ...params, fields, start_date: dates[0], end_date: dates[1] }),
+      statsApi.exportEvaluationRecords({
+        ...params,
+        fields,
+        // 导出接口按被评教师学院过滤的参数名为 college_ids（与统计导出一致）
+        college_ids: params.college_id != null ? String(params.college_id) : undefined,
+        start_date: dates[0],
+        end_date: dates[1],
+      }),
     onSuccess: (blob) => downloadBlob(blob, exportFilename('评教记录')),
     onError: (e) => message.error(e.message),
   })
@@ -199,6 +214,14 @@ export default function Evaluations() {
           onChange={(v) =>
             onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
           }
+        />
+        <Select
+          allowClear
+          placeholder="学院"
+          style={{ width: 180 }}
+          options={collegeOptions}
+          value={params.college_id}
+          onChange={(v) => setParams((p) => ({ ...p, page: 1, college_id: v }))}
         />
         {(canRestoreAny || canRestoreOwn) && (
           <Select
