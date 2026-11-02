@@ -109,7 +109,7 @@ V3 为全量重构版本：后端使用 **Go + Gin + GORM**，前端使用 **Rea
 ### 环境要求
 - Go 1.26+
 - Node.js 18+
-- MySQL 8.0+（与旧端共用，业务表结构由 `v2/backend` 初始化脚本或 SQL 迁移文件创建；增量结构变更由 `backend-go/internal/database/migrations` 下的 SQL 文件在服务启动时自动执行，幂等可重复启动）
+- MySQL 8.0+（与旧端共用；表结构与基础数据由 `backend-go/internal/database/migrations` 下的 SQL 在服务启动时自动执行（幂等可重复启动）：`000_base_schema.sql` 建基础表、`000_seed_basic_data.sql` 种子化内置角色/校区/评教维度，`001+` 负责增量结构变更；默认账号由启动时 `database.SeedAccounts` 幂等创建）
 - Redis 7+（可选但推荐，高并发缓存/消息队列；**不配置则自动降级为直连 DB，不影响原有功能**）
 
 ### 后端启动（Go）
@@ -157,16 +157,43 @@ npm run build
 两个目录均提供 Dockerfile：
 
 ```bash
-# 后端（Alpine，时区 UTC，暴露 8000）
+# 后端（Alpine，时区 Asia/Shanghai，暴露 8000）
 cd backend-go && docker build -t te-backend-go .
 
 # 前端（Nginx，暴露 80，/api 与 /uploads 反代到后端 backend:8000）
 cd frontend-react && docker build -t te-frontend-react .
 ```
 
+#### 从零部署（新机器，空库自动建表）
+
+表结构、内置角色/维度与默认账号均在后端首次启动时自动初始化，无需手工建库建表：
+
+```bash
+# 1. 预创建 external 数据卷（docker-compose.yml / prod 均为 external: true，必须先建）
+docker volume create v2_mysql_data
+
+# 2. 准备后端配置
+cd backend-go && cp .env.example .env
+# 必改：SECRET_KEY、DB_PASSWORD（与 MYSQL_ROOT_PASSWORD 保持一致）
+# 容器部署必改：DB_HOST=mysql
+# 可选：DEFAULT_USER_PASSWORD（默认账号初始口令，默认 NNLG@2026）
+
+# 3. 启动（mysql 首次以空数据卷启动时依赖 .env 中的 MYSQL_ROOT_PASSWORD /
+#    MYSQL_DATABASE 自动建库，建表与种子数据由后端启动迁移完成）
+docker compose up -d            # 本地构建；生产用 docker-compose.prod.yml（拉取腾讯云镜像）
+
+# 4. 验证
+curl http://localhost/health
+# 用 admin / DEFAULT_USER_PASSWORD 登录，首次登录强制改密
+```
+
+> 直接跑 Go 服务（不用 Docker）时：自备 MySQL 8.0+，创建空库并保证 `.env` 中
+> `DB_*` 指向它，`go run ./cmd/server` 启动即自动建表/种子/建默认账号。
+> 若数据库中已有 V2 时代的表结构与数据，`000_*` 迁移自动跳过、增量迁移继续生效，无副作用。
+
 ## 默认账号
 
-系统首次运行时由 V2 初始化脚本创建以下账号（初始密码由后端配置 `DEFAULT_USER_PASSWORD` 决定，请在 `.env` 中配置）。该初始密码同样用于新增用户与教务导入账号，服务端会标记 `must_change_password` 并**强制首次登录改密**（未改密前除改密/查看自己/登出外的接口一律 403）：
+系统首次运行（空库）时由后端启动迁移自动创建以下账号（初始密码由后端配置 `DEFAULT_USER_PASSWORD` 决定，请在 `.env` 中配置；工号已存在时跳过、不覆盖）。该初始密码同样用于新增用户与教务导入账号，服务端会标记 `must_change_password` 并**强制首次登录改密**（未改密前除改密/查看自己/登出外的接口一律 403）：
 
 | 账号 | 角色 | 说明 |
 |------|------|------|

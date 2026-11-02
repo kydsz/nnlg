@@ -34,6 +34,11 @@ func main() {
 		log.Fatalf("连接数据库失败: %v", err)
 	}
 
+	// 空库首次启动：幂等创建默认账号（口令为 DEFAULT_USER_PASSWORD，强制首登改密）
+	if err := database.SeedAccounts(db, cfg); err != nil {
+		log.Fatalf("初始化默认账号失败: %v", err)
+	}
+
 	// 初始化 Redis（未配置自动禁用，不影响原有功能）
 	rdb := cache.New(cfg)
 	if rdb.Enabled {
