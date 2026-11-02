@@ -48,15 +48,17 @@ func (h *User) List(c *gin.Context) {
 	}
 
 	// 数据范围由服务端按调用者收敛：学院管理员只返回本学院用户，前端传参无法扩大范围
-	users, total, err := h.svc.List(h.db, middleware.CurrentUser(c), params)
+	caller := middleware.CurrentUser(c)
+	users, total, err := h.svc.List(h.db, caller, params)
 	if err != nil {
 		serverErr(c, "查询失败")
 		return
 	}
 
+	full := caller.HasRole(model.RoleSystemAdmin)
 	list := []gin.H{}
 	for i := range users {
-		list = append(list, userListItem(&users[i]))
+		list = append(list, userListItem(&users[i], full))
 	}
 
 	response.OK(c, gin.H{
@@ -81,7 +83,7 @@ func (h *User) Get(c *gin.Context) {
 		response.Fail(c, http.StatusNotFound, err.Error())
 		return
 	}
-	response.OK(c, userDetailItem(u))
+	response.OK(c, userDetailItem(u, middleware.CurrentUser(c).HasRole(model.RoleSystemAdmin)))
 }
 
 // Create 新增用户
@@ -100,7 +102,7 @@ func (h *User) Create(c *gin.Context) {
 	service.LogRecord(h.db, &caller.ID, caller.Username, "create", "user", &u.ID, "user",
 		map[string]interface{}{"user_no": u.UserNo, "username": u.Username})
 	// 旧端 create 的 message 也为 "更新成功"，此处保持一致
-	response.OKMsg(c, "更新成功", userDetailItem(u))
+	response.OKMsg(c, "更新成功", userDetailItem(u, caller.HasRole(model.RoleSystemAdmin)))
 }
 
 // Update 编辑用户
@@ -126,7 +128,7 @@ func (h *User) Update(c *gin.Context) {
 	if (p.Status != nil && *p.Status == 0) || (p.Password != nil && *p.Password != "") {
 		invalidateUserSession(c, h.db, id)
 	}
-	response.OKMsg(c, "更新成功", userDetailItem(u))
+	response.OKMsg(c, "更新成功", userDetailItem(u, caller.HasRole(model.RoleSystemAdmin)))
 }
 
 // Delete 删除用户
@@ -193,7 +195,7 @@ func (h *User) UpdateStatus(c *gin.Context) {
 	if status == 0 {
 		invalidateUserSession(c, h.db, id)
 	}
-	response.OKMsg(c, "操作成功", userDetailItem(u))
+	response.OKMsg(c, "操作成功", userDetailItem(u, caller.HasRole(model.RoleSystemAdmin)))
 }
 
 // BatchStatus 批量启用/禁用
@@ -383,7 +385,7 @@ func (h *User) UpdateSupervisorScope(c *gin.Context) {
 		return
 	}
 	invalidateUserAuth(c, id)
-	response.OKMsg(c, "更新成功", userDetailItem(u))
+	response.OKMsg(c, "更新成功", userDetailItem(u, caller.HasRole(model.RoleSystemAdmin)))
 }
 
 // intListJSON 解析 int / []int / null 形态的 JSON 字段；解析失败返回错误（对齐旧端 500）
@@ -432,48 +434,57 @@ func userIDExtOf(c *gin.Context, key string) (int, int, bool) {
 	return id, extID, true
 }
 
-// userListItem 组装用户列表项（字段与旧端 _build_user_list_response 一致）
-func userListItem(u *model.User) gin.H {
-	return gin.H{
-		"id":                             u.ID,
-		"user_no":                        u.UserNo,
-		"username":                       u.Username,
-		"role":                           u.Role,
-		"role_name":                      model.RoleName(u.Role),
-		"roles":                          dedupeStrings(u.RoleCodes()),
-		"user_roles":                     userRolesInfo(u),
-		"college_id":                     u.CollegeID,
-		"college_name":                   collegeName(u.College),
-		"research_room_id":               u.ResearchRoomID,
-		"research_room_name":             roomName(u.ResearchRoom),
-		"supervisor_college_count":       len(u.UserColleges),
-		"supervisor_research_room_count": len(u.UserRooms),
-		"colleges":                       userCollegeInfos(u),
-		"research_rooms":                 userRoomInfos(u),
-		"status":                         u.Status,
-		"last_login_time":                u.LastLoginTime,
-		"create_time":                    u.CreateTime,
+// userListItem 组装用户列表项（字段与旧端 _build_user_list_response 一致）。
+// includeScope 仅系统管理员为 true：督导负责范围（colleges/research_rooms 及计数）
+// 只有系统管理员可读写（见 service.UpdateSupervisorScope），非系统管理员不返回。
+func userListItem(u *model.User, includeScope bool) gin.H {
+	item := gin.H{
+		"id":                 u.ID,
+		"user_no":            u.UserNo,
+		"username":           u.Username,
+		"role":               u.Role,
+		"role_name":          model.RoleName(u.Role),
+		"roles":              dedupeStrings(u.RoleCodes()),
+		"user_roles":         userRolesInfo(u),
+		"college_id":         u.CollegeID,
+		"college_name":       collegeName(u.College),
+		"research_room_id":   u.ResearchRoomID,
+		"research_room_name": roomName(u.ResearchRoom),
+		"status":             u.Status,
+		"last_login_time":    u.LastLoginTime,
+		"create_time":        u.CreateTime,
 	}
+	if includeScope {
+		item["supervisor_college_count"] = len(u.UserColleges)
+		item["supervisor_research_room_count"] = len(u.UserRooms)
+		item["colleges"] = userCollegeInfos(u)
+		item["research_rooms"] = userRoomInfos(u)
+	}
+	return item
 }
 
-// userDetailItem 组装用户详情项（字段与旧端 _build_user_detail_response 一致）
-func userDetailItem(u *model.User) gin.H {
-	return gin.H{
-		"id":                        u.ID,
-		"user_no":                   u.UserNo,
-		"username":                  u.Username,
-		"role":                      u.Role,
-		"role_name":                 model.RoleName(u.Role),
-		"roles":                     userRolesInfo(u),
-		"status":                    u.Status,
-		"college_id":                u.CollegeID,
-		"research_room_id":          u.ResearchRoomID,
-		"supervisor_colleges":       userCollegeInfos(u),
-		"supervisor_research_rooms": userRoomInfos(u),
-		"last_login_time":           u.LastLoginTime,
-		"create_time":               u.CreateTime,
-		"update_time":               u.UpdateTime,
+// userDetailItem 组装用户详情项（字段与旧端 _build_user_detail_response 一致）。
+// includeScope 语义同 userListItem：非系统管理员不返回督导负责范围。
+func userDetailItem(u *model.User, includeScope bool) gin.H {
+	item := gin.H{
+		"id":               u.ID,
+		"user_no":          u.UserNo,
+		"username":         u.Username,
+		"role":             u.Role,
+		"role_name":        model.RoleName(u.Role),
+		"roles":            userRolesInfo(u),
+		"status":           u.Status,
+		"college_id":       u.CollegeID,
+		"research_room_id": u.ResearchRoomID,
+		"last_login_time":  u.LastLoginTime,
+		"create_time":      u.CreateTime,
+		"update_time":      u.UpdateTime,
 	}
+	if includeScope {
+		item["supervisor_colleges"] = userCollegeInfos(u)
+		item["supervisor_research_rooms"] = userRoomInfos(u)
+	}
+	return item
 }
 
 // userRolesInfo 角色 [{role, role_name, assign_time}]

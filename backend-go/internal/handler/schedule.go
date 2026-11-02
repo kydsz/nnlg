@@ -122,12 +122,12 @@ func (h *Schedule) Teachers(c *gin.Context) {
 	for i := range users {
 		u := &users[i]
 		list = append(list, gin.H{
-			"id":                u.ID,
-			"user_no":           u.UserNo,
-			"username":          u.Username,
-			"college_id":        u.CollegeID,
-			"college_name":      collegeName(u.College),
-			"research_room_id":  u.ResearchRoomID,
+			"id":                 u.ID,
+			"user_no":            u.UserNo,
+			"username":           u.Username,
+			"college_id":         u.CollegeID,
+			"college_name":       collegeName(u.College),
+			"research_room_id":   u.ResearchRoomID,
 			"research_room_name": roomName(u.ResearchRoom),
 		})
 	}
@@ -239,8 +239,21 @@ func validWeeks(w *int) bool {
 	return w == nil || (*w >= 1 && *w <= 52)
 }
 
-// CreateSemesterConfig 新建学期配置（管理员）
+// requireSystemAdminSemesterConfig 学期配置是校级配置，仅系统管理员可维护；
+// 其余角色（含学院管理员）只读查询（见 RBAC.md）
+func requireSystemAdminSemesterConfig(c *gin.Context) bool {
+	if !middleware.CurrentUser(c).HasRole(model.RoleSystemAdmin) {
+		forbidden(c, "仅系统管理员可维护学期配置")
+		return false
+	}
+	return true
+}
+
+// CreateSemesterConfig 新建学期配置（仅系统管理员）
 func (h *Schedule) CreateSemesterConfig(c *gin.Context) {
+	if !requireSystemAdminSemesterConfig(c) {
+		return
+	}
 	var p struct {
 		Semester  string  `json:"semester" binding:"required"`
 		StartDate *string `json:"start_date" binding:"required"`
@@ -280,8 +293,11 @@ func (h *Schedule) CreateSemesterConfig(c *gin.Context) {
 	response.OK(c, cfg)
 }
 
-// UpdateSemesterConfig 更新学期配置（管理员，不存在则创建，对齐旧端）
+// UpdateSemesterConfig 更新学期配置（仅系统管理员，不存在则创建，对齐旧端）
 func (h *Schedule) UpdateSemesterConfig(c *gin.Context) {
+	if !requireSystemAdminSemesterConfig(c) {
+		return
+	}
 	var p struct {
 		StartDate *string `json:"start_date"`
 		Weeks     *int    `json:"weeks"`
@@ -312,8 +328,11 @@ func (h *Schedule) UpdateSemesterConfig(c *gin.Context) {
 	response.OK(c, cfg)
 }
 
-// DeleteSemesterConfig 删除学期配置（管理员，当前学期不可删除）
+// DeleteSemesterConfig 删除学期配置（仅系统管理员，当前学期不可删除）
 func (h *Schedule) DeleteSemesterConfig(c *gin.Context) {
+	if !requireSystemAdminSemesterConfig(c) {
+		return
+	}
 	if err := h.svc.DeleteSemesterConfig(h.db, c.Param("semester")); err != nil {
 		badReq(c, err.Error())
 		return

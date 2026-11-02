@@ -107,11 +107,21 @@ func TestTeacherScopeOf(t *testing.T) {
 	}{
 		{"system_admin 全校", &model.User{Role: model.RoleSystemAdmin}, nil},
 		{"school_supervisor 全校", &model.User{Role: model.RoleSchoolSupervisor}, nil},
-		{"college_admin 无学院全校", &model.User{Role: model.RoleCollegeAdmin}, nil},
+		{"college_admin 无学院为空范围", &model.User{Role: model.RoleCollegeAdmin}, &TeacherScope{CollegeIDs: []int{}, RoomIDs: []int{}}},
+		{
+			"college_admin 仅主学院不叠加负责学院/教研室",
+			&model.User{
+				Role:         model.RoleCollegeAdmin,
+				CollegeID:    intPtr(1),
+				UserColleges: []model.UserCollege{{CollegeID: 2}},
+				UserRooms:    []model.UserRoom{{ResearchRoomID: 5}},
+			},
+			&TeacherScope{CollegeIDs: []int{1}, RoomIDs: []int{}},
+		},
 		{
 			"督导负责学院+教研室",
 			&model.User{
-				Role: model.RoleSupervisor,
+				Role:         model.RoleSupervisor,
 				UserColleges: []model.UserCollege{{CollegeID: 2}, {CollegeID: 3}},
 				UserRooms:    []model.UserRoom{{ResearchRoomID: 5}},
 			},
@@ -204,10 +214,10 @@ func teacherScopeTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("灌入用户失败: %v", err)
 	}
 	seed := []struct {
-		ucUser  int
-		ucColl  int
+		ucUser   int
+		ucColl   int
 		roomUser int
-		roomID  int
+		roomID   int
 	}{
 		{ucUser: int(users[1].ID), ucColl: 5},
 		{ucUser: int(users[3].ID), ucColl: 5},

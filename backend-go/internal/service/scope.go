@@ -43,11 +43,19 @@ func IsSupervisor(u *model.User) bool {
 	return u.HasAnyRole(model.SupervisorRoleCodes...)
 }
 
-// AccessibleCollegeIDs 用户可访问的学院 ID 集合（主学院 + 督导负责学院）；nil 表示全校
-// 对齐旧端：college_admin/school_admin 在无任何学院时也视为全校
+// AccessibleCollegeIDs 用户可访问的学院 ID 集合（主学院 + 督导负责学院）；nil 表示全校。
+//
+// 学院管理员（college_admin / school_admin）的权限都以「本学院」为界：仅本人主学院
+// （与 UserManageCollegeIDs 同口径），不认 user_college 里的督导「负责学院」，
+// 未绑定学院时为空集（fail-closed）——评教任务、评教记录、统计报表、教师评教汇总等
+// 一律按该范围收敛，不再沿用旧端「无学院视为全校」的兜底。
+// 其余角色（含三类督导）为主学院 + 督导负责学院。
 func AccessibleCollegeIDs(u *model.User) []int {
 	if IsAllScope(u) {
 		return nil
+	}
+	if u.HasAnyRole(model.RoleCollegeAdmin, model.RoleSchoolAdmin) {
+		return UserManageCollegeIDs(u)
 	}
 	seen := map[int]bool{}
 	var ids []int
@@ -61,9 +69,6 @@ func AccessibleCollegeIDs(u *model.User) []int {
 			ids = append(ids, uc.CollegeID)
 		}
 	}
-	if len(ids) == 0 && u.HasAnyRole(model.RoleCollegeAdmin, model.RoleSchoolAdmin) {
-		return nil
-	}
 	return ids
 }
 
@@ -75,7 +80,8 @@ func AccessibleCollegeIDs(u *model.User) []int {
 //     旧端「无学院视为全校」的兜底会把配错学院的管理员放大成全校权限。
 //
 // 返回 nil 表示全校（仅 system_admin）；空切片表示没有任何管理范围。
-// 仅用于用户管理（列表/详情/写操作），不要复用到任务、评教、统计等既有收敛口径上。
+// 除用户管理（列表/详情/写操作）外，也作为学院管理员在任务、评教、统计等
+// 数据范围上的统一口径（见 AccessibleCollegeIDs）。
 func UserManageCollegeIDs(u *model.User) []int {
 	if u.HasRole(model.RoleSystemAdmin) {
 		return nil

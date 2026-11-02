@@ -290,10 +290,21 @@ func TestUserAuthzRead(t *testing.T) {
 		}
 	})
 
-	t.Run("督导范围查询本学院成功", func(t *testing.T) {
+	t.Run("学院管理员查询本学院督导范围被拒（读写同权）", func(t *testing.T) {
+		// 督导负责范围仅系统管理员可修改（UpdateSupervisorScope），读侧同权收敛：
+		// 不可操作的数据同样不可读取，学院管理员一律 403
 		caller := authzCaller(t, db, "文理管理员")
+		_, err := svc.SupervisorScope(db, caller, authzID(t, db, "文理教师"))
+		code, ok := AsHTTPError(err)
+		if err == nil || !ok || code != 403 {
+			t.Fatalf("学院管理员查督导范围应返回 403, 得到 err=%v code=%d ok=%v", err, code, ok)
+		}
+	})
+
+	t.Run("系统管理员查询督导范围成功", func(t *testing.T) {
+		caller := authzCaller(t, db, "系统管理员")
 		if _, err := svc.SupervisorScope(db, caller, authzID(t, db, "文理教师")); err != nil {
-			t.Fatalf("本学院督导范围应成功: %v", err)
+			t.Fatalf("系统管理员查督导范围应成功: %v", err)
 		}
 	})
 

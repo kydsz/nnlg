@@ -127,7 +127,11 @@ func (s *Org) CollegeCounts(db *gorm.DB) (rooms map[int]int, users map[int]int) 
 	return
 }
 
-func (s *Org) CollegeCreate(db *gorm.DB, code, name string, campusID *int, sort int, status int16) (*model.College, error) {
+func (s *Org) CollegeCreate(db *gorm.DB, caller *model.User, code, name string, campusID *int, sort int, status int16) (*model.College, error) {
+	// 新建学院是校级组织行为，不属于任何人的「本学院」管理范围，仅系统管理员可操作
+	if !caller.HasRole(model.RoleSystemAdmin) {
+		return nil, errors.New("仅系统管理员可新建学院")
+	}
 	var cnt int64
 	db.Model(&model.College{}).Where("code = ?", code).Count(&cnt)
 	if cnt > 0 {
@@ -147,10 +151,14 @@ func (s *Org) CollegeCreate(db *gorm.DB, code, name string, campusID *int, sort 
 	return &col, nil
 }
 
-func (s *Org) CollegeUpdate(db *gorm.DB, id int, code, name *string, campusID *int, sort *int, status *int16) (*model.College, error) {
+func (s *Org) CollegeUpdate(db *gorm.DB, caller *model.User, id int, code, name *string, campusID *int, sort *int, status *int16) (*model.College, error) {
 	var col model.College
 	if err := db.First(&col, id).Error; err != nil {
 		return nil, errors.New("学院不存在")
+	}
+	// 读写同权：非系统管理员只能管理本人主学院（UserManageCollegeIDs，fail-closed）
+	if err := checkManageScope(caller, &col.ID); err != nil {
+		return nil, errors.New("无权管理该学院")
 	}
 	updates := map[string]interface{}{}
 	if code != nil && *code != col.Code {
@@ -182,7 +190,15 @@ func (s *Org) CollegeUpdate(db *gorm.DB, id int, code, name *string, campusID *i
 	return &col, nil
 }
 
-func (s *Org) CollegeDelete(db *gorm.DB, id int) error {
+func (s *Org) CollegeDelete(db *gorm.DB, caller *model.User, id int) error {
+	var col model.College
+	if err := db.First(&col, id).Error; err != nil {
+		return errors.New("学院不存在")
+	}
+	// 读写同权：非系统管理员只能管理本人主学院
+	if err := checkManageScope(caller, &col.ID); err != nil {
+		return errors.New("无权管理该学院")
+	}
 	var rooms, users int64
 	db.Model(&model.ResearchRoom{}).Where("college_id = ? AND status = 1", id).Count(&rooms)
 	db.Table("user").Where("college_id = ? AND status = 1", id).Count(&users)
@@ -217,7 +233,11 @@ func (s *Org) RoomList(db *gorm.DB, keyword, collegeID string, status *int16, sc
 	return list, err
 }
 
-func (s *Org) RoomCreate(db *gorm.DB, code, name string, collegeID int, status int16) (*model.ResearchRoom, error) {
+func (s *Org) RoomCreate(db *gorm.DB, caller *model.User, code, name string, collegeID int, status int16) (*model.ResearchRoom, error) {
+	// 读写同权：非系统管理员只能在本人主学院下新建教研室（fail-closed）
+	if err := checkManageScope(caller, &collegeID); err != nil {
+		return nil, errors.New("无权在该学院下新建教研室")
+	}
 	var cnt int64
 	db.Model(&model.ResearchRoom{}).Where("code = ?", code).Count(&cnt)
 	if cnt > 0 {
@@ -235,10 +255,19 @@ func (s *Org) RoomCreate(db *gorm.DB, code, name string, collegeID int, status i
 	return &room, nil
 }
 
-func (s *Org) RoomUpdate(db *gorm.DB, id int, code, name *string, collegeID *int, status *int16) (*model.ResearchRoom, error) {
+func (s *Org) RoomUpdate(db *gorm.DB, caller *model.User, id int, code, name *string, collegeID *int, status *int16) (*model.ResearchRoom, error) {
 	var room model.ResearchRoom
 	if err := db.First(&room, id).Error; err != nil {
 		return nil, errors.New("教研室不存在")
+	}
+	// 读写同权：非系统管理员只能管理本人主学院下的教研室，跨学院调整同样拦截
+	if err := checkManageScope(caller, &room.CollegeID); err != nil {
+		return nil, errors.New("无权管理该教研室")
+	}
+	if collegeID != nil {
+		if err := checkManageScope(caller, collegeID); err != nil {
+			return nil, errors.New("无权将该教研室调整到该学院")
+		}
 	}
 	updates := map[string]interface{}{}
 	if code != nil && *code != room.Code {
@@ -267,7 +296,15 @@ func (s *Org) RoomUpdate(db *gorm.DB, id int, code, name *string, collegeID *int
 	return &room, nil
 }
 
-func (s *Org) RoomDelete(db *gorm.DB, id int) error {
+func (s *Org) RoomDelete(db *gorm.DB, caller *model.User, id int) error {
+	var room model.ResearchRoom
+	if err := db.First(&room, id).Error; err != nil {
+		return errors.New("教研室不存在")
+	}
+	// 读写同权：非系统管理员只能管理本人主学院下的教研室
+	if err := checkManageScope(caller, &room.CollegeID); err != nil {
+		return errors.New("无权管理该教研室")
+	}
 	var users int64
 	db.Table("user").Where("research_room_id = ? AND status = 1", id).Count(&users)
 	db.Table("user_research_room").Where("research_room_id = ?", id).Count(&users)

@@ -22,6 +22,7 @@ import ScheduleGrid from '@/components/ScheduleGrid'
 import { formatSemester, generateSemesters } from '@/utils/format'
 import { useDebounce } from '@/hooks/useDebounce'
 import type { SemesterConfig, User } from '@/api/types'
+import { useAuthStore } from '@/stores/auth'
 
 export default function CourseSchedule() {
   const { message } = App.useApp()
@@ -93,6 +94,8 @@ export default function CourseSchedule() {
   const configList: SemesterConfig[] = Array.isArray(configs)
     ? configs
     : (configs as { list?: SemesterConfig[] } | undefined)?.list || []
+  // 学期配置是校级配置，仅系统管理员可维护；其余角色（含学院管理员）只读查询
+  const canManageSemester = (useAuthStore((s) => s.user)?.roles || []).includes('system_admin')
 
   const semesterOptions = Array.from(
     new Set([...(dynamicSemesters || []), ...configList.map((c) => c.semester)])
@@ -115,69 +118,80 @@ export default function CourseSchedule() {
                   <strong>{formatSemester(c.semester)}</strong>
                   {c.is_current && <Tag color="green">当前学期</Tag>}
                 </Space>
-                <Space wrap>
-                  <Input
-                    size="small"
-                    type="date"
-                    defaultValue={c.start_date?.slice(0, 10)}
-                    style={{ width: 150 }}
-                    onBlur={(e) => {
-                      if (e.target.value && e.target.value !== c.start_date?.slice(0, 10)) {
-                        updateMut.mutate({
-                          semester: c.semester,
-                          data: { start_date: e.target.value },
-                        })
-                      }
-                    }}
-                  />
-                  <span style={{ color: '#666', fontSize: 12 }}>周数</span>
-                  <InputNumber
-                    size="small"
-                    min={1}
-                    max={52}
-                    step={1}
-                    defaultValue={c.weeks || 20}
-                    style={{ width: 76 }}
-                    onBlur={(e) => {
-                      const v = Number((e.target as HTMLInputElement).value)
-                      const old = c.weeks || 20
-                      if (Number.isInteger(v) && v >= 1 && v <= 52 && v !== old) {
-                        updateMut.mutate({ semester: c.semester, data: { weeks: v } })
-                      }
-                    }}
-                  />
-                  {!c.is_current && (
-                    <Button
+                {canManageSemester ? (
+                  <Space wrap>
+                    <Input
                       size="small"
-                      onClick={() =>
-                        updateMut.mutate({ semester: c.semester, data: { is_current: true } })
-                      }
+                      type="date"
+                      defaultValue={c.start_date?.slice(0, 10)}
+                      style={{ width: 150 }}
+                      onBlur={(e) => {
+                        if (e.target.value && e.target.value !== c.start_date?.slice(0, 10)) {
+                          updateMut.mutate({
+                            semester: c.semester,
+                            data: { start_date: e.target.value },
+                          })
+                        }
+                      }}
+                    />
+                    <span style={{ color: '#666', fontSize: 12 }}>周数</span>
+                    <InputNumber
+                      size="small"
+                      min={1}
+                      max={52}
+                      step={1}
+                      defaultValue={c.weeks || 20}
+                      style={{ width: 76 }}
+                      onBlur={(e) => {
+                        const v = Number((e.target as HTMLInputElement).value)
+                        const old = c.weeks || 20
+                        if (Number.isInteger(v) && v >= 1 && v <= 52 && v !== old) {
+                          updateMut.mutate({ semester: c.semester, data: { weeks: v } })
+                        }
+                      }}
+                    />
+                    {!c.is_current && (
+                      <Button
+                        size="small"
+                        onClick={() =>
+                          updateMut.mutate({ semester: c.semester, data: { is_current: true } })
+                        }
+                      >
+                        设为当前
+                      </Button>
+                    )}
+                    <Popconfirm
+                      title="删除学期配置"
+                      description={`确定删除 ${formatSemester(c.semester)} 的学期配置吗？`}
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => deleteMut.mutate(c.semester)}
                     >
-                      设为当前
-                    </Button>
-                  )}
-                  <Popconfirm
-                    title="删除学期配置"
-                    description={`确定删除 ${formatSemester(c.semester)} 的学期配置吗？`}
-                    okText="删除"
-                    cancelText="取消"
-                    okButtonProps={{ danger: true }}
-                    onConfirm={() => deleteMut.mutate(c.semester)}
-                  >
-                    <Button size="small" danger icon={<DeleteOutlined />}>
-                      删除
-                    </Button>
-                  </Popconfirm>
-                </Space>
+                      <Button size="small" danger icon={<DeleteOutlined />}>
+                        删除
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                ) : (
+                  <Space direction="vertical" size={2}>
+                    <span style={{ color: '#666', fontSize: 12 }}>
+                      开课：{c.start_date?.slice(0, 10) || '-'}
+                    </span>
+                    <span style={{ color: '#666', fontSize: 12 }}>周数：{c.weeks || 20}</span>
+                  </Space>
+                )}
               </Space>
             </Card>
           ))}
         </div>
-        <CreateSemesterForm
-          existing={configList.map((c) => c.semester)}
-          onCreate={(v) => createMut.mutate(v)}
-          loading={createMut.isPending}
-        />
+        {canManageSemester && (
+          <CreateSemesterForm
+            existing={configList.map((c) => c.semester)}
+            onCreate={(v) => createMut.mutate(v)}
+            loading={createMut.isPending}
+          />
+        )}
       </Card>
 
       {/* 课表查看 */}

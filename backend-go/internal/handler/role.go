@@ -27,6 +27,45 @@ func (h *RoleHandler) PermissionGroups(c *gin.Context) {
 	response.OK(c, h.svc.PermissionGroups())
 }
 
+// canManageRole 是否可管理角色（role:manage；系统管理员恒有全部权限）
+func canManageRole(c *gin.Context, db *gorm.DB) bool {
+	u := middleware.CurrentUser(c)
+	if u.HasRole(model.RoleSystemAdmin) {
+		return true
+	}
+	for _, p := range u.Permissions(db) {
+		if p == "role:manage" {
+			return true
+		}
+	}
+	return false
+}
+
+// roleViewItem 角色响应视图。
+// 无 role:manage 的调用者（如学院管理员）不返回 permissions/data_scope/level 等角色配置——
+// 不可管理的角色配置也不作为可读数据返回，只保留展示所需的名称/编码等字段；
+// assignable 标记该角色是否可由调用者分配给用户（与写侧 checkRoleAssignable 同一口径），
+// 前端「新增/编辑用户」的角色下拉据此收敛，不展示不可分配的角色。
+func roleViewItem(c *gin.Context, r service.RoleWithCount, manage bool) gin.H {
+	allowed := service.AssignableRoles(middleware.CurrentUser(c))
+	item := gin.H{
+		"id":          r.ID,
+		"name":        r.Name,
+		"code":        r.Code,
+		"description": r.Description,
+		"status":      r.Status,
+		"is_system":   r.IsSystem,
+		"user_count":  r.UserCount,
+		"assignable":  allowed == nil || allowed[r.Code],
+	}
+	if manage {
+		item["level"] = r.Level
+		item["permissions"] = r.Permissions
+		item["data_scope"] = r.DataScope
+	}
+	return item
+}
+
 // List 角色列表
 func (h *RoleHandler) List(c *gin.Context) {
 	u := middleware.CurrentUser(c)
@@ -36,8 +75,13 @@ func (h *RoleHandler) List(c *gin.Context) {
 		serverErr(c, "查询失败")
 		return
 	}
+	manage := canManageRole(c, h.db)
+	out := make([]gin.H, 0, len(list))
+	for i := range list {
+		out = append(out, roleViewItem(c, list[i], manage))
+	}
 	_, size := pageOfDefault(c, 100)
-	response.OK(c, pageData(c, list, int64(len(list)), size))
+	response.OK(c, pageData(c, out, int64(len(out)), size))
 }
 
 // Get 角色详情
@@ -48,7 +92,7 @@ func (h *RoleHandler) Get(c *gin.Context) {
 		response.Fail(c, 404, "角色不存在")
 		return
 	}
-	response.OK(c, role)
+	response.OK(c, roleViewItem(c, *role, canManageRole(c, h.db)))
 }
 
 // Create 新增角色

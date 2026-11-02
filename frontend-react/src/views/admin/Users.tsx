@@ -24,6 +24,7 @@ import { roleApi } from '@/api/modules/roles'
 import type { User } from '@/api/types'
 import { ROLE_NAMES } from '@/utils/roleNames'
 import { formatDate } from '@/utils/format'
+import { useAuthStore } from '@/stores/auth'
 
 // 督导角色才允许配置督导负责范围
 const SUPERVISOR_ROLES = ['school_supervisor', 'college_supervisor', 'supervisor']
@@ -32,6 +33,9 @@ const isSupervisorUser = (u: User) => (u.roles || []).some((r) => SUPERVISOR_ROL
 export default function Users() {
   const { message } = App.useApp()
   const qc = useQueryClient()
+  const authUser = useAuthStore((s) => s.user)
+  // 督导负责范围仅系统管理员可读写（服务端同权校验），非系统管理员不提供入口
+  const canManageScope = (authUser?.roles || []).includes('system_admin')
   const [params, setParams] = useState<UserListParams>({ page: 1, page_size: 20 })
   const [keyword, setKeyword] = useState('')
   const [sortState, setSortState] = useState<{ field?: string; order?: 'ascend' | 'descend' }>({})
@@ -61,6 +65,11 @@ export default function Users() {
   const collegeOptions = (colleges?.list || []).map((c) => ({ label: c.name, value: c.id }))
   const roomOptions = (rooms?.list || []).map((r) => ({ label: r.name, value: r.id }))
   const roleOptions = (roles?.list || []).map((r) => ({ label: r.name, value: r.code }))
+  // 新增/编辑用户的角色下拉只展示当前账号可分配的角色（与服务端 checkRoleAssignable 同一口径），
+  // 不可分配的角色既不可选，也不出现在下拉里
+  const assignableRoleOptions = (roles?.list || [])
+    .filter((r) => r.assignable !== false)
+    .map((r) => ({ label: r.name, value: r.code }))
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['users'] })
 
@@ -209,13 +218,15 @@ export default function Users() {
           >
             编辑
           </Button>
-          <Button
-            size="small"
-            disabled={!isSupervisorUser(record)}
-            onClick={() => setScopeUser(record)}
-          >
-            督导范围
-          </Button>
+          {canManageScope && (
+            <Button
+              size="small"
+              disabled={!isSupervisorUser(record)}
+              onClick={() => setScopeUser(record)}
+            >
+              督导范围
+            </Button>
+          )}
           <Popconfirm title="确认删除？" onConfirm={() => delMut.mutate(record.id)}>
             <Button size="small" danger>
               删除
@@ -347,7 +358,7 @@ export default function Users() {
             <Input.Password />
           </Form.Item>
           <Form.Item name="roles" label="角色（多选）" rules={[{ required: true, message: '请选择角色' }]}>
-            <Select mode="multiple" options={roleOptions} placeholder="选择角色" />
+            <Select mode="multiple" options={assignableRoleOptions} placeholder="选择角色" />
           </Form.Item>
           <Form.Item name="college_id" label="所属学院">
             <Select allowClear options={collegeOptions} />

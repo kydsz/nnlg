@@ -46,6 +46,8 @@
 
 > 说明：`school_admin` 是兼容旧数据的角色编码，显示名同为"学院管理员"，与 `college_admin` 等价处理；具体优先级以 `migration_rbac_roles.sql` 初始化数据为准。
 
+> **学院管理员的数据范围统一为「本学院」（主学院口径）**：评教任务、评教记录、统计报表、教师评教汇总、课表教师范围等一律经 `AccessibleCollegeIDs` 收敛——`college_admin` / `school_admin` **仅本人主学院**（与 `UserManageCollegeIDs` 同口径），不认 `user_college` 里的督导「负责学院」，未绑定学院时为空集（fail-closed），不再沿用旧端「无学院视为全校」的兜底；其余角色（含三类督导）为主学院 + 负责学院，`system_admin` / `school_supervisor` 为全校。
+
 ## 权限列表
 
 ### 用户管理
@@ -54,11 +56,21 @@
 
 > **数据范围（用户管理口径）**：与 `data_scope` 无关，由 `service.UserManageCollegeIDs` 统一给出。系统管理员（`system_admin`）为全校；学院管理员（`college_admin` / `school_admin`）仅限**本人主学院**——归属按用户的 `college_id`（主学院）判定，不认 `user_college` 里的督导「负责学院」；管理类角色**未绑定学院时为空集（fail-closed）**，列表返回空、详情与写操作一律拒绝，不再沿用旧端「无学院视为全校」的兜底。其它角色（含校级督导）不享有用户管理范围。
 >
-> 该范围同时作用于：列表（`college_id` 筛选只能收窄，与范围取交集）、详情、督导范围查询、启用/禁用、批量启停用、新增用户（非系统管理员只能在本学院建号，未指定学院时默认本学院）、编辑/删除/加角色/改学院/改教研室。**同学院管理员账号之间仅系统管理员可互相操作**（防止同级之间改密、禁用、降权），操作自身账号与系统管理员的既有保护不受影响。
+> 该范围同时作用于：列表（`college_id` 筛选只能收窄，与范围取交集）、详情、启用/禁用、批量启停用、新增用户（非系统管理员只能在本学院建号，未指定学院时默认本学院）、编辑/删除/加角色/改学院/改教研室。**同学院管理员账号之间仅系统管理员可互相操作**（防止同级之间改密、禁用、降权），操作自身账号与系统管理员的既有保护不受影响。
+>
+> **读侧与写侧同权（不可操作即不可读取）**：非系统管理员的用户列表/详情**不返回**其不可操作的管理员账号（`system_admin` / 其他 `college_admin` / `school_admin`，自己除外）——这些账号的写操作被 `checkTargetUser` 拒绝，读接口同样不给信息，堵住「操作不了但还能拿到账号信息」的旁路；系统管理员列表不受限。
+>
+> **督导负责范围读写同权（仅系统管理员）**：`GET /users/{id}/supervisor-scope` 与 `PUT /users/{id}/supervisor-scope` 同为**仅系统管理员**（`service.SupervisorScope` / `service.UpdateSupervisorScope`），非系统管理员查询返回 403；用户列表/详情里的督导负责范围字段（`colleges` / `research_rooms` / `supervisor_colleges` / `supervisor_research_rooms` 及计数）也只对系统管理员返回。
 
 ### 组织架构
 
 * org:view / campus:manage / college:manage / research\_room:manage
+
+> **学院/教研室读写同权（主学院口径）**：学院与教研室的可见、可管理范围一律按「本学院」收敛，不可管理即不可读取。
+>
+> * 可见范围（`GET /colleges`、`GET /colleges/{id}`、`GET /research-rooms`、`GET /research-rooms/{id}`）：system\_admin 全校；管理类角色（`college_admin` / `school_admin`）**仅本人主学院**（`UserManageCollegeIDs`，不认 `user_college` 里的督导「负责学院」，未绑定学院时为空集 fail-closed）；其余角色（含三类督导、教师自助设置教研室）为主学院 + 督导负责学院。越界详情返回 403，越界列表返回空。
+> * 写范围（新建/编辑/删除教研室、编辑/删除学院）：与可见范围同一口径（`checkManageScope`），越界一律拒绝；教研室调整学院时新旧学院都须在范围内。
+> * **新建学院仅系统管理员**（校级组织行为，不属于任何人的「本学院」管理范围）；前端 `/admin/colleges` 的「新增学院」按钮仅系统管理员可见。
 
 ### 角色管理
 
@@ -115,6 +127,8 @@
 > `schedule:view`：查看课程表。`/course-schedules` 整组接口（含列表/选教师/查教师课表）均需该权限。
 >
 > `schedule:view_college`：查看**本学院**其他教师的课表（移动端课表页「选择教师」弹层）。分配给 `teacher` 内置角色后，普通教师即可打开选择器查看本院其他教师的课表；教师可见范围由 `TeacherScopeOf` 天然限定为「教师主学院」。历史角色缺失该权限的由迁移 `003_add_schedule_view_college_to_teacher.sql` 自动补齐（幂等）。管理员（`user:view`）/督导（`schedule:view + 督导角色`）无需该权限亦可查看。
+>
+> **学期配置（校级配置，仅系统管理员可维护）**：`POST/PUT/DELETE /course-schedules/semester-configs` 仅系统管理员可操作（`handler.requireSystemAdminSemesterConfig`，非系统管理员一律 403），其余角色（含学院管理员）只读查询——学院管理员不需要学期配置管理。前端 `/admin/course-schedule` 的学期配置编辑/删除/新增入口仅系统管理员可见，其他角色只展示查询结果。
 
 ### 数据同步
 
@@ -158,6 +172,8 @@
 
 ### 角色管理（接口需 `role:manage`，列表/详情需 `user:view`）
 
+> **读侧收敛**：`GET /roles`、`GET /roles/{id}` 对无 `role:manage` 的调用者（如学院管理员）只返回基本字段（名称/编码/描述/状态/内置/使用人数）与 `assignable` 标记，**不返回 `permissions` / `data_scope` / `level` 等角色配置**——不可管理的配置同样不可读取。`assignable` 与写侧 `checkRoleAssignable`（`service.AssignableRoles`）同一口径：系统管理员全部可分配，`school_admin` 可分配三类督导与教师，`college_admin` 仅教师；前端「新增/编辑用户」的角色下拉据此只展示可分配角色，不可分配的角色既不可选也不出现在下拉里。
+
 * GET    /roles                  获取角色列表（非 system\_admin 仅见启用角色）
 
 * GET    /roles/permissions      获取权限码目录
@@ -190,7 +206,7 @@
 
 * DELETE /users/{id}/roles/{role}         移除角色（user:update）
 
-* GET    /users/{id}/supervisor-scope     查询督导负责范围（user:view）
+* GET    /users/{id}/supervisor-scope     查询督导负责范围（user:view + 仅系统管理员）
 
 * PUT    /users/{id}/supervisor-scope     覆盖式设置督导负责范围（user:update）
 
@@ -226,6 +242,8 @@
 角色选择下拉已包含校级督导、院级督导等新增角色。
 
 页面数据范围由服务端按调用者收敛（见上文「用户管理」），前端不再依赖「学院」下拉来限定范围：学院管理员的 `GET /colleges` 只返回本学院，即便手工改请求参数也拿不到院外用户。
+
+「督导范围」按钮仅系统管理员可见（服务端读写同权，非系统管理员查询 403）；「新增/编辑用户」的角色下拉按 `GET /roles` 返回的 `assignable` 只展示当前账号可分配的角色。
 
 ### 移动端首页（/mobile）
 

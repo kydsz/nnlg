@@ -5,10 +5,14 @@ import { PlusOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { orgApi } from '@/api/modules/org'
 import type { College } from '@/api/types'
+import { useAuthStore } from '@/stores/auth'
 
 export default function Colleges() {
   const { message } = App.useApp()
   const qc = useQueryClient()
+  const authUser = useAuthStore((s) => s.user)
+  // 新建学院是校级组织行为，仅系统管理员可操作（服务端同权校验）
+  const canCreateCollege = (authUser?.roles || []).includes('system_admin')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<College | null>(null)
   const [campusFilter, setCampusFilter] = useState<number | undefined>()
@@ -98,17 +102,19 @@ export default function Colleges() {
           value={campusFilter}
           onChange={setCampusFilter}
         />
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => {
-            setEditing(null)
-            form.resetFields()
-            setModalOpen(true)
-          }}
-        >
-          新增学院
-        </Button>
+        {canCreateCollege && (
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              setEditing(null)
+              form.resetFields()
+              setModalOpen(true)
+            }}
+          >
+            新增学院
+          </Button>
+        )}
       </div>
       <Table<College>
         rowKey="id"

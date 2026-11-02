@@ -64,7 +64,7 @@
 | DELETE | /users/:id/colleges/:college\_id                  | user:update                                          |
 | POST   | /users/:id/research-rooms/:room\_id               | user:update                                          |
 | DELETE | /users/:id/research-rooms/:room\_id               | user:update                                          |
-| GET    | /users/:id/supervisor-scope                       | user:view                                            |
+| GET    | /users/:id/supervisor-scope                       | user:view（仅系统管理员），见 RBAC.md「督导负责范围读写同权」            |
 | PUT    | /users/:id/supervisor-scope                       | user:update                                          |
 | POST   | /users/batch-status                               | user:update                                          |
 | PUT    | /users/me/research-room                           | -                                                    |
@@ -412,9 +412,11 @@ DELETE /users/{user_id}/roles/{role}    # 移除角色
 ### 督导负责范围
 
 ```http
-GET /users/{user_id}/supervisor-scope   # 查询
-PUT /users/{user_id}/supervisor-scope   # 覆盖式更新
+GET /users/{user_id}/supervisor-scope   # 查询（仅系统管理员）
+PUT /users/{user_id}/supervisor-scope   # 覆盖式更新（仅系统管理员）
 ```
+
+> 读写同权：非系统管理员查询返回 403；用户列表/详情中的督导负责范围字段（`colleges` / `research_rooms` / `supervisor_colleges` / `supervisor_research_rooms` 及计数）也只对系统管理员返回。详见 RBAC.md。
 
 **更新请求体**:
 
@@ -450,6 +452,8 @@ GET /roles?page=1&page_size=100
 ```
 
 列表项含 `user_count`（角色使用人数）；非 system\_admin 仅能看到启用角色。
+
+> 读侧收敛：无 `role:manage` 的调用者只返回基本字段（`name` / `code` / `description` / `status` / `is_system` / `user_count`）与 `assignable`（该角色是否可由当前用户分配，与写侧 `checkRoleAssignable` 同口径），不返回 `permissions` / `data_scope` / `level` 等角色配置；`GET /roles/{id}` 同口径。详见 RBAC.md。
 
 ### 获取角色详情
 
@@ -526,6 +530,8 @@ POST   /colleges/sync-from-jwxt                              # 从教务系统�
 
 学院字段：`name`、`code`（编码，唯一，必填）、`campus_id`、`sort_order`、`status`。列表项含 `campus_name`、`research_room_count`、`user_count`。
 
+> 读写同权（主学院口径）：列表/详情/编辑/删除对非系统管理员仅限**本人主学院**（管理类角色不认督导「负责学院」，未绑定学院时为空集），越界详情 403、越界写操作拒绝；**新建学院仅系统管理员**。详见 RBAC.md「学院/教研室读写同权」。
+
 ### 教研室管理 (`/api/v1/research-rooms`)
 
 ```http
@@ -537,6 +543,8 @@ DELETE /research-rooms/{room_id}                                    # 删除（r
 ```
 
 教研室字段：`name`、`code`（编码，必填）、`college_id`（必填）、`status`。
+
+> 读写同权（主学院口径）：列表/详情/新建/编辑/删除均按调用者的学院范围收敛（管理类角色仅本人主学院；教师自助设置教研室为主学院+督导负责学院），越界详情 403、越界写操作拒绝；教研室调整学院时新旧学院都须在范围内。详见 RBAC.md「学院/教研室读写同权」。
 
 ***
 
@@ -950,12 +958,14 @@ GET    /course-schedules/stats?semester=2024-2025-1                             
 GET    /course-schedules/semester-configs                                            # 全部学期配置
 GET    /course-schedules/semester-configs/current                                    # 当前学期配置
 GET    /course-schedules/semester-configs/{semester}                                 # 指定学期配置
-POST   /course-schedules/semester-configs                                            # 新建学期配置（org:view）
-PUT    /course-schedules/semester-configs/{semester}                                 # 更新/创建学期配置（org:view）
-DELETE /course-schedules/semester-configs/{semester}                                 # 删除学期配置（org:view，当前学期不可删）
+POST   /course-schedules/semester-configs                                            # 新建学期配置（仅系统管理员）
+PUT    /course-schedules/semester-configs/{semester}                                 # 更新/创建学期配置（仅系统管理员）
+DELETE /course-schedules/semester-configs/{semester}                                 # 删除学期配置（仅系统管理员，当前学期不可删）
 ```
 
 学期配置请求体：`{ "semester": "2024-2025-1", "start_date": "2024-09-01", "weeks": 20, "is_current": false }`（更新时只需 `start_date` / `weeks` / `is_current`）。`weeks` 为每学期周数，范围 1-52，默认 20。
+
+> 学期配置是校级配置：新建/更新/删除**仅系统管理员**（非系统管理员一律 403，即便持有 `org:view` / `schedule:view`），其余角色只读查询。
 
 学期结束日期 = 开学日期 + weeks × 7 天，前端各评教统计页面的默认日期区间取该学期期间。
 

@@ -94,13 +94,42 @@ func (h *Org) CampusDelete(c *gin.Context) {
 
 // ---------- 学院 ----------
 
+// orgViewScope 组织架构（学院/教研室）列表与详情的可见范围（nil=全校）：
+//   - system_admin：全校；
+//   - 管理类角色（college_admin/school_admin）：仅本人主学院（UserManageCollegeIDs，fail-closed），
+//     不认督导「负责学院」，未绑定学院时为空集；
+//   - 其余角色（含三类督导）：主学院 + 督导负责学院（与自助改主教研室的写口径一致）。
+//
+// 读写同权：不可管理的学院/教研室也不可读取。
+func orgViewScope(u *model.User) []int {
+	switch {
+	case u.HasRole(model.RoleSystemAdmin):
+		return nil
+	case u.HasAnyRole(model.RoleCollegeAdmin, model.RoleSchoolAdmin):
+		return service.UserManageCollegeIDs(u)
+	default:
+		return service.AccessibleCollegeIDs(u)
+	}
+}
+
+// inOrgViewScope 学院是否在调用者的可见范围内
+func inOrgViewScope(u *model.User, collegeID int) bool {
+	ids := orgViewScope(u)
+	if ids == nil {
+		return true
+	}
+	for _, id := range ids {
+		if id == collegeID {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Org) CollegeList(c *gin.Context) {
 	u := middleware.CurrentUser(c)
-	// 学院管理员仅可见自己范围；其余角色全量
-	var scope []int
-	if u.HasAnyRole(model.RoleCollegeAdmin, model.RoleSchoolAdmin, model.RoleCollegeSupervisor) {
-		scope = service.AccessibleCollegeIDs(u)
-	}
+	// 读侧收敛：学院管理员仅可见本学院；其余角色按可见范围，系统管理员全量
+	scope := orgViewScope(u)
 	status := qInt16(c, "status")
 	list, err := h.svc.CollegeList(h.db, c.Query("keyword"), c.Query("campus_id"), status, scope)
 	if err != nil {
@@ -137,7 +166,7 @@ func (h *Org) CollegeCreate(c *gin.Context) {
 		badReq(c, "请求参数错误")
 		return
 	}
-	col, err := h.svc.CollegeCreate(h.db, p.Code, p.Name, p.CampusID, deref(p.SortOrder), 1)
+	col, err := h.svc.CollegeCreate(h.db, middleware.CurrentUser(c), p.Code, p.Name, p.CampusID, deref(p.SortOrder), 1)
 	if err != nil {
 		badReq(c, err.Error())
 		return
@@ -168,7 +197,7 @@ func (h *Org) CollegeUpdate(c *gin.Context) {
 	if p.Name != "" {
 		namePtr = &p.Name
 	}
-	col, err := h.svc.CollegeUpdate(h.db, id, codePtr, namePtr, p.CampusID, p.SortOrder, p.Status)
+	col, err := h.svc.CollegeUpdate(h.db, middleware.CurrentUser(c), id, codePtr, namePtr, p.CampusID, p.SortOrder, p.Status)
 	if err != nil {
 		badReq(c, err.Error())
 		return
@@ -186,7 +215,7 @@ func (h *Org) CollegeUpdate(c *gin.Context) {
 
 func (h *Org) CollegeDelete(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
-	if err := h.svc.CollegeDelete(h.db, id); err != nil {
+	if err := h.svc.CollegeDelete(h.db, middleware.CurrentUser(c), id); err != nil {
 		badReq(c, err.Error())
 		return
 	}
@@ -199,10 +228,8 @@ func (h *Org) CollegeDelete(c *gin.Context) {
 
 func (h *Org) RoomList(c *gin.Context) {
 	u := middleware.CurrentUser(c)
-	var scope []int
-	if u.HasAnyRole(model.RoleCollegeAdmin, model.RoleSchoolAdmin, model.RoleCollegeSupervisor) {
-		scope = service.AccessibleCollegeIDs(u)
-	}
+	// 读侧收敛口径同 CollegeList：学院管理员仅本学院教研室
+	scope := orgViewScope(u)
 	status := qInt16(c, "status")
 	list, err := h.svc.RoomList(h.db, c.Query("keyword"), c.Query("college_id"), status, scope)
 	if err != nil {
@@ -254,7 +281,7 @@ func (h *Org) RoomCreate(c *gin.Context) {
 		badReq(c, "请求参数错误")
 		return
 	}
-	room, err := h.svc.RoomCreate(h.db, p.Code, p.Name, *p.CollegeID, 1)
+	room, err := h.svc.RoomCreate(h.db, middleware.CurrentUser(c), p.Code, p.Name, *p.CollegeID, 1)
 	if err != nil {
 		badReq(c, err.Error())
 		return
@@ -284,7 +311,7 @@ func (h *Org) RoomUpdate(c *gin.Context) {
 	if p.Name != "" {
 		namePtr = &p.Name
 	}
-	room, err := h.svc.RoomUpdate(h.db, id, codePtr, namePtr, p.CollegeID, p.Status)
+	room, err := h.svc.RoomUpdate(h.db, middleware.CurrentUser(c), id, codePtr, namePtr, p.CollegeID, p.Status)
 	if err != nil {
 		badReq(c, err.Error())
 		return
@@ -300,7 +327,7 @@ func (h *Org) RoomUpdate(c *gin.Context) {
 
 func (h *Org) RoomDelete(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
-	if err := h.svc.RoomDelete(h.db, id); err != nil {
+	if err := h.svc.RoomDelete(h.db, middleware.CurrentUser(c), id); err != nil {
 		badReq(c, err.Error())
 		return
 	}
@@ -324,7 +351,7 @@ func (h *Org) CampusGet(c *gin.Context) {
 	})
 }
 
-// CollegeGet 学院详情（学院管理员/校级管理员仅可查看自己范围）
+// CollegeGet 学院详情（仅可见范围内可查，读写同权）
 func (h *Org) CollegeGet(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	var col model.College
@@ -333,11 +360,9 @@ func (h *Org) CollegeGet(c *gin.Context) {
 		return
 	}
 	u := middleware.CurrentUser(c)
-	if u.HasAnyRole(model.RoleCollegeAdmin, model.RoleSchoolAdmin) && !u.HasRole(model.RoleSystemAdmin) {
-		if !u.HasCollegeID(id) {
-			forbidden(c, "无权查看该学院")
-			return
-		}
+	if !inOrgViewScope(u, id) {
+		forbidden(c, "无权查看该学院")
+		return
 	}
 	campusNames := h.campusNameMap()
 	rooms, users := h.svc.CollegeCounts(h.db)
@@ -350,12 +375,16 @@ func (h *Org) CollegeGet(c *gin.Context) {
 	})
 }
 
-// RoomGet 教研室详情
+// RoomGet 教研室详情（仅可见范围内可查，读写同权）
 func (h *Org) RoomGet(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	var r model.ResearchRoom
 	if err := h.db.First(&r, id).Error; err != nil {
 		response.Fail(c, 404, "教研室不存在")
+		return
+	}
+	if !inOrgViewScope(middleware.CurrentUser(c), r.CollegeID) {
+		forbidden(c, "无权查看该教研室")
 		return
 	}
 	var userCnt int64

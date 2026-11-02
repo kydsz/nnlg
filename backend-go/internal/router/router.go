@@ -107,7 +107,8 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 	rooms := api.Group("/research-rooms", authMW)
 	{
-		// 列表接口不限权限（对齐旧端），教师移动端自助设置教研室需要
+		// 列表接口不限路由权限（对齐旧端），教师移动端自助设置教研室需要；
+		// 数据范围由服务端按调用者收敛（见 handler.orgViewScope，读写同权）
 		rooms.GET("", orgH.RoomList)
 		rooms.POST("", middleware.RequirePermission(db, "research_room:manage"), orgH.RoomCreate)
 		rooms.GET("/:id", middleware.RequirePermission(db, "org:view"), orgH.RoomGet)

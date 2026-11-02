@@ -63,6 +63,14 @@ func (s *User) List(db *gorm.DB, caller *model.User, p UserParams) ([]model.User
 	}
 
 	q := db.Model(&model.User{})
+	// 与 checkTargetUser 同口径：非系统管理员不得操作管理员账号（系统管理员/学院管理员），
+	// 这些账号的写操作一律被拒；读侧同样收敛——不可操作的账号也不返回（自己除外），
+	// 避免「操作不了但还能拿到账号信息」的旁路。
+	if !caller.HasRole(model.RoleSystemAdmin) {
+		adminCodes := []string{model.RoleSystemAdmin, model.RoleCollegeAdmin, model.RoleSchoolAdmin}
+		q = q.Where("`user`.id = ? OR (`user`.role NOT IN ? AND `user`.id NOT IN (SELECT user_id FROM user_role WHERE role IN ?))",
+			caller.ID, adminCodes, adminCodes)
+	}
 	if p.Keyword != "" {
 		kw := "%" + p.Keyword + "%"
 		q = q.Where("user_no LIKE ? OR username LIKE ?", kw, kw)
@@ -189,8 +197,10 @@ func intersectIDs(a, b []int) []int {
 	return out
 }
 
-// assignableRoles 按当前操作者返回可分配的角色编码集合；nil 表示全部
-func assignableRoles(caller *model.User) map[string]bool {
+// AssignableRoles 按当前操作者返回可分配的角色编码集合；nil 表示全部。
+// 读侧（GET /roles 的 assignable 标记）与写侧（checkRoleAssignable）共用同一口径，
+// 保证「不可分配的角色」既不可分配，也不出现在可分配清单里。
+func AssignableRoles(caller *model.User) map[string]bool {
 	switch {
 	case caller.HasRole(model.RoleSystemAdmin):
 		return nil // 全部
@@ -208,7 +218,7 @@ func assignableRoles(caller *model.User) map[string]bool {
 
 // checkRoleAssignable 校验角色编码可被 caller 分配
 func checkRoleAssignable(db *gorm.DB, caller *model.User, codes []string) error {
-	allowed := assignableRoles(caller)
+	allowed := AssignableRoles(caller)
 	for _, c := range codes {
 		if allowed != nil && !allowed[c] {
 			return errors.New("不可分配角色: " + c)
@@ -740,9 +750,14 @@ func (s *User) RemoveRoom(db *gorm.DB, caller *model.User, userID, roomID int) e
 	return nil
 }
 
-// SupervisorScope 督导负责范围查询（受调用者数据范围约束）
+// SupervisorScope 督导负责范围查询（仅系统管理员）。
+// 与 UpdateSupervisorScope 同一授权口径：督导负责范围只有系统管理员可修改，
+// 同样只有系统管理员可读取——不可操作的数据不作为可读数据返回。
 func (s *User) SupervisorScope(db *gorm.DB, caller *model.User, userID int) (*ScopeResult, error) {
-	u, err := s.GetScoped(db, caller, userID)
+	if !caller.HasRole(model.RoleSystemAdmin) {
+		return nil, errForbidden("仅系统管理员可查询督导负责范围")
+	}
+	u, err := s.GetByID(db, userID)
 	if err != nil {
 		return nil, err
 	}

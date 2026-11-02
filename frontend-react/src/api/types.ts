@@ -92,12 +92,15 @@ export interface RoleInfo {
   name: string
   code: string
   description?: string
-  level: number
-  permissions: string[]
-  data_scope: 'all' | 'college' | 'self'
+  level?: number
+  permissions?: string[]
+  data_scope?: 'all' | 'college' | 'self'
   is_system: number
   status: number
   user_count?: number
+  // 该角色是否可由当前登录用户分配（服务端按可分配角色口径返回）；
+  // 无 role:manage 的调用者不会返回 permissions/data_scope/level 等配置字段
+  assignable?: boolean
 }
 
 export interface PermissionGroup {

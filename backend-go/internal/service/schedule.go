@@ -132,16 +132,18 @@ type TeacherScope struct {
 }
 
 // TeacherScopeOf 当前用户可查看教师的权限边界；nil 表示全校
-// 对齐旧端：system_admin / school_supervisor 全校；管理角色（college_admin/school_admin）无学院绑定时视为全校
+// system_admin / school_supervisor 全校；学院管理员仅本学院（无绑定为空范围，fail-closed）；
+// 其余角色（督导/教师）为主学院 + 负责学院/负责教研室
 func TeacherScopeOf(u *model.User) *TeacherScope {
 	if u == nil || IsAllScope(u) {
 		return nil
 	}
-	collegeIDs := AccessibleCollegeIDs(u)
-	// 管理角色无学院绑定时返回 nil 表示全校（旧端行为）；其余角色（督导/教师）无负责范围则仅限本人/空范围
-	if collegeIDs == nil && IsAdminRole(u) {
-		return nil
+	// 学院管理员仅本学院（AccessibleCollegeIDs 同口径），不叠加教研室范围，
+	// 避免从教研室维度漏出本学院之外的教师
+	if IsAdminRole(u) {
+		return &TeacherScope{CollegeIDs: AccessibleCollegeIDs(u), RoomIDs: []int{}}
 	}
+	collegeIDs := AccessibleCollegeIDs(u)
 	roomIDs := []int{}
 	if u.ResearchRoomID != nil {
 		roomIDs = append(roomIDs, *u.ResearchRoomID)
