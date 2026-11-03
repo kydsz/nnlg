@@ -443,7 +443,9 @@ func (s *Evaluation) buildRecordQuery(db *gorm.DB, viewer *model.User, f Evaluat
 		if showDeleted {
 			q = q.Where("r.evaluator_id = ?", viewer.ID)
 		} else {
-			q = q.Where("t.teacher_id = ?", viewer.ID)
+			// 纯教师也要能看到自己提交的「我评的」：同行评教评的是别人的课，
+			// 若强制按「被评教师=本人」收敛，再叠加 evaluator_id=本人 后交集恒为空。
+			q = q.Where("(r.evaluator_id = ? OR t.teacher_id = ?)", viewer.ID, viewer.ID)
 		}
 	default:
 		switch {

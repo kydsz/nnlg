@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"backend-go/internal/model"
 
@@ -205,4 +206,74 @@ func TestMatchScheduleForTaskStudentCountPlainInt(t *testing.T) {
 	if outNil["student_count"] != nil {
 		t.Fatalf("student_count 为 null 时应返回 nil, 得到 %T %v", outNil["student_count"], outNil["student_count"])
 	}
+}
+
+// 纯教师「我评的」应能查到本人提交的记录：同行评教评的是别人的课，
+// 不能因为 isTeacherOnly 分支强制按「被评教师=本人」收敛而查不到。
+func TestListTeacherSentRecords(t *testing.T) {
+	db := evaluationTestDB(t)
+	users := []model.User{
+		{UserNo: "T201", Username: "被评教师", Role: model.RoleTeacher, CollegeID: intPtr(5), Status: 1},
+		{UserNo: "T202", Username: "评教教师", Role: model.RoleTeacher, CollegeID: intPtr(5), Status: 1},
+		{UserNo: "T203", Username: "另一评教人", Role: model.RoleTeacher, CollegeID: intPtr(5), Status: 1},
+	}
+	if err := db.Create(&users).Error; err != nil {
+		t.Fatalf("建用户失败: %v", err)
+	}
+	viewer := users[1]
+	viewer.UserRoles = []model.UserRole{{UserID: viewer.ID, Role: model.RoleTeacher}}
+	if err := db.Create(&viewer.UserRoles).Error; err != nil {
+		t.Fatalf("建用户角色失败: %v", err)
+	}
+
+	sentTask := model.EvaluationTask{
+		TeacherID: users[0].ID, TeacherName: users[0].Username, CourseName: "课程A",
+		Status: model.TaskStatusEvaluated, CreateBy: intPtr(users[1].ID),
+	}
+	receivedTask := model.EvaluationTask{
+		TeacherID: viewer.ID, TeacherName: viewer.Username, CourseName: "课程B",
+		Status: model.TaskStatusEvaluated, CreateBy: intPtr(users[2].ID),
+	}
+	if err := db.Create(&sentTask).Error; err != nil {
+		t.Fatalf("建任务失败: %v", err)
+	}
+	if err := db.Create(&receivedTask).Error; err != nil {
+		t.Fatalf("建任务失败: %v", err)
+	}
+
+	now := model.LocalTimePtr(time.Now())
+	recs := []model.EvaluationRecord{
+		{TaskID: sentTask.ID, EvaluatorID: intPtr(viewer.ID), EvaluatorName: viewer.Username,
+			EvaluatorRole: model.RoleTeacher, DimensionValues: []byte(`{"score1":90}`), SubmitTime: now},
+		{TaskID: receivedTask.ID, EvaluatorID: intPtr(users[2].ID), EvaluatorName: users[2].Username,
+			EvaluatorRole: model.RoleTeacher, DimensionValues: []byte(`{"score1":80}`), SubmitTime: now},
+	}
+	if err := db.Create(&recs).Error; err != nil {
+		t.Fatalf("建记录失败: %v", err)
+	}
+
+	svc := NewEvaluation()
+	t.Run("我评的按 evaluator_id 可查", func(t *testing.T) {
+		items, total, err := svc.List(db, &viewer, EvaluationFilters{
+			EvaluatorID: intPtr(viewer.ID), Page: 1, PageSize: 20,
+		})
+		if err != nil {
+			t.Fatalf("查询失败: %v", err)
+		}
+		if total != 1 || len(items) != 1 {
+			t.Fatalf("total=%d len=%d, 期望 1", total, len(items))
+		}
+	})
+
+	t.Run("评给我的按 teacher_id 可查", func(t *testing.T) {
+		_, total, err := svc.List(db, &viewer, EvaluationFilters{
+			TeacherID: intPtr(viewer.ID), Page: 1, PageSize: 20,
+		})
+		if err != nil {
+			t.Fatalf("查询失败: %v", err)
+		}
+		if total != 1 {
+			t.Fatalf("total=%d, 期望 1", total)
+		}
+	})
 }
