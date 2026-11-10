@@ -72,7 +72,7 @@ services:
 
 volumes:
   v2_mysql_data:
-    external: true
+    name: v2_mysql_data
   v2_redis_data:
 
 networks:
