@@ -148,6 +148,18 @@ export default function Tasks() {
     },
     { title: '评教数', dataIndex: 'evaluation_count', width: 80 },
     {
+      title: '参与人',
+      dataIndex: 'participant_count',
+      width: 90,
+      render: (v: number | undefined, r: Task) => (
+        <Tooltip title="含创建人；满员后普通评教人不可加入">
+          <span>
+            {v ?? 0}/{r.max_participants ?? 4}
+          </span>
+        </Tooltip>
+      ),
+    },
+    {
       title: '督导已评',
       dataIndex: 'course_supervisor_evaluated',
       width: 90,

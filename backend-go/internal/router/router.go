@@ -142,10 +142,21 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		tasks.GET("/:id", middleware.RequirePermission(db, "task:view"), taskH.Get)
 		tasks.POST("", middleware.RequirePermission(db, "task:create"), taskH.Create)
 		tasks.POST("/batch", middleware.RequirePermission(db, "task:create"), taskH.BatchCreate)
+		tasks.POST("/join", middleware.RequirePermission(db, "task:create"),
+			middleware.RequirePermission(db, "evaluation:create"), taskH.JoinOrCreate)
+		tasks.POST("/:id/join", middleware.RequirePermission(db, "evaluation:create"), taskH.Join)
 		tasks.POST("/export", middleware.RequirePermission(db, "task:view"), taskH.Export)
 		tasks.PUT("/:id", middleware.RequirePermission(db, "task:update"), taskH.Update)
 		tasks.DELETE("/:id", middleware.RequireAnyPermission(db, "task:delete", "task:delete_own"), taskH.Delete)
 		tasks.POST("/:id/restore", middleware.RequireAnyPermission(db, "task:restore", "task:restore_own"), taskH.Restore)
+	}
+
+	// 系统设置（当前为评教任务人数上限，默认仅系统管理员）
+	settingH := handler.NewSetting(db)
+	settings := api.Group("/settings", authMW, middleware.RequirePermission(db, "setting:manage"))
+	{
+		settings.GET("", settingH.Get)
+		settings.PUT("", settingH.Update)
 	}
 
 	// 评教记录
@@ -232,8 +243,10 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		stats.GET("/teachers", statsH.Teachers)
 		stats.GET("/college", statsH.College)
 		stats.GET("/colleges", statsH.Colleges)
-		stats.GET("/campus", statsH.Campus)
-		stats.GET("/campuses", statsH.Campuses)
+		// 校区统计为跨学院/校级口径：除组级 stats:view 外，另需 stats:view_campus
+		// （默认仅系统管理员；学院管理员的范围是本学院，不含校区口径）
+		stats.GET("/campus", middleware.RequirePermission(db, "stats:view_campus"), statsH.Campus)
+		stats.GET("/campuses", middleware.RequirePermission(db, "stats:view_campus"), statsH.Campuses)
 		stats.GET("/college-teachers/:college_id", statsH.CollegeTeachers)
 		// 督导统计为跨学院/校级口径：除组级 stats:view 外，另需 stats:view_supervisors
 		// （默认仅系统管理员；由管理员在「角色管理」页按需授予）

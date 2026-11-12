@@ -117,6 +117,10 @@ func (s *Evaluation) Submit(db *gorm.DB, viewer *model.User, p SubmitParams) (*m
 	if err != nil {
 		return nil, err
 	}
+	// 先占参与名额：提交即代表加入任务（满员且无超员权限时拒绝）
+	if _, err := EnsureTaskParticipant(db, task.ID, viewer.ID, CanForceJoinTask(db, viewer)); err != nil {
+		return nil, err
+	}
 	return s.PersistSubmit(db, task, evaluatorRole, p, viewer)
 }
 
@@ -145,25 +149,24 @@ func (s *Evaluation) ValidateSubmit(db *gorm.DB, viewer *model.User, p SubmitPar
 		return task, "", errors.New("您已提交过本次评教")
 	}
 
-	// 学院数据范围校验
-	teacher, err := LoadTeacherUser(db, task.TeacherID)
+	// 学院数据范围校验（提交与加入任务共用同一口径）
+	if _, err := checkEvaluationScope(db, viewer, &task); err != nil {
+		return task, "", err
+	}
+
+	// 参与人数预检（只读，用于友好提示；并发兜底由 EnsureTaskParticipant 的任务行锁保证）
+	joined, err := IsTaskParticipant(db, task.ID, viewer.ID)
 	if err != nil {
 		return task, "", err
 	}
-	switch {
-	case IsAdminRole(viewer) || IsSupervisor(viewer):
-		if !CollegeInScope(viewer, teacher.CollegeID) {
-			if IsSupervisor(viewer) && !IsAdminRole(viewer) {
-				return task, "", errors.New("您只能评自己负责学院的教师")
-			}
-			return task, "", errors.New("您没有该学院的评教权限")
+	if !joined {
+		count, err := TaskParticipantCount(db, task.ID)
+		if err != nil {
+			return task, "", err
 		}
-	default: // 教师：同行评教（先判自评，再判同学院；对齐旧端）
-		if task.TeacherID == viewer.ID {
-			return task, "", errors.New("不能评自己")
-		}
-		if teacher.CollegeID == nil || viewer.CollegeID == nil || *teacher.CollegeID != *viewer.CollegeID {
-			return task, "", errForbidden("只能评同学院的教师")
+		max := TaskMaxParticipants(db)
+		if count >= int64(max) && !CanForceJoinTask(db, viewer) {
+			return task, "", fmt.Errorf("%w：该任务已有 %d 人加入（上限 %d 人）", ErrTaskFull, count, max)
 		}
 	}
 
@@ -180,6 +183,31 @@ func (s *Evaluation) ValidateSubmit(db *gorm.DB, viewer *model.User, p SubmitPar
 	return task, evaluatorRole, nil
 }
 
+// checkEvaluationScope 评教/加入任务的学院数据范围校验（提交与加入共用）。
+func checkEvaluationScope(db *gorm.DB, viewer *model.User, task *model.EvaluationTask) (*model.User, error) {
+	teacher, err := LoadTeacherUser(db, task.TeacherID)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case IsAdminRole(viewer) || IsSupervisor(viewer):
+		if !CollegeInScope(viewer, teacher.CollegeID) {
+			if IsSupervisor(viewer) && !IsAdminRole(viewer) {
+				return nil, errors.New("您只能评自己负责学院的教师")
+			}
+			return nil, errors.New("您没有该学院的评教权限")
+		}
+	default: // 教师：同行评教（先判自评，再判同学院；对齐旧端）
+		if task.TeacherID == viewer.ID {
+			return nil, errors.New("不能评自己")
+		}
+		if teacher.CollegeID == nil || viewer.CollegeID == nil || *teacher.CollegeID != *viewer.CollegeID {
+			return nil, errForbidden("只能评同学院的教师")
+		}
+	}
+	return teacher, nil
+}
+
 // PersistSubmit 将已通过校验的评教落库（事务：插入记录 + 累加任务计数）。
 // 供同步提交与异步消费者复用。task 须为已校验的有效任务。
 func (s *Evaluation) PersistSubmit(db *gorm.DB, task model.EvaluationTask, evaluatorRole string, p SubmitParams, viewer *model.User) (*model.EvaluationRecord, error) {
@@ -194,8 +222,14 @@ func (s *Evaluation) PersistSubmit(db *gorm.DB, task model.EvaluationTask, evalu
 		return nil, err
 	}
 	rec.DimensionValues = raw
+	max := TaskMaxParticipants(db)
+	force := CanForceJoinTask(db, viewer)
 
 	err = db.Transaction(func(tx *gorm.DB) error {
+		// 兜底占名额：直接调用 PersistSubmit / 旧异步消息也要保证「有效记录 ⊆ 参与人」
+		if _, err := ensureParticipant(tx, task.ID, viewer.ID, force, max); err != nil {
+			return err
+		}
 		if err := tx.Create(&rec).Error; err != nil {
 			// 并发/重放下 (task_id, evaluator_id) 唯一索引冲突：视为幂等成功。
 			// 另一份已落库，直接以既有记录为准（不报错、不重复计数，不再清草稿/累加）。
@@ -220,10 +254,10 @@ func (s *Evaluation) PersistSubmit(db *gorm.DB, task model.EvaluationTask, evalu
 		if model.IsSupervisorRole(evaluatorRole) {
 			updates["has_supervisor_eval"] = true
 		}
-		if task.Status == model.TaskStatusPending {
-			updates["status"] = model.TaskStatusEvaluated
+		if err := tx.Model(&model.EvaluationTask{}).Where("id = ?", task.ID).Updates(updates).Error; err != nil {
+			return err
 		}
-		return tx.Model(&model.EvaluationTask{}).Where("id = ?", task.ID).Updates(updates).Error
+		return syncTaskStatusByParticipants(tx, task.ID)
 	})
 	if err != nil {
 		return nil, err
@@ -250,6 +284,7 @@ func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
 	if len(items) == 0 {
 		return nil
 	}
+	max := TaskMaxParticipants(db)
 	return db.Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
 		// 1) 逐条插入记录：并发/重放下 (task_id, evaluator_id) 唯一索引冲突
@@ -260,6 +295,11 @@ func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
 		for _, it := range items {
 			raw, err := marshalJSON(it.Params.DimensionValues)
 			if err != nil {
+				return err
+			}
+			// 兜底占名额（已占则幂等跳过）：保证「有效记录 ⊆ 参与人」
+			if _, err := ensureParticipant(tx, it.Task.ID, it.Viewer.ID,
+				CanForceJoinTask(tx, it.Viewer), max); err != nil {
 				return err
 			}
 			rec := model.EvaluationRecord{
@@ -287,11 +327,10 @@ func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
 				return err
 			}
 		}
-		// 2) 按 task 聚合计数与状态
+		// 2) 按 task 聚合计数
 		type agg struct {
 			count      int
 			supervisor bool
-			pending    bool // 原任务状态为待评，需置已评
 		}
 		byTask := map[int]*agg{}
 		for _, it := range items {
@@ -307,9 +346,6 @@ func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
 			if model.IsSupervisorRole(it.EvaluatorRole) {
 				a.supervisor = true
 			}
-			if it.Task.Status == model.TaskStatusPending {
-				a.pending = true
-			}
 		}
 		for taskID, a := range byTask {
 			updates := map[string]interface{}{
@@ -318,10 +354,10 @@ func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
 			if a.supervisor {
 				updates["has_supervisor_eval"] = true
 			}
-			if a.pending {
-				updates["status"] = model.TaskStatusEvaluated
-			}
 			if err := tx.Model(&model.EvaluationTask{}).Where("id = ?", taskID).Updates(updates).Error; err != nil {
+				return err
+			}
+			if err := syncTaskStatusByParticipants(tx, taskID); err != nil {
 				return err
 			}
 		}
@@ -915,7 +951,7 @@ func (s *Evaluation) Delete(db *gorm.DB, viewer *model.User, id int) (*model.Eva
 //     依赖脏值；两个作废并发时的极端窗口可能少算一次，但该任务上的下一次写入
 //     （再作废/提交）会整表重算修正，属自愈口径；
 //   - 任务下已无有效督导记录时，「督导已评」回退为否；
-//   - 任务为「已评」且已无任何有效记录时，状态回到「待评」（取消状态不复活）。
+//   - 状态按「全部参与人已评」重算（取消状态不复活）。
 func syncTaskAggregatesAfterVoid(tx *gorm.DB, taskID int) error {
 	var activeCount, supervisorCount int64
 	if err := tx.Model(&model.EvaluationRecord{}).
@@ -932,16 +968,10 @@ func syncTaskAggregatesAfterVoid(tx *gorm.DB, taskID int) error {
 		"evaluation_count":    activeCount,
 		"has_supervisor_eval": supervisorCount > 0,
 	}
-	if activeCount == 0 {
-		// 仅「已评」任务回退为待评；已取消/不存在/已软删的任务不动
-		var task model.EvaluationTask
-		if err := tx.Where("id = ? AND is_deleted = 0", taskID).First(&task).Error; err == nil {
-			if task.Status == model.TaskStatusEvaluated {
-				updates["status"] = model.TaskStatusPending
-			}
-		}
+	if err := tx.Model(&model.EvaluationTask{}).Where("id = ?", taskID).Updates(updates).Error; err != nil {
+		return err
 	}
-	return tx.Model(&model.EvaluationTask{}).Where("id = ?", taskID).Updates(updates).Error
+	return syncTaskStatusByParticipants(tx, taskID)
 }
 
 // Restore 恢复已作废（软删除）的评教记录（与 Delete 对称）。
@@ -995,8 +1025,7 @@ func (s *Evaluation) Restore(db *gorm.DB, viewer *model.User, id int) (*model.Ev
 // 同源的整表重算口径（幂等自愈，重复恢复不会算错）：
 //   - evaluation_count = 当前有效记录总数（is_deleted = 0）；
 //   - has_supervisor_eval = 任务下存在有效督导记录（督导角色判定与作废同源）；
-//   - 状态推进：若有效记录数 > 0 且任务未删（is_deleted = 0）且仍为「待评」，置回「已评」；
-//     「取消」状态不复活（与作废侧「取消不动」对称）。
+//   - 状态按「全部参与人已评」重算（取消状态不复活，与作废侧对称）。
 func syncTaskAggregatesAfterRestore(tx *gorm.DB, taskID int) error {
 	var activeCount, supervisorCount int64
 	if err := tx.Model(&model.EvaluationRecord{}).
@@ -1013,16 +1042,10 @@ func syncTaskAggregatesAfterRestore(tx *gorm.DB, taskID int) error {
 		"evaluation_count":    activeCount,
 		"has_supervisor_eval": supervisorCount > 0,
 	}
-	if activeCount > 0 {
-		// 仅未删且处于「待评」的任务推进为「已评」；已取消/已删的任务不动
-		var task model.EvaluationTask
-		if err := tx.Where("id = ? AND is_deleted = 0", taskID).First(&task).Error; err == nil {
-			if task.Status == model.TaskStatusPending {
-				updates["status"] = model.TaskStatusEvaluated
-			}
-		}
+	if err := tx.Model(&model.EvaluationTask{}).Where("id = ?", taskID).Updates(updates).Error; err != nil {
+		return err
 	}
-	return tx.Model(&model.EvaluationTask{}).Where("id = ?", taskID).Updates(updates).Error
+	return syncTaskStatusByParticipants(tx, taskID)
 }
 
 // UpdateParams 修改评教记录参数。

@@ -34,11 +34,12 @@
 | 组织架构 | `org:view` / `campus:manage` / `college:manage` / `research_room:manage`                                                                      |
 | 角色管理 | `role:manage`                                                                                                                                 |
 | 评教维度 | `dimension:manage`                                                                                                                            |
-| 评教任务 | `task:view` / `task:view_all` / `task:create` / `task:update` / `task:delete` / `task:delete_own` |
+| 评教任务 | `task:view` / `task:view_all` / `task:create` / `task:update` / `task:delete` / `task:delete_own` / `task:restore` / `task:restore_own` / `task:join_force` |
 | 评教记录 | `evaluation:view` / `evaluation:create` / `evaluation:view_anonymous` / `evaluation:view_all` / `evaluation:update` / `evaluation:delete` / `evaluation:delete_own` |
 | 统计报表 | `stats:view` / `stats:view_supervisors`                                                                                                       |
 | 课程表  | `schedule:view` / `schedule:view_college`                                                                                                     |
 | 数据同步 | `sync:execute`                                                                                                                                |
+| 系统设置 | `setting:manage`                                                                                                                              |
 | 异步队列 | `role:manage`（系统运维，仅 system\_admin）                                                                                                   |
 
 ## 接口总览
@@ -106,11 +107,15 @@
 | GET    | /tasks/:id                                        | task:view                                            |
 | POST   | /tasks                                            | task:create                                          |
 | POST   | /tasks/batch                                      | task:create                                          |
+| POST   | /tasks/join                                       | task:create + evaluation:create                     |
+| POST   | /tasks/:id/join                                   | evaluation:create                                    |
 | POST   | /tasks/export                                     | task:view                                            |
 | PUT    | /tasks/:id                                        | task:update                                          |
 
 | DELETE | /tasks/:id                                        | task:delete（任意）或 task:delete\_own（仅自己创建）             |
 | POST   | /tasks/:id/restore                                | task:restore（任意）或 task:restore\_own（仅自己创建）           |
+| GET    | /settings                                         | setting:manage                                       |
+| PUT    | /settings                                         | setting:manage                                       |
 | GET    | /evaluations                                      | evaluation:view                                      |
 | POST   | /evaluations                                      | evaluation:create                                    |
 | POST   | /evaluations/with-files                           | evaluation:create                                    |
@@ -618,7 +623,7 @@ DELETE /dimensions/{dim_id}                                                     
 ### 获取任务列表
 
 ```http
-GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1&has_supervisor_eval=false&create_by=1&create_by_not=2&start_date=2026-08-31&end_date=2027-01-18
+GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1&has_supervisor_eval=false&create_by=1&create_by_not=2&joined_by=1&start_date=2026-08-31&end_date=2027-01-18
 ```
 
 **查询参数**:
@@ -634,6 +639,7 @@ GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1
 | has\_supervisor\_eval | bool   | 否  | 按督导已评筛选                                         |
 | create\_by            | int    | 否  | 按创建者筛选                                          |
 | create\_by\_not       | int    | 否  | 排除创建者                                           |
+| joined\_by            | int    | 否  | 只看该用户加入的任务（参与人关系）                               |
 | deleted               | string | 否  | 传 `1` 只看已删除任务（供恢复入口）；**仅对持 `task:restore` 或 `task:restore_own` 权限者生效**，无权限者传参也被忽略（强制只看未删除） |
 | start\_date           | string | 否  | 开始日期 `YYYY-MM-DD`，按上课时间（class\_time）筛选          |
 | end\_date             | string | 否  | 结束日期 `YYYY-MM-DD`（含当天），按上课时间筛选；须不早于 start\_date |
@@ -660,6 +666,9 @@ GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1
         "start_time": "2024-01-15T08:00:00",
         "end_time": "2024-01-15T09:40:00",
         "evaluation_count": 5,
+        "participant_count": 3,
+        "max_participants": 4,
+        "joined": true,
         "has_supervisor_eval": false,
         "create_by": 1,
         "create_by_name": "张督导",
@@ -677,9 +686,9 @@ GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1
 
 > 注意：`evaluation_records` 汇总按评教可见性过滤（督导默认看不到其他人的评教记录），`current_user_evaluated` 不受影响。
 
-**返回字段**：列表项含 `teacher_college_id` / `teacher_college_name`（被评教师所属学院，与可见范围、统计报表同口径）。同课汇总字段 `course_supervisor_evaluated` / `course_evaluator_count` 仅在能统计时下发，字段缺省表示「无法统计」而非「未评 / 0 人」。
+**返回字段**：列表项含 `teacher_college_id` / `teacher_college_name`（被评教师所属学院，与可见范围、统计报表同口径）。`participant_count` 为任务参与人数（含创建人），`max_participants` 为全局配置的参与人数上限，`joined` 表示当前登录用户是否已加入该任务。同课汇总字段 `course_supervisor_evaluated` / `course_evaluator_count` 仅在能统计时下发，字段缺省表示「无法统计」而非「未评 / 0 人」。
 
-**可见范围**：未持 `task:view_all`（查看他人评教任务）者只能看到与我相关的任务——我创建的、我被评的、我评过的。该收敛在服务端强制生效，`create_by` / `create_by_not` 等筛选参数无法绕过；持 `task:view_all` 者再按其学院数据范围查看（管理员=本学院，三类督导=负责学院 / 全校）。`task:view_all` 由管理员在「角色管理」页按角色分配，接口侧只认权限码。
+**可见范围**：未持 `task:view_all`（查看他人评教任务）者只能看到与我相关的任务——我创建的、我被评的、我评过的、我加入的。该收敛在服务端强制生效，`create_by` / `create_by_not` / `joined_by` 等筛选参数无法绕过；持 `task:view_all` 者再按其学院数据范围查看（管理员=本学院，三类督导=负责学院 / 全校）。`task:view_all` 由管理员在「角色管理」页按角色分配，接口侧只认权限码。
 
 ### 获取任务详情
 
@@ -687,7 +696,7 @@ GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1
 GET /tasks/{task_id}
 ```
 
-返回字段与列表一致（含 `teacher_college_id` / `teacher_college_name`），另增加 `update_time` 与 `schedule`（加入待评时固化的课表快照）。可见范围与列表同一口径：不在可见范围内的任务返回 403。
+返回字段与列表一致（含 `teacher_college_id` / `teacher_college_name` / `participant_count` / `max_participants` / `joined`），另增加 `update_time` 与 `schedule`（加入待评时固化的课表快照）。可见范围与列表同一口径：不在可见范围内的任务返回 403。
 
 ### 创建评教任务
 
@@ -722,6 +731,59 @@ POST /tasks/batch
 ```
 
 重复任务自动跳过。**响应**: `{ "created": [...], "skipped": [...], "created_count": n, "skipped_count": n }`
+
+> 管理端 `POST /tasks` 与 `POST /tasks/batch` 只创建任务，**不会**自动把创建人加为参与人；参与人数从 0 开始。
+
+### 加入评教任务
+
+```http
+POST /tasks/{task_id}/join
+```
+
+**权限**: evaluation:create。加入后占用一个参与名额；已是参与人时幂等返回。
+
+**响应**:
+
+```json
+{
+  "task_id": 12,
+  "participant_count": 3,
+  "max_participants": 4,
+  "already_joined": false,
+  "over_limit": false,
+  "created": false
+}
+```
+
+- 满员后普通评教人返回 400：`该任务已有 N 人加入，无法加入（上限 M 人）`。
+- 持 `task:join_force`（系统管理员恒有）可超员加入，`over_limit=true`，任务显示 `5/4`。
+- 任务已取消、不能评自己、跨学院等情况返回 400/403。
+
+### 创建或加入评教任务（课表）
+
+```http
+POST /tasks/join
+```
+
+**权限**: task:create + evaluation:create（加入即代表要提交评教，避免占名额却无法评教）。请求体与 `POST /tasks` 相同（含 `teacher_id` / `course_name` / `class_time` / `classroom` / `schedule`）。
+
+按「教师 + 课程 + 上课时间」查找未删除未取消任务：存在则加入，不存在则创建并加入（创建人自动成为第 1 个参与人）。响应同上，另含 `created` 表示本次是否新建任务。`teacher_id` 等于当前用户时拒绝，避免创建自评任务。
+
+### 系统设置
+
+```http
+GET /settings
+PUT /settings
+```
+
+**权限**: setting:manage（默认仅系统管理员）。
+
+```json
+{ "task_max_participants": 4 }
+```
+
+- `task_max_participants`：单个评教任务最多参与人数（含创建人），范围 1-100，默认 4，修改立即生效。
+- 调低上限不会移除已加入的参与人，只会阻止新增。
 
 ### 导出评教任务
 
@@ -761,7 +823,7 @@ GET /evaluations?page=1&page_size=20&task_id=1&teacher_id=1&evaluator_id=1&evalu
 
 **已作废筛选**: 传 `deleted=1` 只看已作废（软删除）的记录，供恢复入口使用；**仅对持 `evaluation:restore` 或 `evaluation:restore_own` 权限者生效**，无权限者传参也被服务端强制忽略（只看未作废）。已作废视图下：仅有 `evaluation:restore_own`（无 `evaluation:restore`）者只暴露本人提交的记录；教师角色按「本人提交」（`evaluator_id`）收敛而非「被评教师」，以免自己提交、被作废的记录被挡在恢复入口外。
 
-**可见性**: 教师角色只能查看自己的评教记录；督导默认只能查看自己评教的记录，需 `evaluation:view_all` 权限码（在角色管理中分配）后按学院范围查看他人记录。
+**可见性**: 教师角色只能查看自己的评教记录；学院管理员（`college_admin` / `school_admin`）默认持有 `evaluation:view_all`，按本学院数据范围查看；督导默认只能查看自己评教的记录，需 `evaluation:view_all` 权限码（在角色管理中分配）后按学院范围查看他人记录。
 
 **返回字段**: 列表项含 `college_id` / `college_name`（被评教师所属学院，与任务可见范围、统计报表同口径）、`is_deleted`（是否已作废：正常视图恒 `false`，`deleted=1` 视图恒 `true`）、`can_restore`（当前用户是否可恢复本条：服务端按 `evaluation:restore` / `evaluation:restore_own` 与记录归属计算——已作废视图下匿名记录的 `evaluator_id` 被脱敏为 `null`，前端无法自行判断归属，故由服务端下发；前端据此决定是否渲染「恢复」按钮）。
 
@@ -1089,10 +1151,13 @@ GET /stats/college-teachers/{college_id}                 # 指定学院教师评
 ### 校区评教统计
 
 ```http
-GET /stats/campus?campus_id=1&start_date=&end_date=
+GET /stats/campus?campus_id=1&start_date=&end_date=      # 校区汇总（stats:view + stats:view_campus）
+GET /stats/campuses?page=&page_size=&start_date=&end_date=   # 校区分页列表（stats:view + stats:view_campus）
 ```
 
 不传 `campus_id` 则统计所有校区；不传日期默认按当前学期区间。
+
+> 校区统计是跨学院/校级口径，超出学院管理员「本学院」的数据范围：除组级 `stats:view` 外另需 `stats:view_campus`，该码默认**仅系统管理员**（学院管理员不持有，即统计报表无「校区统计」页签、接口 403）；需要放开时由系统管理员在「角色管理」页勾选授予。详见 RBAC.md。
 
 ### 督导/评教人统计
 

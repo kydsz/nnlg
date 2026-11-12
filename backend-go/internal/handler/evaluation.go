@@ -68,6 +68,11 @@ func (h *Evaluation) Submit(c *gin.Context) {
 			badReq(c, err.Error())
 			return
 		}
+		// 入队前先占参与名额（满员且无 task:join_force 时直接拒绝）
+		if _, err := service.EnsureTaskParticipant(h.db, p.TaskID, u.ID, service.CanForceJoinTask(h.db, u)); err != nil {
+			badReq(c, err.Error())
+			return
+		}
 		// 幂等判重：Redis SETNX（key=task:user），替代 DB Count，防并发重复提交
 		dupKey := fmt.Sprintf("tev:dup:%d:%d", p.TaskID, u.ID)
 		ok, err := rdb.SetNX(c.Request.Context(), dupKey, 30*time.Minute)

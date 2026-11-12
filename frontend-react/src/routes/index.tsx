@@ -1,5 +1,5 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom'
-import { RequireAuth, RedirectIfAuthed, AdminGate } from './guards'
+import { RequireAuth, RedirectIfAuthed, AdminGate, PermissionGate } from './guards'
 import { isMobileDevice } from '@/hooks/useIsMobile'
 import Login from '@/views/Login'
 import NotFound from '@/views/NotFound'
@@ -17,6 +17,7 @@ import Tasks from '@/views/admin/Tasks'
 import Evaluations from '@/views/admin/Evaluations'
 import Stats from '@/views/admin/Stats'
 import DataSync from '@/views/admin/DataSync'
+import Settings from '@/views/admin/Settings'
 import CourseSchedule from '@/views/admin/CourseSchedule'
 import TeacherEvaluationSummary from '@/views/admin/TeacherEvaluationSummary'
 
@@ -57,6 +58,14 @@ export const router = createBrowserRouter([
               { path: 'evaluations', element: <Evaluations /> },
               { path: 'stats', element: <Stats /> },
               { path: 'data-sync', element: <DataSync /> },
+              {
+                path: 'settings',
+                element: (
+                  <PermissionGate perm="setting:manage">
+                    <Settings />
+                  </PermissionGate>
+                ),
+              },
               { path: 'course-schedule', element: <CourseSchedule /> },
               { path: 'teacher-evaluation-summary', element: <TeacherEvaluationSummary /> },
             ],

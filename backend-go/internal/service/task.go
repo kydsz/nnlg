@@ -27,6 +27,7 @@ type TaskFilters struct {
 	HasSupervisorEval *bool
 	CreateBy          *int
 	CreateByNot       *int
+	JoinedBy          *int // 只看我加入的（参与人关系）
 	Deleted           string     // "1" 只看已删除（仅持 task:restore / task:restore_own 者生效）
 	Start, End        *time.Time // 按上课时间（class_time）筛选学期区间
 	OrderBy, OrderDir string     // 排序字段白名单（id/class_time）与方向（asc/desc）
@@ -44,15 +45,17 @@ func applyCollegeFilter(q *gorm.DB, ids []int) *gorm.DB {
 	return q.Where("teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)", ids)
 }
 
-// relatedToMeCond 「与我相关」的评教任务：我创建的、我被评的、我评过的。
+// relatedToMeCond 「与我相关」的评教任务：我创建的、我被评的、我评过的、我加入的。
 //
 // 未获 task:view_all 权限者（当前典型为普通教师）的可见范围收敛条件，
-// 三处占位符均为当前用户 ID。评教任务不是「广播」数据，而是每位评教人自己的
+// 四处占位符均为当前用户 ID。评教任务不是「广播」数据，而是每位评教人自己的
 // 待评课表：看不见他人任务，也就看不见督导是否把某位教师的课排进了待评计划。
 // 注：任务表在本查询中不带别名，子查询按表名 evaluation_task 关联。
 const relatedToMeCond = "(create_by = ? OR teacher_id = ? OR EXISTS (" +
 	"SELECT 1 FROM evaluation_record er " +
-	"WHERE er.task_id = evaluation_task.id AND er.evaluator_id = ? AND er.is_deleted = 0))"
+	"WHERE er.task_id = evaluation_task.id AND er.evaluator_id = ? AND er.is_deleted = 0) OR EXISTS (" +
+	"SELECT 1 FROM evaluation_task_participant p " +
+	"WHERE p.task_id = evaluation_task.id AND p.user_id = ?))"
 
 func (s *Task) buildQuery(db *gorm.DB, f TaskFilters, caller *model.User) (*gorm.DB, error) {
 	// 「已删除」筛选：仅当调用者持 task:restore 或 task:restore_own 时 deleted=1 生效
@@ -93,6 +96,10 @@ func (s *Task) buildQuery(db *gorm.DB, f TaskFilters, caller *model.User) (*gorm
 	if f.CreateByNot != nil {
 		q = q.Where("create_by <> ? OR create_by IS NULL", *f.CreateByNot)
 	}
+	if f.JoinedBy != nil {
+		q = q.Where("EXISTS (SELECT 1 FROM evaluation_task_participant p "+
+			"WHERE p.task_id = evaluation_task.id AND p.user_id = ?)", *f.JoinedBy)
+	}
 
 	// 数据范围过滤
 	scope := AccessibleCollegeIDs(caller)
@@ -116,10 +123,11 @@ func (s *Task) buildQuery(db *gorm.DB, f TaskFilters, caller *model.User) (*gorm
 	}
 	q = applyCollegeFilter(q, ids)
 
-	// 与我相关的任务收敛：未获 task:view_all 权限者只能看到自己创建的、自己被评的、自己评过的任务。
+	// 与我相关的任务收敛：未获 task:view_all 权限者只能看到自己创建的、自己被评的、
+	// 自己评过的、自己加入的任务。
 	// 该条件在服务端强制生效，前端筛选参数（create_by / create_by_not）无法绕过——去掉参数也拿不到无关任务。
 	if !CanViewAllTasks(db, caller) {
-		q = q.Where(relatedToMeCond, caller.ID, caller.ID, caller.ID)
+		q = q.Where(relatedToMeCond, caller.ID, caller.ID, caller.ID, caller.ID)
 	}
 	return q, nil
 }
@@ -510,6 +518,11 @@ func (s *Task) Update(db *gorm.DB, caller *model.User, id int, p UpdateTaskParam
 		newStatus := *p.Status
 		switch {
 		case t.Status == model.TaskStatusPending && newStatus == model.TaskStatusCancelled:
+			// 已有评教提交的任务不可取消：多人任务下「待评」可能已有部分参与人提交，
+			// 状态不再是「已评」但评教事实已存在，取消会掩盖这些记录。
+			if t.EvaluationCount > 0 {
+				return nil, errors.New("已有评教提交的任务不可取消")
+			}
 			updates["status"] = newStatus // 取消
 		case t.Status == model.TaskStatusCancelled && newStatus == model.TaskStatusPending:
 			updates["status"] = newStatus // 恢复

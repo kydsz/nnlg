@@ -20,21 +20,32 @@ export const SUPERVISORS_TAB_PERM = 'stats:view_supervisors'
 // SUPERVISORS_TAB_KEY 需按权限码隐藏的页签 key
 export const SUPERVISORS_TAB_KEY = 'supervisors'
 
+// CAMPUS_TAB_PERM 「校区统计」页签所需权限码，与后端 service/role.go
+// 「统计报表」组、router 中 /stats/campus、/stats/campuses 路由使用同一个码。
+export const CAMPUS_TAB_PERM = 'stats:view_campus'
+
+// CAMPUS_TAB_KEY 需按权限码隐藏的页签 key
+export const CAMPUS_TAB_KEY = 'campus'
+
 type StatsTabItem = NonNullable<TabsProps['items']>[number]
 
-// statsTabItems 产出统计报表页签。督导统计是跨学院/校级口径（名单含负责本范围的
-// 跨学院督导，评教次数与平均分按该督导全校评教汇总），故只在持 SUPERVISORS_TAB_PERM
-// 时展示；其余页签由后端 stats:view 把关。抽成纯函数便于回归测试。
-export function statsTabItems(canViewSupervisors: boolean): StatsTabItem[] {
+// statsTabItems 产出统计报表页签。督导统计与校区统计都是跨学院/校级口径，
+// 超出学院管理员「本学院」的数据范围，故分别只在持 SUPERVISORS_TAB_PERM /
+// CAMPUS_TAB_PERM 时展示；其余页签由后端 stats:view 把关。抽成纯函数便于回归测试。
+export function statsTabItems(canViewSupervisors: boolean, canViewCampus: boolean): StatsTabItem[] {
   const items: StatsTabItem[] = [
     { key: 'teachers', label: '教师统计', children: <TeacherStatsTab /> },
     { key: 'colleges', label: '学院统计', children: <CollegeStatsTab /> },
-    { key: 'campus', label: '校区统计', children: <CampusStatsTab /> },
+    { key: CAMPUS_TAB_KEY, label: '校区统计', children: <CampusStatsTab /> },
     { key: SUPERVISORS_TAB_KEY, label: '督导统计', children: <SupervisorStatsTab /> },
     { key: 'records', label: '听课明细', children: <RecordsTab /> },
     { key: 'unteached', label: '未被听课教师', children: <UnteachedTab /> },
   ]
-  return items.filter((item) => item.key !== SUPERVISORS_TAB_KEY || canViewSupervisors)
+  return items.filter(
+    (item) =>
+      (item.key !== SUPERVISORS_TAB_KEY || canViewSupervisors) &&
+      (item.key !== CAMPUS_TAB_KEY || canViewCampus)
+  )
 }
 
 export default function Stats() {
@@ -45,7 +56,13 @@ export default function Stats() {
       <div style={{ marginBottom: 12, fontSize: 12, color: '#8c8c8c' }}>
         统计口径：按评教任务的「上课时间」（class_time）归属所选时间段汇总；未选择时间段时默认取当前学期。评教记录的「提交时间」仅作展示，不参与统计筛选，因此各页签同一时间段下数据一致。「有课教师数」指当前学期课表中有课的教师（在岗且具备教师角色、主学院属于该学院），无课教师不计入；导出中的「全部教师数」不要求有课。
       </div>
-      <Tabs defaultActiveKey="teachers" items={statsTabItems(hasPermission(SUPERVISORS_TAB_PERM))} />
+      <Tabs
+        defaultActiveKey="teachers"
+        items={statsTabItems(
+          hasPermission(SUPERVISORS_TAB_PERM),
+          hasPermission(CAMPUS_TAB_PERM)
+        )}
+      />
     </div>
   )
 }

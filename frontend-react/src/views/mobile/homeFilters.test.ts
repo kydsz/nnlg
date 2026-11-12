@@ -32,9 +32,10 @@ describe('showMyCreatedHint', () => {
     expect(showMyCreatedHint('my_created')).toBe(true)
   })
 
-  it('「全部任务」「其他创建的」空列表不提示', () => {
+  it('「全部任务」「其他创建的」「我加入的」空列表不提示', () => {
     expect(showMyCreatedHint('')).toBe(false)
     expect(showMyCreatedHint('other_created')).toBe(false)
+    expect(showMyCreatedHint('my_joined')).toBe(false)
   })
 
   it('提示文案指向「全部任务」', () => {

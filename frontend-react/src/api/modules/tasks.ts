@@ -10,6 +10,8 @@ export interface TaskListParams {
   has_supervisor_eval?: boolean
   create_by?: number
   create_by_not?: number
+  /** 只看我加入的任务 */
+  joined_by?: number
   start_date?: string
   end_date?: string
   order_by?: string
@@ -35,6 +37,16 @@ export interface BatchCreateResult {
   skipped_count: number
 }
 
+/** 加入任务响应 */
+export interface JoinResult {
+  task_id: number
+  participant_count: number
+  max_participants: number
+  already_joined: boolean
+  over_limit: boolean
+  created: boolean
+}
+
 export const taskApi = {
   list: (params: TaskListParams) =>
     request<PageData<Task>>({ url: '/tasks', method: 'GET', params }),
@@ -42,6 +54,13 @@ export const taskApi = {
   get: (id: number) => request<Task>({ url: `/tasks/${id}`, method: 'GET' }),
 
   create: (data: TaskPayload) => request<Task>({ url: '/tasks', method: 'POST', data }),
+
+  /** 加入指定任务 */
+  join: (id: number) => request<JoinResult>({ url: `/tasks/${id}/join`, method: 'POST' }),
+
+  /** 课表加入待评任务：已有同课任务则加入，否则创建并加入 */
+  joinOrCreate: (data: TaskPayload) =>
+    request<JoinResult>({ url: '/tasks/join', method: 'POST', data }),
 
   batchCreate: (data: TaskPayload[]) =>
     request<BatchCreateResult>({ url: '/tasks/batch', method: 'POST', data: { tasks: data } }),

@@ -318,3 +318,44 @@ func TestSupervisorScopeReadRequiresSystemAdminAPI(t *testing.T) {
 		}
 	})
 }
+
+// TestStatsCampusRequiresPermissionAPI 校区统计的双权限门：
+// 校区统计是跨学院/校级口径，超出学院管理员「本学院」范围——
+// 只有 stats:view 的学院管理员被 403；持 stats:view_campus 的角色与系统管理员不被拦截。
+func TestStatsCampusRequiresPermissionAPI(t *testing.T) {
+	env := newTestServer(t)
+	env.seedRole(t, model.RoleCollegeAdmin, "学院管理员", 1, []string{"stats:view"})
+	env.seedRole(t, model.RoleSchoolAdmin, "学院管理员（兼容）", 1, []string{"stats:view", "stats:view_campus"})
+
+	admin := &model.User{UserNo: "admin", Username: "系统管理员", Role: model.RoleSystemAdmin, Status: 1}
+	collegeAdmin := &model.User{UserNo: "ca", Username: "文理管理员", Role: model.RoleCollegeAdmin, CollegeID: hpInt(5), Status: 1}
+	// school_admin 是 college_admin 的兼容别名，这里借它验证「持码即放行」
+	granted := &model.User{UserNo: "sa", Username: "兼容管理员", Role: model.RoleSchoolAdmin, Status: 1}
+	for _, u := range []*model.User{admin, collegeAdmin, granted} {
+		env.seedUser(t, u)
+	}
+
+	t.Run("学院管理员未持 stats:view_campus 被拒", func(t *testing.T) {
+		for _, path := range []string{"/api/v1/stats/campus", "/api/v1/stats/campuses?page=1&page_size=10"} {
+			w := env.do(t, http.MethodGet, path, "", env.authHeader(t, int64(collegeAdmin.ID)))
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("校区统计 %s 应对学院管理员返回 403, 得到 %d, body=%s", path, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("持 stats:view_campus 的角色不被权限中间件拦截", func(t *testing.T) {
+		w := env.do(t, http.MethodGet, "/api/v1/stats/campuses?page=1&page_size=10", "", env.authHeader(t, int64(granted.ID)))
+		// 测试库未迁移统计相关表，业务可能报错；此处只断言权限门放行（不是 403）
+		if w.Code == http.StatusForbidden {
+			t.Fatalf("持码角色不应被 403 拦截, body=%s", w.Body.String())
+		}
+	})
+
+	t.Run("系统管理员直通", func(t *testing.T) {
+		w := env.do(t, http.MethodGet, "/api/v1/stats/campus", "", env.authHeader(t, int64(admin.ID)))
+		if w.Code == http.StatusForbidden {
+			t.Fatalf("系统管理员不应被 403 拦截, body=%s", w.Body.String())
+		}
+	})
+}

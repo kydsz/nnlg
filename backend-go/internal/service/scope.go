@@ -145,7 +145,7 @@ func CanViewAllTasks(db *gorm.DB, u *model.User) bool {
 // 与列表的可见范围同一口径，两层是「且」的关系：
 //  1. 学院数据范围——被评教师须在 caller 的可访问学院内（与 applyCollegeFilter 等价，
 //     含「教师未绑定学院则不在任何人的范围内」这一点）；
-//  2. 是否与我相关——我创建的、我被评的、我评过的；否则需要 task:view_all（见 CanViewAllTasks）。
+//  2. 是否与我相关——我创建的、我被评的、我评过的、我加入的；否则需要 task:view_all。
 func CanViewTask(db *gorm.DB, caller *model.User, t *model.EvaluationTask) bool {
 	teacher, err := LoadTeacherUser(db, t.TeacherID)
 	if err != nil {
@@ -161,6 +161,13 @@ func CanViewTask(db *gorm.DB, caller *model.User, t *model.EvaluationTask) bool 
 		return true
 	}
 	if CanViewAllTasks(db, caller) {
+		return true
+	}
+	var joined int64
+	db.Model(&model.EvaluationTaskParticipant{}).
+		Where("task_id = ? AND user_id = ?", t.ID, caller.ID).
+		Count(&joined)
+	if joined > 0 {
 		return true
 	}
 	var n int64
@@ -240,6 +247,20 @@ func CanDeleteTask(db *gorm.DB, u *model.User) bool {
 func CanDeleteOwnTask(db *gorm.DB, u *model.User) bool {
 	for _, p := range u.Permissions(db) {
 		if p == "task:delete_own" {
+			return true
+		}
+	}
+	return false
+}
+
+// CanForceJoinTask 是否可在任务满员后超员加入（task:join_force）。
+// 系统管理员恒可；其余角色需被分配 task:join_force 权限。
+func CanForceJoinTask(db *gorm.DB, u *model.User) bool {
+	if u.HasRole(model.RoleSystemAdmin) {
+		return true
+	}
+	for _, p := range u.Permissions(db) {
+		if p == "task:join_force" {
 			return true
 		}
 	}

@@ -27,7 +27,7 @@ import {
   getDateForWeekAndDay,
   formatSectionText,
 } from '@/utils/format'
-import type { CourseItem, EvalScheduleInfo, SemesterConfig, TeacherSchedule, User } from '@/api/types'
+import type { CourseItem, EvalScheduleInfo, SemesterConfig, TeacherSchedule, User, Task } from '@/api/types'
 import { useDebounce } from '@/hooks/useDebounce'
 import './schedule.css'
 
@@ -135,29 +135,37 @@ export default function Schedule() {
   const [selectedWeek, setSelectedWeek] = useState<number | null>(null)
   const week = selectedWeek ?? currentWeek
 
-  // 建任务防重复：本地刚添加的记录 + 服务器已存在任务回显
-  const [addedIds, setAddedIds] = useState<Set<string>>(new Set())
+  // 建任务防重复：本地刚加入的记录 + 服务器任务回显（按 课程名+日期+起始节次时间 匹配）
+  const [joinedIds, setJoinedIds] = useState<Set<string>>(new Set())
   const [detailCell, setDetailCell] = useState<{ weekDay: number; slotIdx: number } | null>(null)
 
-  // 该教师已有的待评任务（status=1），用于刷新后仍能回显"已添加"
+  // 该教师已有的任务（全部状态，前端过滤已取消），用于回显参与人数与「我是否已加入」
   const addedTeacherId = targetTeacherId ?? userId
   const { data: addedTasksData } = useQuery({
     queryKey: ['mobile-tasks', 'schedule-added', addedTeacherId],
     queryFn: () =>
-      taskApi.list({ page: 1, page_size: 100, status: 1, teacher_id: addedTeacherId }),
+      taskApi.list({ page: 1, page_size: 100, teacher_id: addedTeacherId }),
     enabled: !!addedTeacherId,
   })
 
-  // 单元格"已添加"集合：本地 + 服务器任务（按 课程名+日期+起始节次时间 匹配，
-  // 同一天不同节次的同课程键不同，避免一处添加后锁死其它节次）
-  const addedSet = useMemo(() => {
-    const s = new Set<string>(addedIds)
+  // 任务键 → 任务（同课名同日期同起始时间视为同一任务）
+  const taskByKey = useMemo(() => {
+    const m = new Map<string, Task>()
     for (const t of addedTasksData?.list || []) {
-      if (!t.class_time) continue
-      s.add(`${t.course_name}|${dayjs(t.class_time).format('YYYY-MM-DD HH:mm')}`)
+      if (!t.class_time || t.status === 3) continue
+      m.set(`${t.course_name}|${dayjs(t.class_time).format('YYYY-MM-DD HH:mm')}`, t)
+    }
+    return m
+  }, [addedTasksData])
+
+  // 当前用户已加入的任务键
+  const addedSet = useMemo(() => {
+    const s = new Set<string>(joinedIds)
+    for (const [key, t] of taskByKey) {
+      if (t.joined) s.add(key)
     }
     return s
-  }, [addedIds, addedTasksData])
+  }, [joinedIds, taskByKey])
 
   // 课程任务键：包含具体上课日期 + 该节次的起始时间，不同节次/不同周键即不同
   const courseTaskKey = (course: CourseItem, weekNum: number, slotIdx = 0): string => {
@@ -186,6 +194,38 @@ export default function Schedule() {
 
   const todayWeekDay = new Date().getDay() === 0 ? 7 : new Date().getDay()
 
+  // 任务按钮状态：已加入 / 已满员 / 可超员 / 可加入
+  const joinButtonState = (key: string) => {
+    const task = taskByKey.get(key)
+    const joined = addedSet.has(key)
+    const count = task?.participant_count ?? 0
+    const max = task?.max_participants ?? 4
+    const full = count >= max
+    const canForce = hasPermission('task:join_force')
+    let text = '加入待评任务'
+    if (joined) text = `已加入（${count}/${max}）`
+    else if (full && !canForce) text = `已满员（${count}/${max}）`
+    else if (full) text = `超员加入（${count}/${max}）`
+    else if (task) text = `加入待评任务（已有 ${count}/${max} 人）`
+    return { task, joined, count, max, full, canForce, text, disabled: joined || (full && !canForce) }
+  }
+
+  const doJoin = async (key: string, payload: Parameters<typeof taskApi.joinOrCreate>[0]) => {
+    try {
+      const res = await taskApi.joinOrCreate(payload)
+      setJoinedIds((prev) => new Set(prev).add(key))
+      qc.invalidateQueries({ queryKey: ['mobile-tasks'] })
+      Toast.show({
+        content: res.over_limit
+          ? `已超员加入，当前 ${res.participant_count}/${res.max_participants} 人`
+          : `已加入，当前 ${res.participant_count}/${res.max_participants} 人`,
+        icon: 'success',
+      })
+    } catch (e) {
+      Toast.show({ content: e instanceof Error ? e.message : '加入失败', icon: 'fail' })
+    }
+  }
+
   const addToTasks = async (course: CourseItem) => {
     const slotIdx = detailCell?.slotIdx ?? 0
     const key = courseTaskKey(course, week, slotIdx)
@@ -203,21 +243,31 @@ export default function Schedule() {
       : null
     const startTime = TIME_SLOTS[slotIdx]?.time.split('-')[0] || '08:30'
     const classTime = date ? `${date.format('YYYY-MM-DD')} ${startTime}:00` : undefined
-    try {
-      await taskApi.create({
-        teacher_id: teacherId,
-        course_name: course.course_name,
-        classroom: course.classroom || undefined,
-        class_time: classTime,
-        // 加入待评时固化课表信息（周次收敛到当前添加周/班级/应到人数/上课时间），详情/导出直接读这份快照
-        schedule: buildScheduleSnapshot(course, week),
-      })
-      setAddedIds((prev) => new Set(prev).add(key))
-      qc.invalidateQueries({ queryKey: ['mobile-tasks'] })
-      Toast.show({ content: '已添加至待评任务', icon: 'success' })
-    } catch (e) {
-      Toast.show({ content: e instanceof Error ? e.message : '添加失败', icon: 'fail' })
+    const payload = {
+      teacher_id: teacherId,
+      course_name: course.course_name,
+      classroom: course.classroom || undefined,
+      class_time: classTime,
+      // 加入待评时固化课表信息（周次收敛到当前添加周/班级/应到人数/上课时间），详情/导出直接读这份快照
+      schedule: buildScheduleSnapshot(course, week),
     }
+    const state = joinButtonState(key)
+    if (!state.task) {
+      await doJoin(key, payload)
+      return
+    }
+    // 已有任务：明确提示已有多少人加入；满员时持超员权限才可继续
+    Dialog.confirm({
+      title: '加入评教任务',
+      content: state.full
+        ? `该任务已满（${state.count}/${state.max} 人），您将以超员权限加入，确认？`
+        : `该任务已有 ${state.count} 人加入（上限 ${state.max} 人），确认加入？`,
+      confirmText: state.full ? '超员加入' : '加入',
+      cancelText: '取消',
+      onConfirm: async () => {
+        await doJoin(key, payload)
+      },
+    })
   }
 
   return (
@@ -409,7 +459,7 @@ export default function Schedule() {
             </div>
             {cellCourses(detailCell.weekDay, detailCell.slotIdx).map((c) => {
               const key = courseTaskKey(c, week, detailCell.slotIdx)
-              const added = addedSet.has(key)
+              const js = joinButtonState(key)
               return (
                 <div key={key} className="course-detail-card">
                   <div style={{ fontWeight: 600, marginBottom: 6 }}>{c.course_name}</div>
@@ -421,12 +471,12 @@ export default function Schedule() {
                   <Button
                     block
                     size="small"
-                    color="primary"
+                    color={js.full && js.canForce ? 'warning' : 'primary'}
                     style={{ marginTop: 8 }}
-                    disabled={added}
+                    disabled={js.disabled}
                     onClick={() => addToTasks(c)}
                   >
-                    {added ? '已添加' : '加入待评任务'}
+                    {js.text}
                   </Button>
                 </div>
               )
@@ -475,7 +525,7 @@ export default function Schedule() {
           setSelectedTeacher({ id: t.id, name: t.username })
           setPickerOpen(false)
           setSelectedWeek(null)
-          setAddedIds(new Set())
+          setJoinedIds(new Set())
         }}
       />
     </div>

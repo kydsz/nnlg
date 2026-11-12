@@ -32,7 +32,7 @@ func (h *Task) List(c *gin.Context) {
 	f := service.TaskFilters{
 		Keyword: c.Query("keyword"), Status: qInt16(c, "status"), TeacherID: qInt(c, "teacher_id"),
 		HasSupervisorEval: qBool(c, "has_supervisor_eval"), CreateBy: qInt(c, "create_by"),
-		CreateByNot: qInt(c, "create_by_not"), Page: page, PageSize: pageSize,
+		CreateByNot: qInt(c, "create_by_not"), JoinedBy: qInt(c, "joined_by"), Page: page, PageSize: pageSize,
 		Deleted: c.Query("deleted"),
 		OrderBy: c.Query("order_by"), OrderDir: c.Query("order"),
 	}
@@ -61,6 +61,15 @@ func (h *Task) List(c *gin.Context) {
 
 	u := middleware.CurrentUser(c)
 	summaries, evaluated := h.evalSvc.SummariesForTasks(h.db, u, tasks)
+
+	// 参与人数 / 上限 / 当前用户是否已加入（列表页一次聚合，避免逐行查询）
+	taskIDs := make([]int, 0, len(tasks))
+	for i := range tasks {
+		taskIDs = append(taskIDs, tasks[i].ID)
+	}
+	maxParticipants := service.TaskMaxParticipants(h.db)
+	participantCounts := service.TaskParticipantCounts(h.db, taskIDs)
+	joinedSet := service.JoinedTaskIDs(h.db, u.ID, taskIDs)
 
 	// 同课评教汇总（同学期+同教师+同课程，跨任务聚合；失败降级为无汇总不阻断列表，仅记告警）
 	courseStats, err := service.CourseEvalStatsForTasks(h.db, tasks)
@@ -137,6 +146,9 @@ func (h *Task) List(c *gin.Context) {
 			"current_user_evaluated": evaluated[t.ID],
 			"has_draft":              draftSet[t.ID],
 			"evaluation_records":     summary,
+			"participant_count":      participantCounts[t.ID],
+			"max_participants":       maxParticipants,
+			"joined":                 joinedSet[t.ID],
 			// 已删除视图（deleted=1）下恒为 true，供前端区分行状态与恢复入口
 			"is_deleted": t.IsDeleted,
 		}
@@ -188,6 +200,8 @@ func (h *Task) Get(c *gin.Context) {
 			createByName = creator.Username
 		}
 	}
+	participantCount, _ := service.TaskParticipantCount(h.db, t.ID)
+	joined, _ := service.IsTaskParticipant(h.db, t.ID, u.ID)
 	response.OK(c, gin.H{
 		"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
 		"teacher_college_id": teacherCollegeID, "teacher_college_name": teacherCollegeName,
@@ -195,6 +209,8 @@ func (h *Task) Get(c *gin.Context) {
 		"classroom": t.Classroom, "schedule": taskScheduleSnapshot(t), "status": t.Status,
 		"status_name":      model.TaskStatusNames[t.Status],
 		"evaluation_count": t.EvaluationCount, "has_supervisor_eval": t.HasSupervisorEval,
+		"participant_count": participantCount, "max_participants": service.TaskMaxParticipants(h.db),
+		"joined": joined,
 		"create_by": t.CreateBy, "create_by_name": createByName,
 		"create_time": FTime(t.CreateTime), "update_time": FTime(t.UpdateTime),
 		"evaluation_records": summary,
@@ -321,6 +337,77 @@ func (h *Task) BatchCreate(c *gin.Context) {
 		"created_count": len(created),
 		"skipped_count": len(res.Skipped),
 	})
+}
+
+// joinPayload 加入任务的响应体
+func joinPayload(res *service.ParticipantJoinResult) gin.H {
+	taskID := 0
+	if res.Task != nil {
+		taskID = res.Task.ID
+	}
+	return gin.H{
+		"task_id": taskID, "participant_count": res.ParticipantCount,
+		"max_participants": res.MaxParticipants, "already_joined": res.AlreadyJoined,
+		"over_limit": res.OverLimit, "created": res.Created,
+	}
+}
+
+func joinMessage(res *service.ParticipantJoinResult) string {
+	if res.AlreadyJoined {
+		return "您已加入该任务"
+	}
+	if res.Created {
+		return "已创建并加入评教任务"
+	}
+	if res.OverLimit {
+		return "已超员加入评教任务"
+	}
+	return "加入成功"
+}
+
+// Join 加入指定任务
+func (h *Task) Join(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		badReq(c, "无效的任务 ID")
+		return
+	}
+	u := middleware.CurrentUser(c)
+	res, err := h.svc.Join(h.db, u, id)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	service.LogRecord(h.db, &u.ID, u.Username, "join", "task", &id, "evaluation_task",
+		map[string]interface{}{"participant_count": res.ParticipantCount, "over_limit": res.OverLimit})
+	response.OKMsg(c, joinMessage(res), joinPayload(res))
+}
+
+// JoinOrCreate 课表「加入待评任务」：已有同教师+课程+上课时间任务则加入，否则创建并加入
+func (h *Task) JoinOrCreate(c *gin.Context) {
+	var p taskReq
+	if err := c.ShouldBindJSON(&p); err != nil {
+		badReq(c, "请求参数错误")
+		return
+	}
+	cp, err := toTaskParams(p)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	u := middleware.CurrentUser(c)
+	res, err := h.svc.JoinOrCreate(h.db, u, cp)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	taskID := 0
+	if res.Task != nil {
+		taskID = res.Task.ID
+	}
+	service.LogRecord(h.db, &u.ID, u.Username, "join", "task", &taskID, "evaluation_task",
+		map[string]interface{}{"participant_count": res.ParticipantCount, "created": res.Created, "over_limit": res.OverLimit})
+	response.OKMsg(c, joinMessage(res), joinPayload(res))
 }
 
 // Update 编辑任务

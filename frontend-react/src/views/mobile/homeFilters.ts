@@ -1,5 +1,5 @@
 export type StatusFilter = '' | '1' | '2' | 'supervisor_yes' | 'supervisor_no'
-export type CreatorFilter = '' | 'my_created' | 'other_created'
+export type CreatorFilter = '' | 'my_created' | 'my_joined' | 'other_created'
 
 export interface HomeFilters {
   semester: string | undefined

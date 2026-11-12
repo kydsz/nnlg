@@ -49,6 +49,7 @@ var PermissionCatalog = []PermissionGroup{
 		{Code: "task:delete_own", Name: "仅删除自己的评教任务"},
 		{Code: "task:restore", Name: "恢复评教任务"},
 		{Code: "task:restore_own", Name: "恢复本人创建的评教任务"},
+		{Code: "task:join_force", Name: "超员加入评教任务"},
 	}},
 	{Group: "评教记录", Permissions: []PermissionItem{
 		{Code: "evaluation:view", Name: "查看评教记录"},
@@ -70,6 +71,11 @@ var PermissionCatalog = []PermissionGroup{
 		// 不默认持有。系统管理员在权限中间件处直通（middleware/permission.go），无需迁移。
 		// 名称不含分组前缀：角色管理页按「分组·权限名」拼接展示（见 Roles.tsx）。
 		{Code: "stats:view_supervisors", Name: "查看督导统计"},
+		// stats:view_campus 控制「校区统计」页签（GET /stats/campus、GET /stats/campuses）。
+		// 校区统计是跨学院的校级口径，超出学院管理员「本学院」的数据范围，
+		// 故默认仅系统管理员可见（权限中间件直通，无需迁移补码）；需要放开时由
+		// 管理员在「角色管理」页勾选授予，内置的 college_admin / school_admin 不默认持有。
+		{Code: "stats:view_campus", Name: "查看校区统计"},
 	}},
 	{Group: "课程表", Permissions: []PermissionItem{
 		{Code: "schedule:view", Name: "查看课程表"},
@@ -77,6 +83,9 @@ var PermissionCatalog = []PermissionGroup{
 	}},
 	{Group: "数据同步", Permissions: []PermissionItem{
 		{Code: "sync:execute", Name: "执行数据同步"},
+	}},
+	{Group: "系统设置", Permissions: []PermissionItem{
+		{Code: "setting:manage", Name: "管理系统设置"},
 	}},
 }
 

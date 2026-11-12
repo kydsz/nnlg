@@ -36,6 +36,16 @@ type EvaluationTask struct {
 
 func (EvaluationTask) TableName() string { return "evaluation_task" }
 
+// EvaluationTaskParticipant 评教任务参与人（加入任务即占一个名额，需提交一份评教）
+type EvaluationTaskParticipant struct {
+	Model
+	TaskID   int        `gorm:"column:task_id;uniqueIndex:uk_task_participant_user,priority:1" json:"task_id"`
+	UserID   int        `gorm:"column:user_id;uniqueIndex:uk_task_participant_user,priority:2" json:"user_id"`
+	JoinedAt *LocalTime `gorm:"column:joined_at" json:"joined_at"`
+}
+
+func (EvaluationTaskParticipant) TableName() string { return "evaluation_task_participant" }
+
 // EvaluationRecord 评教记录表
 type EvaluationRecord struct {
 	Model

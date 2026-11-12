@@ -22,7 +22,7 @@ func evaluationTestDB(t *testing.T) *gorm.DB {
 		&model.UserRoom{}, &model.College{}, &model.ResearchRoom{},
 		&model.Role{},
 		&model.EvaluationTask{}, &model.EvaluationRecord{}, &model.EvaluationDimension{},
-		&model.EvaluationDraft{},
+		&model.EvaluationDraft{}, &model.EvaluationTaskParticipant{}, &model.SystemSetting{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}

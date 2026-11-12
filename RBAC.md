@@ -82,19 +82,21 @@
 
 ### 评教任务
 
-* task:view / task:view\_all / task:create / task:update / task:delete / task:delete\_own / task:restore / task:restore\_own
+* task:view / task:view\_all / task:create / task:update / task:delete / task:delete\_own / task:restore / task:restore\_own / task:join\_force
 
 > `task:view`：查看评教任务列表/详情/导出（能否进这块功能）。`teacher` / `supervisor` / `college_supervisor` 等内置角色默认分配该权限。历史数据缺失 `task:view` 的角色由迁移 `002_add_task_view_to_builtin_roles.sql` 自动补齐（幂等）。
 >
-> **`task:view_all`：查看他人评教任务。**未持有该权限者只能看到**与我相关的任务**——我创建的、我被评的、我评过的三者并集（服务端收敛条件 `relatedToMeCond`；`GET /tasks`、`GET /tasks/:id`、`POST /tasks/export` 同一口径，越权详情返回 403）。持有者再按其学院数据范围查看：管理员=本学院，三类督导=负责学院 / 全校，系统管理员 / 校级督导=全校。该收敛在**服务端查询构造处强制生效**——前端的「我创建的 / 其他创建的 / 全部任务」只是移动端拼的 `create_by` / `create_by_not` 参数，去掉也拿不到无关任务。默认授予 `college_admin` / `school_admin` / `school_supervisor` / `college_supervisor` / `supervisor`（迁移 `015_add_task_view_all_to_builtin_roles.sql` 幂等补码），**`teacher` 不授予**——需要放开时由管理员在「角色管理」页勾选「评教任务·查看他人评教任务」，无需改代码。移动端在无该权限时不展示「全部任务 / 其他创建的」两个视图。
+> **`task:view_all`：查看他人评教任务。**未持有该权限者只能看到**与我相关的任务**——我创建的、我被评的、我评过的、我加入的（服务端收敛条件 `relatedToMeCond`；`GET /tasks`、`GET /tasks/:id`、`POST /tasks/export` 同一口径，越权详情返回 403）。持有者再按其学院数据范围查看：管理员=本学院，三类督导=负责学院 / 全校，系统管理员 / 校级督导=全校。该收敛在**服务端查询构造处强制生效**——前端的「我创建的 / 我加入的 / 其他创建的 / 全部任务」只是移动端拼的 `create_by` / `joined_by` / `create_by_not` 参数，去掉也拿不到无关任务。默认授予 `college_admin` / `school_admin` / `school_supervisor` / `college_supervisor` / `supervisor`（迁移 `015_add_task_view_all_to_builtin_roles.sql` 幂等补码），**`teacher` 不授予**——需要放开时由管理员在「角色管理」页勾选「评教任务·查看他人评教任务」，无需改代码。移动端在无该权限时不展示「全部任务 / 其他创建的」两个视图，但「我加入的」恒展示。
 >
 > **关于** **`data_scope = self`** **与"查看评教任务"的差异**：角色的 `data_scope` 字段只约束**个人数据**的范围，即评教记录、课表这类直接关联到"我"的数据（教师为 `self`，只能看自己的）。**评教任务**不走 `data_scope`，而是两层过滤叠加：`task:view_all` 决定「是否可见他人的任务」，`AccessibleCollegeIDs` + `applyCollegeFilter` 决定「可见哪些学院的任务」。因此教师（无 `task:view_all`）只能看到与自己相关的任务，看不到本学院其他教师的待评计划。
 
-> `task:create`：创建评教任务。接口 `POST /tasks`（含批量 `POST /tasks/batch`）均需该权限。教师默认分配该权限后，可在移动端课表页将课程加入"待评课表"；后端 `checkTaskTargetScope` 教师分支天然限定**只能为本学院教师（含自己）创建任务**，无法跨学院操作。`supervisor`（督导老师）同样分配 `task:create`，可添加自己及负责学院教师的课程进待评任务（督导分支按负责学院限定）。历史角色缺失 `task:create` 的由迁移 `004_add_task_create_to_teacher.sql`（teacher）、`005_add_task_create_to_supervisor.sql`（supervisor）自动补齐（幂等）。
+> `task:create`：创建评教任务。接口 `POST /tasks`（含批量 `POST /tasks/batch`）均需该权限。教师默认分配该权限后，可在移动端课表页将课程加入"待评课表"；`POST /tasks/join`（课表「加入待评任务」）另需 `evaluation:create`——加入即占参与名额并应提交评教，避免占名额却无法评教。后端 `checkTaskTargetScope` 教师分支天然限定**只能为本学院教师（含自己）创建任务**，无法跨学院操作。`supervisor`（督导老师）同样分配 `task:create`，可添加自己及负责学院教师的课程进待评任务（督导分支按负责学院限定）。历史角色缺失 `task:create` 的由迁移 `004_add_task_create_to_teacher.sql`（teacher）、`005_add_task_create_to_supervisor.sql`（supervisor）自动补齐（幂等）。
 
 > `task:delete`：删除任意评教任务；`task:delete_own`：仅能删除自己创建的评教任务。两者可并存，系统管理员恒可删任意。删除任务只软删任务本身（数据保留、可恢复），任务名下已提交的评教记录不受影响——记录的存续、可见性与统计口径不随任务删除变化（见 CONTEXT.md「删除评教任务」）。因此删除任务权限不构成"删除评教记录"的旁路。
 
 > `task:restore`：恢复任意已删除的评教任务；`task:restore_own`：仅能恢复自己创建的已删除任务。两者可并存，系统管理员恒可恢复任意。恢复即清掉软删标记（`is_deleted=0`），只还原任务本身——删除从未改动任务聚合值、任务名下评教记录也不随任务删除变化，故恢复无需回补任何聚合数据（见 `internal/service/task.go` 的 `Restore`）。迁移 `016_add_restore_perms_to_builtin_roles.sql` 只为已持有**完整** `task:delete` 的角色镜像下发 `task:restore`（幂等）；`task:restore_own` **不再自动镜像**——恢复入口在管理端（`AdminGate` 之后），持 `task:delete_own` 的非管理端角色（teacher / 督导）进不了该 UI，自动下发只会造出「能删不能恢复」的死权限，这类角色删除后如需恢复统一联系管理员（与移动端删除文案一致），`task:restore_own` 仍保留在权限目录中供管理员手动分配；该迁移并对历史已下发 `task:restore_own` 的非管理端内置角色做幂等移除（自愈）。恢复若与现存「未删除、未取消」的同教师+同课程+同上课时间任务冲突（唯一索引 `uk_task_dedupe_active`），返回可读的 400 提示而非裸数据库错误。此外，任务列表新增 `deleted=1` 查询参数（只看已删除，供恢复入口使用），**仅对持 `task:restore` 或 `task:restore_own` 者生效**；无权限者即便传参也被服务端强制 `is_deleted=0`，看不到已删数据。
+
+> `task:join_force`：满员后超员加入评教任务。任务参与人数上限来自系统配置 `task_max_participants`（默认 4，含创建人），满员后普通评教人不能再加入；持该权限者可通过 `POST /tasks/:id/join` 继续加入，任务显示 `5/4`，等全部参与人评完才算已评。系统管理员恒可；内置 `college_admin` / `school_admin` 由迁移 `020_add_join_force_to_admin_roles.sql` 默认下发，督导与教师不默认授予。
 
 ### 评教记录
 
@@ -102,7 +104,7 @@
 
 > `evaluation:create`：提交评教。接口 `POST /evaluations`（含 `POST /evaluations/with-files`）均需该权限。教师默认分配该权限后可提交同行评教；业务约束（不能评自己、只能评本学院教师、任务未取消/未重复提交）由后端 `ValidateSubmit` 校验，与路由权限门分离。历史数据缺失 `evaluation:create` 的 teacher 角色由迁移 `008_add_evaluation_create_to_teacher.sql` 自动补齐（幂等）。
 
-> `evaluation:view_all`：查看他人评教记录（含匿名详情）的权限码，由系统管理员在角色管理中按需分配；分配后督导等角色可按其学院数据范围查看他人评教记录/详情/导出。
+> `evaluation:view_all`：查看他人评教记录（含匿名详情）的权限码。内置管理员角色（`college_admin` / `school_admin`）默认持有（迁移 `018_add_evaluation_view_all_to_admin_roles.sql` 幂等补码），按其学院数据范围查看本学院评教记录/详情/导出，与「匿名评教查看权限」表中「学院管理员可查看本学院完整信息」同口径；其余角色由系统管理员在角色管理中按需分配，分配后按其学院数据范围查看他人评教记录/详情/导出。
 
 > `evaluation:update`：修改评教记录（`PUT /evaluations/:id`）。可改维度作答、匿名标记，以及记录所挂课堂的课程信息（被评教师 / 课程名 / 上课时间 / 教室 / 课表快照）——改的是任务本身（记录 `task_id` 不变），该任务下全部记录同步显示新课程信息，任务评教数 / 督导已评 / 状态不变；课程信息另需 `task:update`，且**已有评教提交的任务仅管理员可编辑**（督导持 `task:update` 也不放行）。评教人 / 评教角色 / 提交时间一律不可改。非系统管理员按被评教师主学院收敛数据范围；保存为单事务（记录侧 + 任务侧同时生效或整体回滚），操作日志记录修改前后值。该码替换了此前借用 `evaluation:delete` 的编辑入口；内置角色中仅 `college_admin` / `school_admin` 默认持有（`system_admin` 恒有全部权限），由迁移 `017_add_evaluation_update_to_admin_roles.sql` 幂等下发。
 
@@ -116,7 +118,11 @@
 
 * stats:view\_supervisors
 
+* stats:view\_campus
+
 > `stats:view_supervisors`：查看/导出「督导统计」（`GET /stats/supervisors`、`GET /stats/export/supervisors`，整组仍需 `stats:view`）。督导统计是跨学院/校级口径——名单含「负责本范围的跨学院督导」（表格里的「学院」列是该督导的**主学院**），评教次数与平均分按其全校评教汇总，因此默认**只给系统管理员**（权限中间件直通，无需迁移补码），内置的 `college_admin` / `school_admin` 不持有；需要放开时由管理员在「角色管理」页勾选「统计报表·查看督导统计」，无需改代码。未持有该码时，前端统计报表页不渲染该页签，服务端对应接口返回 403。
+>
+> `stats:view_campus`：查看「校区统计」（`GET /stats/campus`、`GET /stats/campuses`，整组仍需 `stats:view`）。校区统计是跨学院的校级口径，超出学院管理员「本学院」的数据范围，因此与督导统计同规则——默认**只给系统管理员**，内置的 `college_admin` / `school_admin` 不持有（学院管理员不需要校区统计）；需要放开时由管理员在「角色管理」页勾选「统计报表·查看校区统计」，无需改代码。未持有该码时前端不渲染「校区统计」页签，服务端接口返回 403。
 
 ### 课程表
 
@@ -133,6 +139,12 @@
 ### 数据同步
 
 * sync:execute
+
+### 系统设置
+
+* setting:manage
+
+> `setting:manage`：管理全局系统配置（当前为单个评教任务最多参与人数 `task_max_participants`，默认 4，含创建人）。`GET/PUT /settings` 均需该权限；默认仅系统管理员持有（权限中间件直通，无迁移补码），需要放开时由系统管理员在「角色管理」页勾选。该配置的数值本身不是权限码——权限只表达「能不能改」，人数上限是配置值，改人数不需要发版。
 
 ### 异步队列（系统运维）
 
@@ -271,5 +283,8 @@
 * `015_add_task_view_all_to_builtin_roles.sql`：college\_admin / school\_admin / school\_supervisor / college\_supervisor / supervisor 补 `task:view_all`（teacher 不补）
 * `016_add_restore_perms_to_builtin_roles.sql`：为已持有**完整** delete 码的内置角色镜像下发对应 restore 码——持 `task:delete`→补 `task:restore`，持 `evaluation:delete`→补 `evaluation:restore`（幂等）。`*_own` 恢复码**不再自动镜像**：恢复入口在管理端（`AdminGate` 之后），持 `*_own` 删除码的非管理端角色（teacher / 督导）用不到，自动下发只会产生死权限；这两个码保留在目录中供管理员手动分配。迁移同时对历史已下发 `task:restore_own` / `evaluation:restore_own` 的非管理端内置角色做幂等移除（自愈）
 * `017_add_evaluation_update_to_admin_roles.sql`：给内置管理员角色（`college_admin` / `school_admin`；`system_admin` 恒有全部权限）补 `evaluation:update`（幂等）
+* `018_add_evaluation_view_all_to_admin_roles.sql`：给内置管理员角色（`college_admin` / `school_admin`）补 `evaluation:view_all`（幂等）——否则学院管理员在评教记录页落入「仅自己评的 + 评给自己的」分支，看不到本学院任何记录，其持有的 `evaluation:view_anonymous` / `evaluation:update` 也无从生效；三类督导**不**默认下发（评教记录含匿名身份，督导需要时由系统管理员在角色管理页勾选）
+* `019_task_participant_and_settings.sql`：新建任务参与人表 `evaluation_task_participant` 与系统配置表 `system_setting`，初始化 `task_max_participants = 4`，并按历史评教记录回填参与人（含已作废记录，不包含未评教的历史创建人）
+* `020_add_join_force_to_admin_roles.sql`：给内置管理员角色（`college_admin` / `school_admin`）补 `task:join_force`（幂等）；`system_admin` 恒有全部权限
 
-> `stats:view_supervisors`（统计报表·查看督导统计）**没有配套迁移**：系统管理员在权限中间件与 `/auth/me` 处恒有全部权限码，其它内置角色按产品口径**不默认授予**，新增迁移只会产生没人用的死权限。需要时由管理员在角色管理页勾选。
+> `stats:view_supervisors`（统计报表·查看督导统计）与 `stats:view_campus`（统计报表·查看校区统计）**没有配套迁移**：系统管理员在权限中间件与 `/auth/me` 处恒有全部权限码，其它内置角色按产品口径**不默认授予**（学院管理员不需要这两类校级口径统计），新增迁移只会产生没人用的死权限。需要时由管理员在角色管理页勾选。

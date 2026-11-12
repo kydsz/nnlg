@@ -25,12 +25,14 @@ import FormulaEditor from '@/components/FormulaEditor'
 import type { Dimension, CourseItem } from '@/api/types'
 import { formatDate } from '@/utils/format'
 import { downloadAttachment } from '@/utils/download'
+import { useAuthStore } from '@/stores/auth'
 
 export default function Evaluation() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const taskId = Number(id)
+  const hasPermission = useAuthStore((s) => s.hasPermission)
 
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [isAnonymous, setIsAnonymous] = useState(false)
@@ -167,7 +169,21 @@ export default function Evaluation() {
       qc.setQueryData(['evaluation-draft', taskId], { draft: null })
       navigate('/mobile/home', { replace: true })
     },
-    onError: (e) => Toast.show({ content: e instanceof Error ? e.message : '提交评教失败', icon: 'fail' }),
+    onError: (e) => {
+      Toast.clear()
+      const msg = e instanceof Error ? e.message : '提交评教失败'
+      // 页面停留过久、维度配置已变更时，后端会按新结构判「维度 X 为必填项」；
+      // 此时前端表单里可能根本没有该项，直接提示用户先暂存再刷新，避免反复重试卡死。
+      if (msg.includes('为必填项')) {
+        Dialog.alert({
+          title: '评教表单已更新',
+          content: '当前页面的评教维度与服务器不一致。请先点「暂存」保存已填内容，再刷新页面继续填写。',
+          confirmText: '知道了',
+        })
+        return
+      }
+      Toast.show({ content: msg, icon: 'fail' })
+    },
   })
 
   const saveDraftMut = useMutation({
@@ -180,18 +196,46 @@ export default function Evaluation() {
     onError: (e) => Toast.show({ content: e instanceof Error ? e.message : '暂存失败', icon: 'fail' }),
   })
 
+  // 必填值为空（前端校验与提交前结构比对共用同一口径）
+  const isBlankValue = (v: unknown) =>
+    v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)
+
   const validate = (): string | null => {
     for (const d of dims || []) {
       if (!d.is_required) continue
-      const v = values[d.code]
-      if (v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)) {
+      if (isBlankValue(values[d.code])) {
         return `请填写「${d.name}」`
       }
     }
     return null
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    // 页面可能长时间未刷新：提交前强制拉取最新维度，避免用过期结构提交后
+    // 被后端判「维度 X 为必填项」——该项在旧页面里可能压根没渲染，用户无法补齐。
+    let latest: Dimension[] | undefined
+    try {
+      latest = await qc.fetchQuery({
+        queryKey: ['dimensions', 'active'],
+        queryFn: () => dimensionApi.active(),
+        staleTime: 0,
+      })
+    } catch {
+      latest = undefined // 拉取失败不阻断提交，仍按当前表单校验
+    }
+    const staleMissing = (latest || []).filter((d) => {
+      if (!d.is_required || !isBlankValue(values[d.code])) return false
+      const cur = (dims || []).find((x) => x.code === d.code)
+      return !cur || !cur.is_required // 当前表单校验覆盖不到的缺项，才算结构过期
+    })
+    if (staleMissing.length > 0) {
+      Dialog.alert({
+        title: '评教表单已更新',
+        content: `新增必填项：${staleMissing.map((d) => d.name).join('、')}。请检查页面并补充后再提交；若页面未显示该项，请先点「暂存」，刷新页面后继续填写。`,
+        confirmText: '知道了',
+      })
+      return
+    }
     const err = validate()
     if (err) {
       Toast.show({ content: err, icon: 'fail' })
@@ -245,6 +289,19 @@ export default function Evaluation() {
         <div style={{ color: '#666', fontSize: 13 }}>
           时间：{formatDate(task.class_time)}
         </div>
+        {task.participant_count != null && (
+          <div style={{ color: '#666', fontSize: 13 }}>
+            参与人数：{task.participant_count}/{task.max_participants ?? 4} 人
+          </div>
+        )}
+        {!task.joined &&
+          task.participant_count != null &&
+          task.participant_count >= (task.max_participants ?? 4) &&
+          !hasPermission('task:join_force') && (
+            <div style={{ color: '#d4380d', fontSize: 12, marginTop: 4 }}>
+              该任务已满员，无法提交评教
+            </div>
+          )}
       </Card>
 
       {/* 课表信息（快照优先，回退实时课表；仅展示） */}

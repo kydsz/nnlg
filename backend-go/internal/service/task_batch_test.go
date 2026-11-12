@@ -17,8 +17,9 @@ func taskBatchTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开内存库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.EvaluationTask{}, &model.User{}, &model.UserRole{},
-		&model.UserCollege{}, &model.UserRoom{}, &model.College{}, &model.ResearchRoom{}, &model.Role{}); err != nil {
+	if err := db.AutoMigrate(&model.EvaluationTask{}, &model.EvaluationRecord{}, &model.User{}, &model.UserRole{},
+		&model.UserCollege{}, &model.UserRoom{}, &model.College{}, &model.ResearchRoom{}, &model.Role{},
+		&model.EvaluationTaskParticipant{}, &model.SystemSetting{}); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
 	return db

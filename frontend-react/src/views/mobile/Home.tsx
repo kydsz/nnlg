@@ -75,6 +75,8 @@ export default function Home() {
       }
       if (creatorFilter === 'my_created' && userId != null) {
         params.create_by = userId
+      } else if (creatorFilter === 'my_joined' && userId != null) {
+        params.joined_by = userId
       } else if (creatorFilter === 'other_created' && userId != null) {
         params.create_by_not = userId
       }
@@ -178,20 +180,19 @@ export default function Home() {
             <option value="supervisor_yes">本次督导已评</option>
             <option value="supervisor_no">本次督导未评</option>
           </select>
-          {canViewOthersTasks && (
-            <select
-              value={creatorFilter}
-              onChange={(e) => {
-                setFilters((f) => ({ ...f, creatorFilter: e.target.value as CreatorFilter }))
-                resetAndReload()
-              }}
-              style={selectStyle}
-            >
-              <option value="">全部任务</option>
-              <option value="my_created">我创建的</option>
-              <option value="other_created">其他创建的</option>
-            </select>
-          )}
+          <select
+            value={creatorFilter}
+            onChange={(e) => {
+              setFilters((f) => ({ ...f, creatorFilter: e.target.value as CreatorFilter }))
+              resetAndReload()
+            }}
+            style={selectStyle}
+          >
+            {canViewOthersTasks && <option value="">全部任务</option>}
+            <option value="my_created">我创建的</option>
+            <option value="my_joined">我加入的</option>
+            {canViewOthersTasks && <option value="other_created">其他创建的</option>}
+          </select>
         </div>
       </div>
 
@@ -236,6 +237,11 @@ export default function Home() {
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
                   <Tag color="primary" fill="outline">{t.teacher_name}</Tag>
                   {t.classroom && <Tag color="success" fill="outline">{t.classroom}</Tag>}
+                  {t.participant_count != null && (
+                    <Tag color="primary" fill="outline">
+                      参与 {t.participant_count}/{t.max_participants ?? 4}
+                    </Tag>
+                  )}
                   {(t.evaluation_count ?? 0) > 0 && (
                     <Tag color="warning" fill="outline">已评 {t.evaluation_count} 人</Tag>
                   )}

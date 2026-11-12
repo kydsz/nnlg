@@ -163,6 +163,12 @@ export interface Task {
   course_supervisor_evaluated?: boolean
   /** 同课评教汇总：同学期同教师同课程（跨任务）按评教人去重的评教人数；字段缺省=无法统计，非 0 */
   course_evaluator_count?: number
+  /** 任务参与人数（含创建人） */
+  participant_count?: number
+  /** 单个任务参与人数上限 */
+  max_participants?: number
+  /** 当前登录用户是否已加入该任务 */
+  joined?: boolean
   /** 当前登录用户是否对该任务有暂存草稿 */
   has_draft?: boolean
   create_by?: number

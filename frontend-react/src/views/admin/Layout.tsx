@@ -19,6 +19,7 @@ import {
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
 import { useAuthStore, PWD_FORCE_CHANGE_DISMISS_KEY } from '@/stores/auth'
 import { authApi } from '@/api/modules/auth'
@@ -50,6 +51,7 @@ export const MENU: MenuItem[] = [
     perm: 'schedule:view',
   },
   { key: '/admin/data-sync', icon: <SyncOutlined />, label: '数据同步', perm: 'sync:execute' },
+  { key: '/admin/settings', icon: <SettingOutlined />, label: '系统设置', perm: 'setting:manage' },
   { key: '/admin/dimensions', icon: <TagsOutlined />, label: '评教维度', perm: 'dimension:manage' },
   { key: '/admin/tasks', icon: <FileTextOutlined />, label: '评教任务', perm: 'task:view' },
   {
