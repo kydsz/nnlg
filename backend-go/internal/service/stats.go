@@ -21,16 +21,17 @@ func NewStats() *Stats { return &Stats{} }
 
 // TeacherStatItem 教师统计输出（对齐旧端字段）
 type TeacherStatItem struct {
-	TeacherID        int     `json:"teacher_id"`
-	TeacherName      string  `json:"teacher_name"`
-	UserNo           string  `json:"user_no"`
-	CollegeName      *string `json:"college_name"`
-	TotalTasks       int64   `json:"total_tasks"`
-	EvaluatedTasks   int64   `json:"evaluated_tasks"`
-	PendingTasks     int64   `json:"pending_tasks"`
-	TotalEvaluations int     `json:"total_evaluations"`
-	AverageScore     float64 `json:"average_score"`
-	EvaluationRate   float64 `json:"evaluation_rate"`
+	TeacherID            int      `json:"teacher_id"`
+	TeacherName          string   `json:"teacher_name"`
+	UserNo               string   `json:"user_no"`
+	CollegeName          *string  `json:"college_name"`
+	TeachingCollegeNames []string `json:"teaching_college_names,omitempty"`
+	TotalTasks           int64    `json:"total_tasks"`
+	EvaluatedTasks       int64    `json:"evaluated_tasks"`
+	PendingTasks         int64    `json:"pending_tasks"`
+	TotalEvaluations     int      `json:"total_evaluations"`
+	AverageScore         float64  `json:"average_score"`
+	EvaluationRate       float64  `json:"evaluation_rate"`
 }
 
 // TeacherStatsFilters 教师统计筛选
@@ -66,20 +67,29 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 	}
 
 	uq := db.Model(&model.User{}).Where("status = 1 AND id IN ?", teacherIDs)
-	// 数据范围：教师只见自己；其余按学院范围
-	if viewer.HasRole(model.RoleTeacher) && !IsAdminRole(viewer) && !IsSupervisor(viewer) {
+	// 数据范围：教师只见自己；其余按学院范围（主学院或授课学院）
+	isTeacherOnly := viewer.HasRole(model.RoleTeacher) && !IsAdminRole(viewer) && !IsSupervisor(viewer)
+	var effectiveCollegeFilter []int
+	scope := AccessibleCollegeIDs(viewer)
+	if isTeacherOnly {
 		uq = uq.Where("id = ?", viewer.ID)
-	} else {
-		scope := AccessibleCollegeIDs(viewer)
-		if scope != nil {
-			if len(scope) == 0 {
-				return []TeacherStatItem{}, 0, nil
-			}
-			uq = uq.Where("college_id IN ?", scope)
+	} else if scope != nil {
+		if len(scope) == 0 {
+			return []TeacherStatItem{}, 0, nil
 		}
+		uq = whereTeacherCollegeIn(uq, "user", scope)
+		effectiveCollegeFilter = scope
 	}
 	if len(f.CollegeIDs) > 0 {
-		uq = uq.Where("college_id IN ?", f.CollegeIDs)
+		ids := f.CollegeIDs
+		if !isTeacherOnly && scope != nil {
+			ids = intersectIDs(ids, scope)
+			if len(ids) == 0 {
+				return []TeacherStatItem{}, 0, nil
+			}
+		}
+		uq = whereTeacherCollegeIn(uq, "user", ids)
+		effectiveCollegeFilter = ids
 	}
 	if f.Keyword != "" {
 		uq = uq.Where("username LIKE ?", "%"+f.Keyword+"%")
@@ -90,7 +100,7 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 		return nil, 0, err
 	}
 	var teachers []model.User
-	if err := uq.Preload("College").Order("id ASC").
+	if err := uq.Preload("College").Preload("TeachingColleges.College").Order("id ASC").
 		Offset((f.Page - 1) * f.PageSize).Limit(f.PageSize).Find(&teachers).Error; err != nil {
 		return nil, 0, err
 	}
@@ -114,7 +124,8 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 	out := make([]TeacherStatItem, 0, len(teachers))
 	for _, t := range teachers {
 		// 全部任务（含已删除，仅用于取评教记录，与评教记录页口径一致：记录不随任务删除消失）
-		tasks := tasksByTeacher[t.ID]
+		// 有学院范围时只保留该授课学院下的任务
+		tasks := filterTasksByCollege(tasksByTeacher[t.ID], t.CollegeID, effectiveCollegeFilter)
 		// 生效任务（仅未删除，用于任务计数，与任务列表页口径一致）
 		active := make([]model.EvaluationTask, 0, len(tasks))
 		for _, tk := range tasks {
@@ -148,10 +159,16 @@ func (s *Stats) TeacherStats(db *gorm.DB, viewer *model.User, f TeacherStatsFilt
 		if t.College != nil {
 			collegeName = &t.College.Name
 		}
+		teachingNames := make([]string, 0, len(t.TeachingColleges))
+		for _, tc := range t.TeachingColleges {
+			if tc.College != nil {
+				teachingNames = append(teachingNames, tc.College.Name)
+			}
+		}
 		out = append(out, TeacherStatItem{
 			TeacherID: t.ID, TeacherName: t.Username, UserNo: t.UserNo,
-			CollegeName: collegeName,
-			TotalTasks:  int64(len(active)), EvaluatedTasks: evaluated, PendingTasks: pending,
+			CollegeName: collegeName, TeachingCollegeNames: teachingNames,
+			TotalTasks: int64(len(active)), EvaluatedTasks: evaluated, PendingTasks: pending,
 			TotalEvaluations: len(records), AverageScore: recordsAvgScore(records, scoreCodes),
 			EvaluationRate: rate,
 		})
@@ -208,7 +225,7 @@ func (s *Stats) Overview(db *gorm.DB, viewer *model.User, semester string, start
 		if len(scope) == 0 {
 			taskQ = taskQ.Where("1 = 0")
 		} else {
-			taskQ = taskQ.Where("teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)", scope)
+			taskQ = taskQ.Where(TaskCollegeExpr("evaluation_task")+" IN ?", scope)
 		}
 	}
 	if start != nil {
@@ -231,7 +248,7 @@ func (s *Stats) Overview(db *gorm.DB, viewer *model.User, semester string, start
 		if len(scope) == 0 {
 			evalQ = evalQ.Where("1 = 0")
 		} else {
-			evalQ = evalQ.Where("t.teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)", scope)
+			evalQ = evalQ.Where(TaskCollegeExpr("t")+" IN ?", scope)
 		}
 	}
 	if start != nil {
@@ -418,9 +435,36 @@ func collegeScopeFor(viewer *model.User) []int {
 // taskStatsInput 任务统计条件
 type taskStatsInput struct {
 	TeacherIDs     []int
+	CollegeIDs     []int // 任务授课学院范围（非空时优先于 TeacherIDs 的任务过滤）
 	ClassStart     *time.Time
 	ClassEnd       *time.Time
 	EvaluatorRoles []string
+}
+
+// taskCollegeOf 任务学院：授课快照 > 人事快照 > 教师主学院（调用方已预取教师时传入）
+func taskCollegeOf(tk model.EvaluationTask, teacherCollegeID *int) *int {
+	if tk.CourseCollegeID != nil {
+		return tk.CourseCollegeID
+	}
+	if tk.TeacherCollegeID != nil {
+		return tk.TeacherCollegeID
+	}
+	return teacherCollegeID
+}
+
+// filterTasksByCollege 按任务授课学院过滤（filter 为 nil 表示不过滤）
+func filterTasksByCollege(tasks []model.EvaluationTask, teacherCollegeID *int, filter []int) []model.EvaluationTask {
+	if filter == nil {
+		return tasks
+	}
+	out := make([]model.EvaluationTask, 0, len(tasks))
+	for _, tk := range tasks {
+		c := taskCollegeOf(tk, teacherCollegeID)
+		if c != nil && containsInt(filter, *c) {
+			out = append(out, tk)
+		}
+	}
+	return out
 }
 
 // taskStatsFor 任务与评教统计（返回任务数、已评、待评、记录数、任务ID）
@@ -428,7 +472,11 @@ func taskStatsFor(db *gorm.DB, in taskStatsInput) (total, evaluated, pending, ev
 	q := db.Model(&model.EvaluationTask{}).Where("is_deleted = 0")
 	if len(in.TeacherIDs) > 0 {
 		q = q.Where("teacher_id IN ?", in.TeacherIDs)
-	} else {
+	}
+	if len(in.CollegeIDs) > 0 {
+		q = q.Where(TaskCollegeExpr("evaluation_task")+" IN ?", in.CollegeIDs)
+	}
+	if len(in.TeacherIDs) == 0 && len(in.CollegeIDs) == 0 {
 		return 0, 0, 0, 0, nil
 	}
 	if in.ClassStart != nil {
@@ -445,7 +493,13 @@ func taskStatsFor(db *gorm.DB, in taskStatsInput) (total, evaluated, pending, ev
 	// 存续独立于排课安排）；任务数/已评/待评仍是任务维度口径（见上方 q）。
 	rq := db.Table("evaluation_record r").
 		Joins("JOIN evaluation_task t ON t.id = r.task_id").
-		Where("r.is_deleted = 0 AND t.teacher_id IN ?", in.TeacherIDs)
+		Where("r.is_deleted = 0")
+	if len(in.TeacherIDs) > 0 {
+		rq = rq.Where("t.teacher_id IN ?", in.TeacherIDs)
+	}
+	if len(in.CollegeIDs) > 0 {
+		rq = rq.Where(TaskCollegeExpr("t")+" IN ?", in.CollegeIDs)
+	}
 	if in.ClassStart != nil {
 		rq = rq.Where("t.class_time >= ?", *in.ClassStart)
 	}
@@ -460,12 +514,18 @@ func taskStatsFor(db *gorm.DB, in taskStatsInput) (total, evaluated, pending, ev
 }
 
 // distinctTeachersWithTasks 有任务的去重教师数
-func distinctTeachersWithTasks(db *gorm.DB, teacherIDs []int, start, end *time.Time) int64 {
+func distinctTeachersWithTasks(db *gorm.DB, teacherIDs, collegeIDs []int, start, end *time.Time) int64 {
 	var cnt int64
-	if len(teacherIDs) == 0 {
+	if len(teacherIDs) == 0 && len(collegeIDs) == 0 {
 		return 0
 	}
-	q := db.Model(&model.EvaluationTask{}).Where("is_deleted = 0 AND teacher_id IN ?", teacherIDs)
+	q := db.Model(&model.EvaluationTask{}).Where("is_deleted = 0")
+	if len(teacherIDs) > 0 {
+		q = q.Where("teacher_id IN ?", teacherIDs)
+	}
+	if len(collegeIDs) > 0 {
+		q = q.Where(TaskCollegeExpr("evaluation_task")+" IN ?", collegeIDs)
+	}
 	if start != nil {
 		q = q.Where("class_time >= ?", *start)
 	}
@@ -476,18 +536,54 @@ func distinctTeachersWithTasks(db *gorm.DB, teacherIDs []int, start, end *time.T
 	return cnt
 }
 
-// collegeTeacherIDs 学院下的在岗教师
+// collegeTeacherIDs 学院下的在岗教师（人事学院 或 授课学院命中）
 func collegeTeacherIDs(db *gorm.DB, collegeIDs []int) ([]model.User, []int) {
 	if len(collegeIDs) == 0 {
 		return nil, nil
 	}
+	q := db.Where("status = 1 AND " + teacherCondAlias("user"))
+	q = whereTeacherCollegeIn(q, "user", collegeIDs)
 	var users []model.User
-	db.Where("status = 1 AND college_id IN ? AND "+teacherCondAlias("user"), collegeIDs).Find(&users)
+	q.Preload("College").Preload("TeachingColleges.College").Find(&users)
 	ids := make([]int, 0, len(users))
 	for _, u := range users {
 		ids = append(ids, u.ID)
 	}
 	return users, ids
+}
+
+// collegeTeacherPairs 学院 -> 关联教师（人事学院 + 授课学院，双维度去重）。
+// 同一教师可同时出现在多个学院下；每个学院内部去重。
+func collegeTeacherPairs(db *gorm.DB, collegeIDs []int) map[int][]model.User {
+	out := map[int][]model.User{}
+	if len(collegeIDs) == 0 {
+		return out
+	}
+	var users []model.User
+	q := db.Where("status = 1 AND " + teacherCondAlias("user"))
+	q = whereTeacherCollegeIn(q, "user", collegeIDs)
+	q.Preload("College").Preload("TeachingColleges.College").Find(&users)
+	allowed := map[int]bool{}
+	for _, id := range collegeIDs {
+		allowed[id] = true
+	}
+	for _, u := range users {
+		seen := map[int]bool{}
+		add := func(collegeID int) {
+			if !allowed[collegeID] || seen[collegeID] {
+				return
+			}
+			seen[collegeID] = true
+			out[collegeID] = append(out[collegeID], u)
+		}
+		if u.CollegeID != nil {
+			add(*u.CollegeID)
+		}
+		for _, tc := range u.TeachingColleges {
+			add(tc.CollegeID)
+		}
+	}
+	return out
 }
 
 // ---------- 批量预取（消除统计接口的 N+1） ----------
@@ -611,22 +707,20 @@ func (s *Stats) CollegeStats(db *gorm.DB, viewer *model.User, collegeID *int, se
 	start, end := semesterRangeOf(db, semester)
 
 	collegeName := "全部学院"
-	var users []model.User
-	q := db.Where("status = 1 AND " + teacherCondAlias("user"))
+	var targetColleges []int
 	if collegeID != nil {
 		var college model.College
 		if err := db.First(&college, *collegeID).Error; err != nil {
 			return nil, errors.New("学院不存在")
 		}
 		collegeName = college.Name
-		q = q.Where("college_id = ?", *collegeID)
+		targetColleges = []int{*collegeID}
 	} else if scope != nil {
-		q = q.Where("college_id IN ?", scope)
+		targetColleges = scope
 	}
-	q.Find(&users)
-	teacherIDs := make([]int, 0, len(users))
-	for _, u := range users {
-		teacherIDs = append(teacherIDs, u.ID)
+	var teacherIDs []int
+	if len(targetColleges) > 0 {
+		_, teacherIDs = collegeTeacherIDs(db, targetColleges)
 	}
 
 	withCourses := teachersWithCourses(db, teacherIDs, semester)
@@ -636,9 +730,9 @@ func (s *Stats) CollegeStats(db *gorm.DB, viewer *model.User, collegeID *int, se
 	}
 
 	total, evaluated, pending, evaluations, _ := taskStatsFor(db, taskStatsInput{
-		TeacherIDs: courseIDs, ClassStart: start, ClassEnd: end,
+		TeacherIDs: courseIDs, CollegeIDs: targetColleges, ClassStart: start, ClassEnd: end,
 	})
-	withTasks := distinctTeachersWithTasks(db, courseIDs, start, end)
+	withTasks := distinctTeachersWithTasks(db, courseIDs, targetColleges, start, end)
 
 	coverage := 0.0
 	if len(courseIDs) > 0 {
@@ -715,28 +809,25 @@ func (s *Stats) CollegeStatsList(db *gorm.DB, viewer *model.User, f CollegeStats
 	for _, c := range colleges {
 		pageCollegeIDs = append(pageCollegeIDs, c.ID)
 	}
-	allUsers, _ := collegeTeacherIDs(db, pageCollegeIDs)
-	usersByCollege := map[int][]model.User{}
-	allTeacherIDs := make([]int, 0, len(allUsers))
-	for _, u := range allUsers {
-		if u.CollegeID != nil {
-			usersByCollege[*u.CollegeID] = append(usersByCollege[*u.CollegeID], u)
+	usersByCollege := collegeTeacherPairs(db, pageCollegeIDs)
+	teacherSet := map[int]bool{}
+	allTeacherIDs := make([]int, 0)
+	for _, users := range usersByCollege {
+		for _, u := range users {
+			if !teacherSet[u.ID] {
+				teacherSet[u.ID] = true
+				allTeacherIDs = append(allTeacherIDs, u.ID)
+			}
 		}
-		allTeacherIDs = append(allTeacherIDs, u.ID)
 	}
 	withCourses := teachersWithCourses(db, allTeacherIDs, semester)
 	// 任务统计口径：is_deleted = 0 + 学期区间（与 taskStatsFor 一致）；
 	// 评教记录按记录维度取（含已软删任务下的记录，与记录页、教师统计口径一致）
 	tasksByTeacher := tasksByTeacherIDs(db, allTeacherIDs, start, end)
-	activeTasksByTeacher := map[int][]model.EvaluationTask{}
 	allTaskIDs := make([]int, 0)
-	for tid, ts := range tasksByTeacher {
+	for _, ts := range tasksByTeacher {
 		for _, tk := range ts {
 			allTaskIDs = append(allTaskIDs, tk.ID)
-			if tk.IsDeleted {
-				continue
-			}
-			activeTasksByTeacher[tid] = append(activeTasksByTeacher[tid], tk)
 		}
 	}
 	recordsByTask := recordsByTaskIDs(db, allTaskIDs, f.EvaluatorRoles)
@@ -751,11 +842,26 @@ func (s *Stats) CollegeStatsList(db *gorm.DB, viewer *model.User, f CollegeStats
 			}
 		}
 
+		// 只统计落在本学院（任务授课学院）下的任务，避免同一任务跨学院重复计数
+		tasksOfCollege := func(u model.User, includeDeleted bool) []model.EvaluationTask {
+			out := []model.EvaluationTask{}
+			for _, tk := range tasksByTeacher[u.ID] {
+				if !includeDeleted && tk.IsDeleted {
+					continue
+				}
+				c := taskCollegeOf(tk, u.CollegeID)
+				if c != nil && *c == college.ID {
+					out = append(out, tk)
+				}
+			}
+			return out
+		}
+
 		totalT, evaluatedT, pendingT, evals := int64(0), int64(0), int64(0), int64(0)
 		withTasks := int64(0)
 		evaluatedTIDs := map[int]bool{}
-		for _, tid := range courseIDs {
-			for _, tk := range activeTasksByTeacher[tid] {
+		for _, u := range users {
+			for _, tk := range tasksOfCollege(u, false) {
 				totalT++
 				switch tk.Status {
 				case model.TaskStatusEvaluated:
@@ -763,10 +869,9 @@ func (s *Stats) CollegeStatsList(db *gorm.DB, viewer *model.User, f CollegeStats
 				case model.TaskStatusPending:
 					pendingT++
 				}
-				evaluatedTIDs[tid] = true
+				evaluatedTIDs[u.ID] = true
 			}
-			// 评教记录数按记录维度：含已软删任务下的记录（不因任务删除而排除）
-			for _, tk := range tasksByTeacher[tid] {
+			for _, tk := range tasksOfCollege(u, true) {
 				evals += int64(len(recordsByTask[tk.ID]))
 			}
 		}
@@ -783,10 +888,10 @@ func (s *Stats) CollegeStatsList(db *gorm.DB, viewer *model.User, f CollegeStats
 			}
 		}
 
-		// 学院平均分：学院下属全部任务下的记录（含已软删任务；仅作废的记录不计入）
+		// 学院平均分：本学院任务下的记录（含已软删任务；仅作废的记录不计入）
 		var recs []model.EvaluationRecord
-		for _, tid := range courseIDs {
-			recs = append(recs, recordsOfTasks(tasksByTeacher[tid], recordsByTask)...)
+		for _, u := range users {
+			recs = append(recs, recordsOfTasks(tasksOfCollege(u, true), recordsByTask)...)
 		}
 		avg := recordsAvgScore(recs, scoreCodes)
 
@@ -802,7 +907,7 @@ func (s *Stats) CollegeStatsList(db *gorm.DB, viewer *model.User, f CollegeStats
 		// 教师明细（全部教师，标注是否有课）
 		details := make([]map[string]interface{}, 0, len(users))
 		for _, t := range users {
-			tRecs := recordsOfTasks(tasksByTeacher[t.ID], recordsByTask)
+			tRecs := recordsOfTasks(tasksOfCollege(t, true), recordsByTask)
 			tAvg := recordsAvgScore(tRecs, scoreCodes)
 			details = append(details, map[string]interface{}{
 				"teacher_id": t.ID, "teacher_name": t.Username, "user_no": t.UserNo,
@@ -875,7 +980,9 @@ func (s *Stats) CampusStats(db *gorm.DB, viewer *model.User, campusID *int, star
 	}
 
 	_, teacherIDs := collegeTeacherIDs(db, cids)
-	total, evaluated, pending, evaluations, _ := taskStatsFor(db, taskStatsInput{TeacherIDs: teacherIDs, ClassStart: start, ClassEnd: end})
+	total, evaluated, pending, evaluations, _ := taskStatsFor(db, taskStatsInput{
+		TeacherIDs: teacherIDs, CollegeIDs: cids, ClassStart: start, ClassEnd: end,
+	})
 	evalRate := 0.0
 	if total > 0 {
 		evalRate = round2(float64(evaluated) / float64(total) * 100)
@@ -910,73 +1017,43 @@ func (s *Stats) CampusStatsList(db *gorm.DB, viewer *model.User, start, end *tim
 
 	semester, _ := currentSemesterOf(db)
 
-	// 预取：全部学院及其教师、有课教师、任务、记录各一次查询，避免「每校区 4~8 条」的 N+1
+	// 学院 -> 校区映射（按调用者范围收敛）
 	var allColleges []model.College
 	db.Where("status = 1").Find(&allColleges)
 	collegesByCampus := map[int][]model.College{}
-	allCollegeIDs := make([]int, 0, len(allColleges))
+	allowed := map[int]bool{}
+	if scope != nil {
+		for _, id := range scope {
+			allowed[id] = true
+		}
+	}
 	for _, c := range allColleges {
+		if scope != nil && !allowed[c.ID] {
+			continue
+		}
 		if c.CampusID != nil {
 			collegesByCampus[*c.CampusID] = append(collegesByCampus[*c.CampusID], c)
 		}
-		allCollegeIDs = append(allCollegeIDs, c.ID)
 	}
-	allUsers, _ := collegeTeacherIDs(db, allCollegeIDs)
-	teacherIDsByCollege := map[int][]int{}
-	allTeacherIDs := make([]int, 0, len(allUsers))
-	for _, u := range allUsers {
-		if u.CollegeID != nil {
-			teacherIDsByCollege[*u.CollegeID] = append(teacherIDsByCollege[*u.CollegeID], u.ID)
-		}
-		allTeacherIDs = append(allTeacherIDs, u.ID)
-	}
-	withCourses := teachersWithCourses(db, allTeacherIDs, semester)
-	// 任务统计口径：is_deleted = 0；评教记录按记录维度（含已软删任务下的记录）
-	tasksByTeacher := tasksByTeacherIDs(db, allTeacherIDs, start, end)
-	activeTasksByTeacher := map[int][]model.EvaluationTask{}
-	allTaskIDs := make([]int, 0)
-	for tid, ts := range tasksByTeacher {
-		for _, tk := range ts {
-			allTaskIDs = append(allTaskIDs, tk.ID)
-			if tk.IsDeleted {
-				continue
-			}
-			activeTasksByTeacher[tid] = append(activeTasksByTeacher[tid], tk)
-		}
-	}
-	recordsByTask := recordsByTaskIDs(db, allTaskIDs, nil)
 
 	list := make([]map[string]interface{}, 0, len(campuses))
 	for _, campus := range campuses {
-		courseIDs := make([]int, 0)
+		cids := make([]int, 0, len(collegesByCampus[campus.ID]))
 		for _, c := range collegesByCampus[campus.ID] {
-			for _, tid := range teacherIDsByCollege[c.ID] {
-				if withCourses[tid] {
-					courseIDs = append(courseIDs, tid)
-				}
+			cids = append(cids, c.ID)
+		}
+		_, teacherIDs := collegeTeacherIDs(db, cids)
+		withCourses := teachersWithCourses(db, teacherIDs, semester)
+		courseIDs := make([]int, 0, len(teacherIDs))
+		for _, tid := range teacherIDs {
+			if withCourses[tid] {
+				courseIDs = append(courseIDs, tid)
 			}
 		}
-
-		total, evaluated, pending, evaluations := int64(0), int64(0), int64(0), int64(0)
-		withTasksSet := map[int]bool{}
-		for _, tid := range courseIDs {
-			for _, tk := range activeTasksByTeacher[tid] {
-				total++
-				switch tk.Status {
-				case model.TaskStatusEvaluated:
-					evaluated++
-				case model.TaskStatusPending:
-					pending++
-				}
-				withTasksSet[tid] = true
-			}
-			// 评教记录数按记录维度：含已软删任务下的记录（不因任务删除而排除）
-			for _, tk := range tasksByTeacher[tid] {
-				evaluations += int64(len(recordsByTask[tk.ID]))
-			}
-		}
-		withTasks := int64(len(withTasksSet))
-
+		total, evaluated, pending, evaluations, _ := taskStatsFor(db, taskStatsInput{
+			TeacherIDs: courseIDs, CollegeIDs: cids, ClassStart: start, ClassEnd: end,
+		})
+		withTasks := distinctTeachersWithTasks(db, courseIDs, cids, start, end)
 		coverage := 0.0
 		if len(courseIDs) > 0 {
 			coverage = round2(float64(withTasks) / float64(len(courseIDs)) * 100)
@@ -1026,15 +1103,10 @@ func (s *Stats) CollegeTeacherDetails(db *gorm.DB, viewer *model.User, collegeID
 	// 预取：本学院教师的任务、被评记录、评出记录计数各一次查询
 	// （记录按记录维度取，含已软删任务下的记录；任务计数用生效任务）
 	tasksByTeacher := tasksByTeacherIDs(db, ids, nil, nil)
-	activeTasksByTeacher := map[int][]model.EvaluationTask{}
 	allTaskIDs := make([]int, 0)
-	for tid, ts := range tasksByTeacher {
+	for _, ts := range tasksByTeacher {
 		for _, tk := range ts {
 			allTaskIDs = append(allTaskIDs, tk.ID)
-			if tk.IsDeleted {
-				continue
-			}
-			activeTasksByTeacher[tid] = append(activeTasksByTeacher[tid], tk)
 		}
 	}
 	recordsByTask := recordsByTaskIDs(db, allTaskIDs, nil)
@@ -1055,7 +1127,9 @@ func (s *Stats) CollegeTeacherDetails(db *gorm.DB, viewer *model.User, collegeID
 
 	details := make([]map[string]interface{}, 0, len(users))
 	for _, t := range users {
-		received := recordsOfTasks(tasksByTeacher[t.ID], recordsByTask)
+		// 只统计本学院（任务授课学院）下的被评记录
+		teacherTasks := filterTasksByCollege(tasksByTeacher[t.ID], t.CollegeID, []int{collegeID})
+		received := recordsOfTasks(teacherTasks, recordsByTask)
 		avg := recordsAvgScore(received, scoreCodes)
 		details = append(details, map[string]interface{}{
 			"teacher_id": t.ID, "teacher_name": t.Username, "user_no": t.UserNo,
@@ -1196,7 +1270,7 @@ func (s *Stats) EvaluatorStats(db *gorm.DB, viewer *model.User, f PersonStatsFil
 		if len(scope) == 0 {
 			return []map[string]interface{}{}, 0, nil
 		}
-		idq = idq.Where("t.teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)", scope)
+		idq = idq.Where(TaskCollegeExpr("t")+" IN ?", scope)
 	}
 	if f.Start != nil {
 		idq = idq.Where("t.class_time >= ?", *f.Start)
@@ -1240,7 +1314,7 @@ func (s *Stats) EvaluatorStats(db *gorm.DB, viewer *model.User, f PersonStatsFil
 			Select("evaluation_record.*, t.teacher_id AS task_teacher_id").
 			Where("evaluator_id IN ? AND evaluation_record.is_deleted = 0", pageIDs)
 		if scope != nil {
-			rq = rq.Where("t.teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)", scope)
+			rq = rq.Where(TaskCollegeExpr("t")+" IN ?", scope)
 		}
 		if f.Start != nil {
 			rq = rq.Where("t.class_time >= ?", *f.Start)
@@ -1321,13 +1395,18 @@ func (s *Stats) UnteachedTeachers(db *gorm.DB, viewer *model.User, collegeID *in
 		target = &scope[0]
 	}
 
-	q := db.Model(&model.User{}).Where("status = 1 AND "+teacherCondAlias("user")+
-		" AND NOT EXISTS (SELECT 1 FROM evaluation_task t WHERE t.teacher_id = user.id AND t.class_time >= ? AND t.class_time < ?)",
-		*start, *end)
+	notExists := "NOT EXISTS (SELECT 1 FROM evaluation_task t WHERE t.teacher_id = user.id AND t.class_time >= ? AND t.class_time < ?"
+	args := []interface{}{*start, *end}
 	if target != nil {
-		q = q.Where("college_id = ?", *target)
+		notExists += " AND " + TaskCollegeExpr("t") + " = ?"
+		args = append(args, *target)
+	}
+	notExists += ")"
+	q := db.Model(&model.User{}).Where("status = 1 AND "+teacherCondAlias("user")+" AND "+notExists, args...)
+	if target != nil {
+		q = whereTeacherCollegeIn(q, "user", []int{*target})
 	} else if scope != nil {
-		q = q.Where("college_id IN ?", scope)
+		q = whereTeacherCollegeIn(q, "user", scope)
 	}
 
 	var total int64
@@ -1428,7 +1507,8 @@ func buildStudentCountIndex(db *gorm.DB, teacherIDs []int) *studentCountIndex {
 	return idx
 }
 
-// lookup 查学生人数（匹配规则与旧版单条查询一致：先模糊匹配课程名，否则退回首条明细）
+// lookup 查学生人数（先模糊匹配课程名）。匹配不上时返回 false，
+// 不再回退该教师课表首条明细——那可能是另一门课，宁可在导出中留空也不臆造人数。
 func (idx *studentCountIndex) lookup(teacherID int, courseName string) (int, bool) {
 	if idx == nil || teacherID == 0 || courseName == "" {
 		return 0, false
@@ -1446,13 +1526,26 @@ func (idx *studentCountIndex) lookup(teacherID int, courseName string) (int, boo
 			break
 		}
 	}
-	if matched == nil && len(details) > 0 {
-		matched = &details[0]
-	}
 	if matched == nil {
 		return 0, false
 	}
 	return ParseStudentCount(matched.ClassInfo)
+}
+
+// taskStudentCount 导出取「应到人数」：优先任务快照（与提交页/详情一致），
+// 快照缺失才回退现查课表。合班课程在课表里会拆成多条单班明细，
+// 按课程名取首条只会拿到一个班的人数，导致实到÷应到虚高。
+func taskStudentCount(task *model.EvaluationTask, idx *studentCountIndex) (int, bool) {
+	if len(task.ScheduleSnapshot) > 0 {
+		var snap struct {
+			StudentCount *int `json:"student_count"`
+		}
+		if err := json.Unmarshal(task.ScheduleSnapshot, &snap); err == nil &&
+			snap.StudentCount != nil && *snap.StudentCount > 0 {
+			return *snap.StudentCount, true
+		}
+	}
+	return idx.lookup(task.TeacherID, task.CourseName)
 }
 
 // textValue 取文本维度作答（缺失或空返回空串）
@@ -1484,14 +1577,14 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 			if len(scope) == 0 {
 				return []map[string]interface{}{}, 0, nil
 			}
-			q = q.Where("u.college_id IN ?", scope)
+			q = q.Where(TaskCollegeExpr("t")+" IN ?", scope)
 		}
 	} else {
 		// 未被分配查看权限（含督导）：仅自己评的 + 评给自己的
 		q = q.Where("(t.teacher_id = ? OR r.evaluator_id = ?)", viewer.ID, viewer.ID)
 	}
 	if len(f.CollegeIDs) > 0 {
-		q = q.Where("u.college_id IN ?", f.CollegeIDs)
+		q = q.Where(TaskCollegeExpr("t")+" IN ?", f.CollegeIDs)
 	}
 	if f.TeacherID != nil {
 		q = q.Where("t.teacher_id = ?", *f.TeacherID)
@@ -1542,11 +1635,14 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 	var users []model.User
 	db.Preload("College").Where("id IN ?", keysOf(teacherIDs)).Find(&users)
 	userMap := map[int]model.User{}
-	campusIDs := map[int]bool{}
 	for _, u := range users {
 		userMap[u.ID] = u
-		if u.College != nil && u.College.CampusID != nil {
-			campusIDs[*u.College.CampusID] = true
+	}
+	taskColleges := TaskCollegeMap(db, tasks)
+	campusIDs := map[int]bool{}
+	for _, info := range taskColleges {
+		if info.CourseCollege != nil && info.CourseCollege.CampusID != nil {
+			campusIDs[*info.CourseCollege.CampusID] = true
 		}
 	}
 	campusNames := map[int]string{}
@@ -1620,14 +1716,14 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 
 		collegeName := interface{}(nil)
 		campusName := ""
-		if teacher.College != nil {
-			collegeName = teacher.College.Name
-			if teacher.College.CampusID != nil {
-				campusName = campusNames[*teacher.College.CampusID]
+		if info, ok := taskColleges[task.ID]; ok && info.CourseCollege != nil {
+			collegeName = info.CourseCollege.Name
+			if info.CourseCollege.CampusID != nil {
+				campusName = campusNames[*info.CourseCollege.CampusID]
 			}
 		}
 
-		studentCount, hasStudents := studentIdx.lookup(task.TeacherID, task.CourseName)
+		studentCount, hasStudents := taskStudentCount(&task, studentIdx)
 		// 出勤率：优先用记录里存的值（评教人填写的为准），历史记录缺该键时按「实到 ÷ 应到」现算
 		attendanceRate := attendanceRateOf(values, studentCount, hasStudents)
 		// 出勤人数：直接取作答里的实到人数。不再由出勤率反算——出勤率缺失时会把两列一起拖空
@@ -1655,7 +1751,7 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 			"evaluator_name":    evaluatorName,
 			"evaluator_role":    model.RoleName(r.EvaluatorRole),
 			"listening_content": listenContent, "attendance_rate": attendanceRate,
-			"TEI": opinion,
+			"TEI":         opinion,
 			"total_score": totalScore, "max_total_score": maxTotal,
 			"submit_time": ftimePtr(r.SubmitTime),
 		})
@@ -1665,14 +1761,17 @@ func (s *Stats) EvaluationRecordsStats(db *gorm.DB, viewer *model.User, f Record
 
 // attendanceRateOf 评教记录批量导出用的出勤率取值。
 //
-// 口径：记录里已存 attendance_rate（评教人填写/移动端自动算出）时以它为准，不被现算覆盖；
-// 缺失时按「实到 ÷ 应到 × 100」现算，保留 1 位小数——历史记录与 PC/督导端提交的记录
-// 往往没有该键，只看记录里存的值会让整列恒空。
-// 应到人数优先取作答里的 expected_count，回退到课表推算的上课人数。
+// 口径：记录里已存 attendance_rate（评教人填写/移动端自动算出）且数值在 0-100 内时以它为准，
+// 不被现算覆盖；缺失或越界（旧端/人工/脏数据写出的 >100、<0）时按「实到 ÷ 应到 × 100」现算，
+// 保留 1 位小数——历史记录与 PC/督导端提交的记录往往没有该键，只看记录里存的值会让整列恒空。
+// 应到人数优先取作答里的 expected_count，回退到任务快照/课表推算的上课人数。
 // 实到或应到缺失（或应到为 0）时返回空串，导出留空——不臆造 0%。
 func attendanceRateOf(values map[string]interface{}, scheduleStudentCount int, hasScheduleStudents bool) interface{} {
 	if v, ok := values["attendance_rate"]; ok && v != nil && v != "" {
-		return v
+		if f, isNum := toFloat(v); !isNum || (f >= 0 && f <= 100) {
+			return v
+		}
+		// 数值越界视为脏数据：不原样输出，继续走下面的实到÷应到重算；算不出来则留空。
 	}
 	actual, ok := toFloat(values["actual_count"])
 	if !ok || actual < 0 {
@@ -1717,19 +1816,35 @@ func (s *Stats) TeacherEvaluationSummary(db *gorm.DB, viewer *model.User, f Summ
 	semester, _ := currentSemesterOf(db)
 
 	uq := db.Model(&model.User{}).Where("status = 1")
+	var effectiveCollegeFilter []int
 	if viewer.HasRole(model.RoleTeacher) && !IsAdminRole(viewer) && !IsSupervisor(viewer) {
 		uq = uq.Where("id = ?", viewer.ID)
 	} else if scope != nil {
 		if len(scope) == 0 {
 			return []map[string]interface{}{}, 0, nil
 		}
-		uq = uq.Where("college_id IN ?", scope)
+		uq = whereTeacherCollegeIn(uq, "user", scope)
+		effectiveCollegeFilter = scope
 	}
 	if len(f.CollegeIDs) > 0 {
-		uq = uq.Where("college_id IN ?", f.CollegeIDs)
+		ids := f.CollegeIDs
+		if scope != nil {
+			ids = intersectIDs(ids, scope)
+			if len(ids) == 0 {
+				return []map[string]interface{}{}, 0, nil
+			}
+		}
+		uq = whereTeacherCollegeIn(uq, "user", ids)
+		effectiveCollegeFilter = ids
 	}
 	if f.CampusID != nil {
-		uq = uq.Where("college_id IN (SELECT id FROM college WHERE campus_id = ? AND status = 1)", *f.CampusID)
+		var campusCollegeIDs []int
+		db.Model(&model.College{}).Where("campus_id = ? AND status = 1", *f.CampusID).Pluck("id", &campusCollegeIDs)
+		if scope != nil {
+			campusCollegeIDs = intersectIDs(campusCollegeIDs, scope)
+		}
+		uq = whereTeacherCollegeIn(uq, "user", campusCollegeIDs)
+		effectiveCollegeFilter = campusCollegeIDs
 	}
 	if len(f.ResearchRoomIDs) > 0 {
 		uq = uq.Where("research_room_id IN ?", f.ResearchRoomIDs)
@@ -1744,7 +1859,7 @@ func (s *Stats) TeacherEvaluationSummary(db *gorm.DB, viewer *model.User, f Summ
 
 	// 是否有课筛选
 	var allCandidates []model.User
-	uq.Session(&gorm.Session{}).Preload("College").Find(&allCandidates)
+	uq.Session(&gorm.Session{}).Preload("College").Preload("TeachingColleges.College").Find(&allCandidates)
 	idsOf := func(us []model.User) []int {
 		out := make([]int, 0, len(us))
 		for _, u := range us {
@@ -1820,7 +1935,11 @@ func (s *Stats) TeacherEvaluationSummary(db *gorm.DB, viewer *model.User, f Summ
 	tasksBy := map[int][]model.EvaluationTask{}
 	if len(userIDs) > 0 {
 		var tasks []model.EvaluationTask
-		db.Where("teacher_id IN ? AND is_deleted = 0", userIDs).Find(&tasks)
+		tq := db.Where("teacher_id IN ? AND is_deleted = 0", userIDs)
+		if effectiveCollegeFilter != nil {
+			tq = tq.Where(TaskCollegeExpr("evaluation_task")+" IN ?", effectiveCollegeFilter)
+		}
+		tq.Find(&tasks)
 		for _, t := range tasks {
 			tasksBy[t.TeacherID] = append(tasksBy[t.TeacherID], t)
 		}
@@ -1831,7 +1950,11 @@ func (s *Stats) TeacherEvaluationSummary(db *gorm.DB, viewer *model.User, f Summ
 	if len(userIDs) > 0 {
 		taskTeacher := map[int]int{}
 		var allTasks []model.EvaluationTask
-		db.Select("id, teacher_id").Where("teacher_id IN ?", userIDs).Find(&allTasks)
+		atq := db.Select("id, teacher_id, teacher_college_id, course_college_id").Where("teacher_id IN ?", userIDs)
+		if effectiveCollegeFilter != nil {
+			atq = atq.Where(TaskCollegeExpr("evaluation_task")+" IN ?", effectiveCollegeFilter)
+		}
+		atq.Find(&allTasks)
 		for _, t := range allTasks {
 			taskTeacher[t.ID] = t.TeacherID
 		}
@@ -1839,6 +1962,9 @@ func (s *Stats) TeacherEvaluationSummary(db *gorm.DB, viewer *model.User, f Summ
 			rq := db.Table("evaluation_record AS r").
 				Joins("JOIN evaluation_task t ON t.id = r.task_id").
 				Where("t.teacher_id IN ? AND r.is_deleted = 0", userIDs)
+			if effectiveCollegeFilter != nil {
+				rq = rq.Where(TaskCollegeExpr("t")+" IN ?", effectiveCollegeFilter)
+			}
 			rq = applyTime(rq)
 			if len(f.EvaluatorRoles) > 0 {
 				rq = rq.Where("r.evaluator_role IN ?", f.EvaluatorRoles)
@@ -1925,6 +2051,12 @@ func (s *Stats) TeacherEvaluationSummary(db *gorm.DB, viewer *model.User, f Summ
 		if u.College != nil {
 			collegeName = u.College.Name
 		}
+		teachingNames := make([]string, 0, len(u.TeachingColleges))
+		for _, tc := range u.TeachingColleges {
+			if tc.College != nil {
+				teachingNames = append(teachingNames, tc.College.Name)
+			}
+		}
 		var givenLatestI, receivedLatestI interface{}
 		if givenLatest != nil {
 			givenLatestI = givenLatest // LocalTime 序列化为 isoformat（对齐旧端 datetime 输出）
@@ -1934,7 +2066,8 @@ func (s *Stats) TeacherEvaluationSummary(db *gorm.DB, viewer *model.User, f Summ
 		}
 		result = append(result, map[string]interface{}{
 			"teacher_id": u.ID, "teacher_name": u.Username, "user_no": u.UserNo,
-			"college_name": collegeName, "role": u.Role, "role_name": model.RoleName(u.Role),
+			"college_name": collegeName, "teaching_college_names": teachingNames,
+			"role": u.Role, "role_name": model.RoleName(u.Role),
 			"roles": roles, "role_names": roleNames, "has_courses": withCourses[u.ID],
 			"given_count": len(given), "given_avg_score": recordsAvgScore(given, scoreCodes),
 			"given_teacher_count": len(givenTeachers), "given_latest_time": givenLatestI,

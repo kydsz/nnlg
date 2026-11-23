@@ -618,6 +618,21 @@ DELETE /dimensions/{dim_id}                                                     
 
 ***
 
+## 授课学院 (`/api/v1/teaching-colleges`)
+
+外聘教师的人事学院（`user.college_id`）可能与授课/开课学院不同。系统用独立关系表 `teacher_teaching_college` 记录「教师 → 授课学院」，评教任务创建时固化 `course_college_id` 快照，任务、评教记录、导出、统计均按授课学院口径。
+
+| 方法   | 路径                                        | 权限码            | 说明 |
+| ---- | ----------------------------------------- | -------------- | -- |
+| GET  | `/teacher-options`                        | task:create    | 教师选择器（范围内同时包含人事学院与授课学院），返回 `teaching_colleges` / `teaching_college_names` |
+| GET  | `/teaching-colleges`                      | user:update    | 授课学院关联列表（系统管理员全校；学院管理员本学院） |
+| GET  | `/teaching-colleges/candidates?keyword=`  | user:update    | 跨学院搜索启用中的教师（最小字段），供添加外院授课教师 |
+| POST | `/teaching-colleges`                      | user:update    | `{user_id, college_id}`；目标可为外院教师，写入学院须在调用者管理范围内；重复添加幂等 |
+| DELETE | `/teaching-colleges/{user_id}/{college_id}` | user:update  | 移除授课学院关系（范围校验同添加） |
+| POST | `/sync/teaching-colleges`                 | sync:execute   | `{semester, college_id}`：从教务按「上课院系」课表识别授课教师，只写授课学院关系，不改课表；同名歧义跳过并计入 `ambiguous` |
+
+> 教师归属判定统一为「人事学院 或 授课学院」；`user_college` 仍只表示督导负责学院，不参与授课归属。
+
 ## 评教任务接口 (`/api/v1/tasks`)
 
 ### 获取任务列表
@@ -658,6 +673,8 @@ GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1
         "teacher_name": "张老师",
         "teacher_college_id": 3,
         "teacher_college_name": "文理学院",
+        "course_college_id": 4,
+        "course_college_name": "信息与电气工程学院",
         "course_name": "高等数学",
         "class_time": "2024-01-15T08:00:00",
         "classroom": "A101",
@@ -686,7 +703,9 @@ GET /tasks?page=1&page_size=20&keyword=高等&status=1&teacher_id=1&college_id=1
 
 > 注意：`evaluation_records` 汇总按评教可见性过滤（督导默认看不到其他人的评教记录），`current_user_evaluated` 不受影响。
 
-**返回字段**：列表项含 `teacher_college_id` / `teacher_college_name`（被评教师所属学院，与可见范围、统计报表同口径）。`participant_count` 为任务参与人数（含创建人），`max_participants` 为全局配置的参与人数上限，`joined` 表示当前登录用户是否已加入该任务。同课汇总字段 `course_supervisor_evaluated` / `course_evaluator_count` 仅在能统计时下发，字段缺省表示「无法统计」而非「未评 / 0 人」。
+**返回字段**：`teacher_college_id` / `teacher_college_name` 为被评教师**人事学院**快照；`course_college_id` / `course_college_name` 为任务**授课学院**快照（任务列表的「学院」列、评教记录、导出与统计均以授课学院为准，无快照时回退人事学院）。`teacher_teaching_colleges` 返回该教师的可选学院（人事学院 + 授课学院），供编辑任务时选择。`participant_count` 为任务参与人数（含创建人），`max_participants` 为全局配置的参与人数上限，`joined` 表示当前登录用户是否已加入该任务。同课汇总字段 `course_supervisor_evaluated` / `course_evaluator_count` 仅在能统计时下发，字段缺省表示「无法统计」而非「未评 / 0 人」。
+
+> **学院口径**：`user.college_id` 是人事学院；`teacher_teaching_college` 是授课学院关系。外聘教师可同时在多个学院授课，任务按创建时固化的授课学院归集统计。
 
 **可见范围**：未持 `task:view_all`（查看他人评教任务）者只能看到与我相关的任务——我创建的、我被评的、我评过的、我加入的。该收敛在服务端强制生效，`create_by` / `create_by_not` / `joined_by` 等筛选参数无法绕过；持 `task:view_all` 者再按其学院数据范围查看（管理员=本学院，三类督导=负责学院 / 全校）。`task:view_all` 由管理员在「角色管理」页按角色分配，接口侧只认权限码。
 
@@ -715,8 +734,9 @@ POST /tasks
 | classroom     | string   | 否  | 教室（可为 null）     |
 | start\_time   | datetime | 否  | 开始时间            |
 | end\_time     | datetime | 否  | 结束时间            |
+| college\_id   | int      | 否  | 显式指定授课学院；缺省按教师授课学院与调用者学院范围自动解析 |
 
-**权限**: task:create。教师默认分配该权限后可将自己及本学院其他教师的课程加入"待评课表"（后端按教师所属学院校验，无法跨学院操作）。
+**权限**: task:create。教师/管理员可按「人事学院或授课学院」为教师建任务（外聘教师挂在本院授课即可操作）；显式指定的授课学院必须在调用者范围内，且属于该教师的人事学院/授课学院。
 
 ### 批量创建评教任务
 
@@ -1048,7 +1068,8 @@ POST /sync/course-schedule                # 同步课表（同 sync-from-jwxt）
 POST /sync/units-and-teachers             # 同步单位 + 教师
 POST /sync/llsykb                         # 同步指定教师课表（json: xnxq01id 可选, teacher_ids 必填，至少1人）
 POST /sync/llsykb/preview                 # 预览 llsykb 数据，不入库（query: xnxq01id, teacher_ids 可重复；role:manage）
-POST /sync/llsykb/batch                   # 批量同步全校/学院教师课表（后台任务；json: xnxq01id, college_id）
+POST /sync/llsykb/batch                   # 批量同步全校/学院教师课表（后台任务；json: xnxq01id, college_id；含本院授课学院的外聘教师）
+POST /sync/teaching-colleges              # 从教务按学院课表识别授课教师，只写授课学院关系、不改课表（json: semester, college_id）
 GET  /sync/llsykb/progress/{taskId}       # 批量同步进度
 GET  /sync/scan-invalid-users             # 扫描工号格式异常用户（返回 records + suggest_delete 名单）
 DELETE /sync/cleanup-user/{userId}        # 删除工号异常用户及其关联（仅限异常工号）
@@ -1148,6 +1169,8 @@ GET /stats/colleges?page=&page_size=&college_ids=&semester=&evaluator_roles=&sta
 GET /stats/college-teachers/{college_id}                 # 指定学院教师评教详情
 ```
 
+> **学院口径**：任务数/已评/待评/评教记录数按任务的**授课学院快照**归集；教师名单按「人事学院 ∪ 授课学院」纳入（外聘教师会出现在其授课学院下）。教师统计行额外返回 `teaching_college_names`，展示该教师的授课学院。
+
 ### 校区评教统计
 
 ```http
@@ -1231,7 +1254,7 @@ POST /stats/evaluation-records/export     # 评教记录导出
 }
 ```
 
-* `POST /stats/evaluation-records/export` 的考勤两列口径：`attendance_rate`（表头「出勤率(%)」）以评教记录里存下的值为准，记录里没有时按该次评教的「实到人数 ÷ 应到人数 × 100」现算（保留 1 位小数，应到优先取作答里的 `expected_count`，回退课表的上课人数）；`attendance_count`（表头「出勤人数」）取作答里的实到人数，不由出勤率反算。两者都拿不到时该格留空。
+* `POST /stats/evaluation-records/export` 的考勤两列口径：`attendance_rate`（表头「出勤率(%)」）在记录里存下的数值处于 0–100 内时以记录为准；缺失或越界（旧端/人工写入的 >100、<0）时按该次评教的「实到人数 ÷ 应到人数 × 100」现算（保留 1 位小数，应到优先取作答里的 `expected_count`，其次取任务快照 `schedule_snapshot.student_count`，快照缺失才回退课表匹配）；`attendance_count`（表头「出勤人数」）取作答里的实到人数，不由出勤率反算。两者都拿不到时该格留空。
 
 导出均为 XLSX 附件下载。
 

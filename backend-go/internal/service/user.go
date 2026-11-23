@@ -144,6 +144,7 @@ func (s *User) List(db *gorm.DB, caller *model.User, p UserParams) ([]model.User
 		Preload("UserRoles").
 		Preload("UserColleges.College").
 		Preload("UserRooms.ResearchRoom.College").
+		Preload("TeachingColleges.College").
 		Preload("College").
 		Preload("ResearchRoom").
 		Offset(offset).Limit(p.PageSize).
@@ -158,6 +159,7 @@ func (s *User) GetByID(db *gorm.DB, id int) (*model.User, error) {
 		Preload("UserRoles").
 		Preload("UserColleges.College").
 		Preload("UserRooms.ResearchRoom.College").
+		Preload("TeachingColleges.College").
 		Preload("College").
 		Preload("ResearchRoom").
 		First(&u, id).Error

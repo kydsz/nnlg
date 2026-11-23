@@ -196,7 +196,7 @@ func teacherScopeTestDB(t *testing.T) *gorm.DB {
 	}
 	if err := db.AutoMigrate(
 		&model.User{}, &model.UserRole{}, &model.UserCollege{},
-		&model.UserRoom{}, &model.College{}, &model.ResearchRoom{},
+		&model.UserRoom{}, &model.TeacherTeachingCollege{}, &model.College{}, &model.ResearchRoom{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}

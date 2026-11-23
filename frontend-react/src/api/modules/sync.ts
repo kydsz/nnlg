@@ -62,6 +62,15 @@ export const syncApi = {
       method: 'GET',
     }),
 
+  // 从教务按学院识别授课教师（只写授课学院关系，不改课表）
+  syncTeachingColleges: (semester: string, collegeId: number) =>
+    request<Record<string, unknown>>({
+      url: '/sync/teaching-colleges',
+      method: 'POST',
+      data: { semester, college_id: collegeId },
+      timeout: SYNC_TIMEOUT,
+    }),
+
   scanInvalidUsers: () =>
     request<Record<string, unknown>>({ url: '/sync/scan-invalid-users', method: 'GET' }),
 

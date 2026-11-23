@@ -89,7 +89,12 @@ function TeacherStatsTab() {
 
   const columns: ColumnsType<TeacherStat> = [
     { title: '教师', dataIndex: 'teacher_name', width: 120 },
-    { title: '学院', dataIndex: 'college_name' },
+    { title: '人事学院', dataIndex: 'college_name' },
+    {
+      title: '授课学院',
+      dataIndex: 'teaching_college_names',
+      render: (v: string[] | undefined) => (v && v.length ? v.join('、') : '-'),
+    },
     { title: '总任务', dataIndex: 'total_tasks', width: 90 },
     { title: '已评', dataIndex: 'evaluated_tasks', width: 80 },
     { title: '待评', dataIndex: 'pending_tasks', width: 80 },
@@ -261,7 +266,7 @@ function UnteachedTab() {
         columns={[
           { title: '工号', dataIndex: 'user_no', width: 110 },
           { title: '姓名', dataIndex: 'username', width: 120 },
-          { title: '学院', dataIndex: 'college_name', width: 200, ellipsis: true },
+          { title: '授课学院', dataIndex: 'college_name', width: 200, ellipsis: true },
           { title: '教研室', dataIndex: 'research_room_name', width: 300, ellipsis: true },
         ]}
       />

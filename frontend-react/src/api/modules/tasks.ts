@@ -1,5 +1,5 @@
 import { request, requestBlob } from '../http'
-import type { PageData, Task, EvalScheduleInfo } from '../types'
+import type { PageData, Task, EvalScheduleInfo, User } from '../types'
 
 export interface TaskListParams {
   page?: number
@@ -25,6 +25,8 @@ export interface TaskPayload {
   teacher_id: number
   classroom?: string
   class_time?: string
+  /** 显式指定授课学院（可选；为空时后端按教师授课学院与调用者范围自动解析） */
+  college_id?: number
   /** 加入待评时固化的课表信息快照 */
   schedule?: EvalScheduleInfo
 }
@@ -52,6 +54,15 @@ export const taskApi = {
     request<PageData<Task>>({ url: '/tasks', method: 'GET', params }),
 
   get: (id: number) => request<Task>({ url: `/tasks/${id}`, method: 'GET' }),
+
+  /** 教师选择器（任务创建/同步课表共用，范围内含授课学院） */
+  teacherOptions: (params?: {
+    page?: number
+    page_size?: number
+    keyword?: string
+    college_id?: string | number
+    research_room_id?: number
+  }) => request<PageData<User>>({ url: '/teacher-options', method: 'GET', params }),
 
   create: (data: TaskPayload) => request<Task>({ url: '/tasks', method: 'POST', data }),
 

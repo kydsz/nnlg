@@ -26,6 +26,18 @@ export interface UserPayload {
   status?: number
 }
 
+export interface TeachingCollegeRow {
+  user_id: number
+  user_no: string
+  username: string
+  teacher_college_id: number | null
+  teacher_college_name: string
+  college_id: number
+  college_name: string
+  source: string
+  join_time?: string | null
+}
+
 export const userApi = {
   list: (params: UserListParams) =>
     request<PageData<User>>({ url: '/users', method: 'GET', params }),
@@ -66,4 +78,29 @@ export const userApi = {
       method: 'PUT',
       data: { research_room_id: researchRoomId },
     }),
+
+  // ---- 授课学院管理 ----
+  listTeachingColleges: (params?: {
+    page?: number
+    page_size?: number
+    keyword?: string
+    college_id?: number
+  }) => request<PageData<TeachingCollegeRow>>({ url: '/teaching-colleges', method: 'GET', params }),
+
+  teachingCollegeCandidates: (keyword?: string) =>
+    request<{ list: User[] }>({
+      url: '/teaching-colleges/candidates',
+      method: 'GET',
+      params: { keyword: keyword || undefined },
+    }),
+
+  addTeachingCollege: (userId: number, collegeId: number) =>
+    request<null>({
+      url: '/teaching-colleges',
+      method: 'POST',
+      data: { user_id: userId, college_id: collegeId },
+    }),
+
+  removeTeachingCollege: (userId: number, collegeId: number) =>
+    request<null>({ url: `/teaching-colleges/${userId}/${collegeId}`, method: 'DELETE' }),
 }

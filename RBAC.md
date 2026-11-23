@@ -222,6 +222,17 @@
 
 * PUT    /users/{id}/supervisor-scope     覆盖式设置督导负责范围（user:update）
 
+### 授课学院（接口按 user:update 校验）
+
+* GET    /teacher-options                 教师选择器（task:create；范围含人事学院或授课学院）
+* GET    /teaching-colleges               授课学院关联列表（系统管理员全校；学院管理员本学院）
+* GET    /teaching-colleges/candidates    跨学院候选教师搜索（最小字段）
+* POST   /teaching-colleges               添加授课学院关系（目标可跨人事学院，写入学院须在管理范围内）
+* DELETE /teaching-colleges/{user_id}/{college_id}  移除授课学院关系
+* POST   /sync/teaching-colleges          从教务按学院识别授课教师（sync:execute；只写关系，不改课表）
+
+> `teacher_teaching_college` 表示授课学院；`user_college` 仍仅表示督导负责学院。任务、评教记录、导出与统计的「学院」按任务授课学院快照（`course_college_id`）口径，历史任务回填为教师人事学院。
+
 ### 异步队列管理（接口需 `role:manage`，系统管理员）
 
 * GET    /queue/status            查看评价异步队列状态（待处理数 / 死信数）

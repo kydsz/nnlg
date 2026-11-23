@@ -28,11 +28,12 @@ type User struct {
 	// Perms 已解析权限缓存（来自用户快照，避免每次鉴权回源查询角色表）；gorm:"-" 不落库
 	Perms []string `gorm:"-" json:"-"`
 
-	UserRoles    []UserRole    `gorm:"foreignKey:UserID" json:"-"`
-	UserColleges []UserCollege `gorm:"foreignKey:UserID" json:"-"`
-	UserRooms    []UserRoom    `gorm:"foreignKey:UserID" json:"-"`
-	College      *College      `gorm:"foreignKey:CollegeID" json:"-"`
-	ResearchRoom *ResearchRoom `gorm:"foreignKey:ResearchRoomID" json:"-"`
+	UserRoles        []UserRole               `gorm:"foreignKey:UserID" json:"-"`
+	UserColleges     []UserCollege            `gorm:"foreignKey:UserID" json:"-"`
+	UserRooms        []UserRoom               `gorm:"foreignKey:UserID" json:"-"`
+	TeachingColleges []TeacherTeachingCollege `gorm:"foreignKey:UserID" json:"-"`
+	College          *College                 `gorm:"foreignKey:CollegeID" json:"-"`
+	ResearchRoom     *ResearchRoom            `gorm:"foreignKey:ResearchRoomID" json:"-"`
 }
 
 func (User) TableName() string { return "user" }
@@ -128,6 +129,44 @@ type UserCollege struct {
 }
 
 func (UserCollege) TableName() string { return "user_college" }
+
+// TeacherTeachingCollege 教师授课学院关系表。
+// 与 user_college 解耦：user_college 仍只表示督导「负责学院」，
+// 本表表示该教师为哪些学院授课（人事学院仍为 user.college_id）。
+type TeacherTeachingCollege struct {
+	Model
+	UserID    int        `gorm:"column:user_id" json:"user_id"`
+	CollegeID int        `gorm:"column:college_id" json:"college_id"`
+	Source    string     `gorm:"column:source;size:16" json:"source"`
+	JoinTime  *LocalTime `gorm:"column:join_time" json:"join_time"`
+	College   *College   `gorm:"foreignKey:CollegeID" json:"college,omitempty"`
+}
+
+func (TeacherTeachingCollege) TableName() string { return "teacher_teaching_college" }
+
+// TeacherTeachingCollegeInfo 授课学院接口返回结构
+type TeacherTeachingCollegeInfo struct {
+	CollegeID   int        `json:"college_id"`
+	CollegeName string     `json:"college_name"`
+	CollegeCode string     `json:"college_code"`
+	Source      string     `json:"source"`
+	JoinTime    *LocalTime `json:"join_time"`
+}
+
+// TeachingCollegeInfos 导出授课学院关联信息
+func TeachingCollegeInfos(ttcs []TeacherTeachingCollege) []TeacherTeachingCollegeInfo {
+	list := make([]TeacherTeachingCollegeInfo, 0, len(ttcs))
+	for _, ttc := range ttcs {
+		if ttc.College == nil {
+			continue
+		}
+		list = append(list, TeacherTeachingCollegeInfo{
+			CollegeID: ttc.CollegeID, CollegeName: ttc.College.Name,
+			CollegeCode: ttc.College.Code, Source: ttc.Source, JoinTime: ttc.JoinTime,
+		})
+	}
+	return list
+}
 
 // UserRoom 用户-教研室关联表（user_research_room）
 type UserRoom struct {

@@ -26,6 +26,7 @@ export const EXPORT_FIELD_LABELS: Record<string, string> = {
   class_time: '上课时间',
   classroom: '教室',
   college_name: '学院',
+  teaching_college_names: '授课学院',
   evaluator_name: '评教人',
   evaluator_role: '评教人角色',
   submit_time: '提交时间',

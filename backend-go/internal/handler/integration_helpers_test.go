@@ -39,7 +39,7 @@ func newTestServer(t *testing.T) *testEnv {
 	}
 	if err := db.AutoMigrate(
 		&model.User{}, &model.UserRole{}, &model.UserCollege{}, &model.UserRoom{},
-		&model.College{}, &model.ResearchRoom{}, &model.Role{}, &model.OperationLog{},
+		&model.TeacherTeachingCollege{}, &model.College{}, &model.ResearchRoom{}, &model.Role{}, &model.OperationLog{},
 		&model.EvaluationTaskParticipant{}, &model.SystemSetting{}, &model.EvaluationDraft{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)

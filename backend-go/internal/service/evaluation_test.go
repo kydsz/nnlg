@@ -19,10 +19,11 @@ func evaluationTestDB(t *testing.T) *gorm.DB {
 	}
 	if err := db.AutoMigrate(
 		&model.User{}, &model.UserRole{}, &model.UserCollege{},
-		&model.UserRoom{}, &model.College{}, &model.ResearchRoom{},
+		&model.UserRoom{}, &model.TeacherTeachingCollege{}, &model.College{}, &model.ResearchRoom{},
 		&model.Role{},
 		&model.EvaluationTask{}, &model.EvaluationRecord{}, &model.EvaluationDimension{},
 		&model.EvaluationDraft{}, &model.EvaluationTaskParticipant{}, &model.SystemSetting{},
+		&model.SemesterConfig{}, &model.CourseSchedule{}, &model.CourseScheduleDetail{},
 	); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
@@ -184,7 +185,7 @@ func TestSupervisorRoleOf(t *testing.T) {
 
 // 回归：matchScheduleForTask 的 student_count 必须是 int/nil 而非 *int——
 // 导出（PDF/HTML）用 fmt.Sprint 渲染，指针会打出 0x... 内存地址
-//（线上截图「应到人数0x2b6082351468人」）。
+// （线上截图「应到人数0x2b6082351468人」）。
 func TestMatchScheduleForTaskStudentCountPlainInt(t *testing.T) {
 	snap := `{"class_time_text":"周六 第5-6节","classroom":"1-101","class_info":"2401(125)","student_count":125,"week_pattern":"第1-16周"}`
 	out := matchScheduleForTask(nil, &model.EvaluationTask{

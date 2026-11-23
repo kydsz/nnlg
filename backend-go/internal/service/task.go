@@ -27,14 +27,15 @@ type TaskFilters struct {
 	HasSupervisorEval *bool
 	CreateBy          *int
 	CreateByNot       *int
-	JoinedBy          *int // 只看我加入的（参与人关系）
+	JoinedBy          *int       // 只看我加入的（参与人关系）
 	Deleted           string     // "1" 只看已删除（仅持 task:restore / task:restore_own 者生效）
 	Start, End        *time.Time // 按上课时间（class_time）筛选学期区间
 	OrderBy, OrderDir string     // 排序字段白名单（id/class_time）与方向（asc/desc）
 	Page, PageSize    int
 }
 
-// applyCollegeFilter 按学院集合过滤任务的被评教师
+// applyCollegeFilter 按学院集合过滤任务的授课学院
+// （任务快照优先；历史任务回退被评教师人事学院，见 TaskCollegeExpr）
 func applyCollegeFilter(q *gorm.DB, ids []int) *gorm.DB {
 	if ids == nil {
 		return q
@@ -42,7 +43,7 @@ func applyCollegeFilter(q *gorm.DB, ids []int) *gorm.DB {
 	if len(ids) == 0 {
 		return q.Where("1 = 0")
 	}
-	return q.Where("teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)", ids)
+	return q.Where(TaskCollegeExpr("evaluation_task")+" IN ?", ids)
 }
 
 // relatedToMeCond 「与我相关」的评教任务：我创建的、我被评的、我评过的、我加入的。
@@ -211,21 +212,14 @@ func TeacherCollegeDisplay(colleges map[int]model.College, teacherID int) (*int,
 	return &id, college.Name
 }
 
-// checkTaskTargetScope 校验 caller 对目标教师所在学院的操作权
-func checkTaskTargetScope(caller *model.User, teacher *model.User) error {
-	switch {
-	case IsAdminRole(caller):
-		if !CollegeInScope(caller, teacher.CollegeID) {
-			return errors.New("您只能操作本学院教师的任务")
-		}
-	case IsSupervisor(caller):
-		if !CollegeInScope(caller, teacher.CollegeID) {
-			return errors.New("您只能操作自己负责学院的教师任务")
-		}
-	default: // 教师
-		if teacher.CollegeID == nil || caller.CollegeID == nil || *teacher.CollegeID != *caller.CollegeID {
-			return errors.New("您只能为同学院教师创建任务")
-		}
+// checkTaskTargetScope 校验 caller 对目标教师的操作权。
+// 教师归属按「人事学院 或 授课学院」认定：外聘教师只要挂在本院授课，
+// 本院管理员/督导/教师即可为其创建任务。
+func checkTaskTargetScope(db *gorm.DB, caller *model.User, teacher *model.User) error {
+	if !TeacherInScope(db, caller, teacher) {
+		return taskTargetScopeError(caller)
+	}
+	if !IsAdminRole(caller) && !IsSupervisor(caller) {
 		if teacher.Role != model.RoleTeacher && !teacher.HasRole(model.RoleTeacher) {
 			return errors.New("只能为教师角色创建评教任务")
 		}
@@ -242,6 +236,8 @@ type CreateTaskParams struct {
 	Classroom   *string          `json:"classroom"`
 	StartTime   *model.LocalTime `json:"start_time"`
 	EndTime     *model.LocalTime `json:"end_time"`
+	// CollegeID 显式指定授课学院（可选）；为空时按教师授课学院与调用者范围自动解析
+	CollegeID *int `json:"college_id"`
 	// 课表信息快照（加入待评时固化：上课时间/教室/班级/应到人数/周次）
 	ScheduleSnapshot *ScheduleSnapshot `json:"schedule"`
 }
@@ -281,7 +277,11 @@ func (s *Task) buildTask(db *gorm.DB, caller *model.User, p CreateTaskParams) (*
 	if teacher.Status != 1 {
 		return nil, errors.New("被评教师已停用")
 	}
-	if err := checkTaskTargetScope(caller, teacher); err != nil {
+	if err := checkTaskTargetScope(db, caller, teacher); err != nil {
+		return nil, err
+	}
+	teacherCollege, courseCollege, err := ResolveTaskCollege(db, caller, teacher, p.CollegeID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -300,6 +300,7 @@ func (s *Task) buildTask(db *gorm.DB, caller *model.User, p CreateTaskParams) (*
 	}
 	t := model.EvaluationTask{
 		TeacherID: p.TeacherID, TeacherName: name, CourseName: p.CourseName,
+		TeacherCollegeID: teacherCollege, CourseCollegeID: courseCollege,
 		ClassTime: p.ClassTime, Classroom: p.Classroom,
 		Status: model.TaskStatusPending, StartTime: p.StartTime, EndTime: p.EndTime,
 		CreateBy: IPtr(caller.ID),
@@ -401,6 +402,8 @@ type UpdateTaskParams struct {
 	StartTime  *model.LocalTime `json:"start_time"`
 	EndTime    *model.LocalTime `json:"end_time"`
 	Status     *int16           `json:"status"`
+	// CollegeID 显式修改授课学院（可选）；为空表示沿用任务原快照
+	CollegeID *int `json:"college_id"`
 	// 课表信息快照（编辑时随教室/时间一起可更新）
 	ScheduleSnapshot *ScheduleSnapshot `json:"schedule"`
 }
@@ -450,14 +453,15 @@ func (s *Task) Update(db *gorm.DB, caller *model.User, id int, p UpdateTaskParam
 		return nil, errors.New("已有评教提交的任务仅管理员可编辑")
 	}
 
-	// 编辑权限
+	// 编辑权限：按任务的授课学院快照判定（历史任务回退教师人事学院）
+	taskCollege := TaskCollegeID(db, t)
 	switch {
 	case IsAdminRole(caller):
-		if !CollegeInScope(caller, teacher.CollegeID) {
+		if !CollegeInScope(caller, taskCollege) {
 			return nil, errors.New("您只能操作本学院教师的任务")
 		}
 	case IsSupervisor(caller):
-		if !CollegeInScope(caller, teacher.CollegeID) {
+		if !CollegeInScope(caller, taskCollege) {
 			return nil, errors.New("您只能操作自己负责学院的教师任务")
 		}
 	default:
@@ -479,11 +483,26 @@ func (s *Task) Update(db *gorm.DB, caller *model.User, id int, p UpdateTaskParam
 		if newTeacher.Status != 1 {
 			return nil, errors.New("被评教师已停用")
 		}
-		if err := checkTaskTargetScope(caller, newTeacher); err != nil {
+		if err := checkTaskTargetScope(db, caller, newTeacher); err != nil {
+			return nil, err
+		}
+		teacherCollege, courseCollege, err := ResolveTaskCollege(db, caller, newTeacher, p.CollegeID)
+		if err != nil {
 			return nil, err
 		}
 		updates["teacher_id"] = newTeacher.ID
 		updates["teacher_name"] = newTeacher.Username
+		updates["teacher_college_id"] = teacherCollege
+		updates["course_college_id"] = courseCollege
+		hasOther = true
+	} else if p.CollegeID != nil {
+		// 不改教师、只改授课学院：校验目标学院属于该教师并重算快照
+		teacherCollege, courseCollege, err := ResolveTaskCollege(db, caller, teacher, p.CollegeID)
+		if err != nil {
+			return nil, err
+		}
+		updates["teacher_college_id"] = teacherCollege
+		updates["course_college_id"] = courseCollege
 		hasOther = true
 	}
 	if p.CourseName != nil {

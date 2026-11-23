@@ -19,7 +19,7 @@ import { PlusOutlined, SearchOutlined, DownloadOutlined } from '@ant-design/icon
 import type { ColumnsType } from 'antd/es/table'
 import { taskApi, type TaskPayload } from '@/api/modules/tasks'
 import { downloadBlob, exportFilename } from '@/utils/download'
-import type { Task } from '@/api/types'
+import type { Task, User } from '@/api/types'
 import { taskStatusInfo, formatDate } from '@/utils/format'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
@@ -30,6 +30,7 @@ export default function Tasks() {
   const { message } = App.useApp()
   const qc = useQueryClient()
   const userId = useAuthStore((s) => s.user?.id)
+  const authCollegeId = useAuthStore((s) => s.user?.college_id ?? undefined)
   const canDeleteAny = useAuthStore((s) => s.hasPermission('task:delete'))
   const canDeleteOwn = useAuthStore((s) => s.hasPermission('task:delete_own'))
   const canDeleteTask = (r: Task) =>
@@ -61,6 +62,9 @@ export default function Tasks() {
   const [modalOpen, setModalOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const [editing, setEditing] = useState<Task | null>(null)
+  const [teacherCollegeOptions, setTeacherCollegeOptions] = useState<
+    { label: string; value: number }[]
+  >([])
   const [form] = Form.useForm()
   const [batchForm] = Form.useForm()
   // 默认日期区间：当前学期（开学日 ~ 开学日+weeks×7天），手动选择后以手动值为准
@@ -75,8 +79,40 @@ export default function Tasks() {
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['tasks'] })
 
+  const collegeOptionsOf = (u?: Partial<User> | null) => {
+    if (!u) return [] as { label: string; value: number }[]
+    const map = new Map<number, string>()
+    if (u.college_id != null && u.college_name) map.set(u.college_id, u.college_name)
+    for (const tc of u.teaching_colleges || []) map.set(tc.college_id, tc.college_name)
+    return Array.from(map, ([value, label]) => ({ value, label }))
+  }
+
+  const handleTeacherSelect = (u?: User) => {
+    const opts = collegeOptionsOf(u)
+    setTeacherCollegeOptions(opts)
+    const current = form.getFieldValue('college_id') as number | undefined
+    if (!opts.length) {
+      form.setFieldValue('college_id', undefined)
+      return
+    }
+    if (current == null || !opts.some((o) => o.value === current)) {
+      // 优先调用者本院（学院管理员/教师的操作范围），其次教师人事学院
+      const preferred =
+        opts.find((o) => o.value === authCollegeId)?.value ??
+        u?.college_id ??
+        opts[0].value
+      form.setFieldValue('college_id', preferred)
+    }
+  }
+
   const saveMut = useMutation({
-    mutationFn: (values: { course_name: string; teacher_id: number; classroom?: string; class_time?: string }) => {
+    mutationFn: (values: {
+      course_name: string
+      teacher_id: number
+      classroom?: string
+      class_time?: string
+      college_id?: number
+    }) => {
       const payload: TaskPayload = {
         ...values,
         class_time: values.class_time || undefined,
@@ -127,7 +163,12 @@ export default function Tasks() {
     },
     { title: '课程', dataIndex: 'course_name' },
     { title: '教师', dataIndex: 'teacher_name', width: 110 },
-    { title: '学院', dataIndex: 'teacher_college_name', width: 140, render: (v) => v || '-' },
+    {
+      title: '授课学院',
+      dataIndex: 'course_college_name',
+      width: 150,
+      render: (v, r) => v || r.teacher_college_name || '-',
+    },
     { title: '教室', dataIndex: 'classroom', width: 100, render: (v) => v || '-' },
     {
       title: '上课时间',
@@ -200,11 +241,23 @@ export default function Tasks() {
               size="small"
               onClick={() => {
                 setEditing(record)
+                const opts = (record.teacher_teaching_colleges || []).map((c) => ({
+                  value: c.college_id,
+                  label: c.college_name,
+                }))
+                if (!opts.length && record.course_college_id != null) {
+                  opts.push({
+                    value: record.course_college_id,
+                    label: record.course_college_name || '当前授课学院',
+                  })
+                }
+                setTeacherCollegeOptions(opts)
                 form.setFieldsValue({
                   course_name: record.course_name,
                   teacher_id: record.teacher_id,
                   classroom: record.classroom,
                   class_time: record.class_time ? dayjs(record.class_time) : undefined,
+                  college_id: record.course_college_id ?? undefined,
                 })
                 setModalOpen(true)
               }}
@@ -296,6 +349,7 @@ export default function Tasks() {
               disabled={params.deleted === 1}
               onClick={() => {
                 setEditing(null)
+                setTeacherCollegeOptions([])
                 form.resetFields()
                 setModalOpen(true)
               }}
@@ -394,7 +448,31 @@ export default function Tasks() {
             label="被评教师"
             rules={[{ required: true, message: '请选择教师' }]}
           >
-            <TeacherSelect />
+            <TeacherSelect
+              onSelect={handleTeacherSelect}
+              initialOption={
+                editing
+                  ? {
+                      id: editing.teacher_id,
+                      username: editing.teacher_name,
+                      user_no: '',
+                      college_id: editing.teacher_college_id ?? null,
+                      college_name: editing.teacher_college_name ?? null,
+                    }
+                  : undefined
+              }
+            />
+          </Form.Item>
+          <Form.Item
+            name="college_id"
+            label="授课学院"
+            tooltip="任务展示与统计的学院口径；为空时按教师授课学院与你的学院范围自动解析"
+          >
+            <Select
+              allowClear
+              placeholder="默认自动解析"
+              options={teacherCollegeOptions}
+            />
           </Form.Item>
           <Form.Item name="classroom" label="教室">
             <Input />
@@ -421,10 +499,33 @@ function BatchCreateModal({
   onCreated: () => void
 }) {
   const { message } = App.useApp()
+  const authCollegeId = useAuthStore((s) => s.user?.college_id ?? undefined)
   const [form] = Form.useForm()
+  const [collegeOptions, setCollegeOptions] = useState<{ label: string; value: number }[]>([])
+
+  const handleTeacherSelect = (u?: User) => {
+    if (!u) {
+      setCollegeOptions([])
+      form.setFieldValue('college_id', undefined)
+      return
+    }
+    const map = new Map<number, string>()
+    if (u.college_id != null && u.college_name) map.set(u.college_id, u.college_name)
+    for (const tc of u.teaching_colleges || []) map.set(tc.college_id, tc.college_name)
+    const opts = Array.from(map, ([value, label]) => ({ value, label }))
+    setCollegeOptions(opts)
+    const preferred =
+      opts.find((o) => o.value === authCollegeId)?.value ?? u.college_id ?? opts[0]?.value
+    form.setFieldValue('college_id', preferred)
+  }
 
   const batchMut = useMutation({
-    mutationFn: (v: { teacher_id: number; course_names: string; classroom?: string }) => {
+    mutationFn: (v: {
+      teacher_id: number
+      course_names: string
+      classroom?: string
+      college_id?: number
+    }) => {
       const names = v.course_names
         .split('\n')
         .map((s) => s.trim())
@@ -434,6 +535,7 @@ function BatchCreateModal({
           course_name,
           teacher_id: v.teacher_id,
           classroom: v.classroom,
+          college_id: v.college_id,
         }))
       )
     },
@@ -459,7 +561,14 @@ function BatchCreateModal({
           label="被评教师"
           rules={[{ required: true, message: '请选择教师' }]}
         >
-          <TeacherSelect />
+          <TeacherSelect onSelect={handleTeacherSelect} />
+        </Form.Item>
+        <Form.Item
+          name="college_id"
+          label="授课学院"
+          tooltip="为空时按教师授课学院与你的学院范围自动解析"
+        >
+          <Select allowClear placeholder="默认自动解析" options={collegeOptions} />
         </Form.Item>
         <Form.Item
           name="course_names"

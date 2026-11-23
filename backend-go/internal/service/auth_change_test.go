@@ -33,7 +33,7 @@ func loginTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("打开内存库失败: %v", err)
 	}
 	if err := db.AutoMigrate(&model.User{}, &model.UserRole{}, &model.UserCollege{},
-		&model.UserRoom{}, &model.College{}, &model.ResearchRoom{}); err != nil {
+		&model.UserRoom{}, &model.TeacherTeachingCollege{}, &model.College{}, &model.ResearchRoom{}); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
 	return db
@@ -114,7 +114,7 @@ func createUserTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("打开内存库失败: %v", err)
 	}
 	if err := db.AutoMigrate(&model.User{}, &model.Role{}, &model.UserRole{},
-		&model.UserCollege{}, &model.UserRoom{}, &model.College{}, &model.ResearchRoom{}); err != nil {
+		&model.UserCollege{}, &model.UserRoom{}, &model.TeacherTeachingCollege{}, &model.College{}, &model.ResearchRoom{}); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
 	// checkRoleAssignable 会校验角色编码存在

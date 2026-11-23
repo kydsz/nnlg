@@ -388,6 +388,91 @@ func (h *User) UpdateSupervisorScope(c *gin.Context) {
 	response.OKMsg(c, "更新成功", userDetailItem(u, caller.HasRole(model.RoleSystemAdmin)))
 }
 
+// ListTeachingColleges 授课学院关联列表（系统管理员全校；学院管理员本学院）
+func (h *User) ListTeachingColleges(c *gin.Context) {
+	caller := middleware.CurrentUser(c)
+	if !service.IsAdminRole(caller) {
+		forbidden(c, "无权管理授课学院")
+		return
+	}
+	page, pageSize := pageOf(c)
+	p := service.TeachingCollegeListParams{
+		Page: page, PageSize: pageSize, Keyword: c.Query("keyword"),
+	}
+	if v := c.Query("college_id"); v != "" {
+		if id, err := strconv.Atoi(v); err == nil {
+			p.CollegeID = &id
+		}
+	}
+	list, total, err := h.svc.ListTeachingColleges(h.db, caller, p)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	response.OK(c, gin.H{"list": list, "total": total, "page": page, "page_size": pageSize})
+}
+
+// TeachingCollegeCandidates 候选教师（跨学院搜索，仅最小字段）
+func (h *User) TeachingCollegeCandidates(c *gin.Context) {
+	caller := middleware.CurrentUser(c)
+	if !service.IsAdminRole(caller) {
+		forbidden(c, "无权管理授课学院")
+		return
+	}
+	users, err := h.svc.TeachingCollegeCandidates(h.db, caller, c.Query("keyword"), 50)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	list := make([]gin.H, 0, len(users))
+	for i := range users {
+		u := &users[i]
+		list = append(list, gin.H{
+			"id": u.ID, "user_no": u.UserNo, "username": u.Username,
+			"college_id": u.CollegeID, "college_name": collegeName(u.College),
+		})
+	}
+	response.OK(c, gin.H{"list": list})
+}
+
+// AddTeachingCollege 添加授课学院关系
+func (h *User) AddTeachingCollege(c *gin.Context) {
+	caller := middleware.CurrentUser(c)
+	var p struct {
+		UserID    int `json:"user_id"`
+		CollegeID int `json:"college_id"`
+	}
+	if err := c.ShouldBindJSON(&p); err != nil || p.UserID == 0 || p.CollegeID == 0 {
+		badReq(c, "请求参数错误")
+		return
+	}
+	if err := h.svc.AddTeachingCollege(h.db, caller, p.UserID, p.CollegeID); err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", &p.UserID, "user",
+		map[string]interface{}{"action": "add_teaching_college", "college_id": p.CollegeID})
+	invalidateAllStats(c)
+	response.OKMsg(c, "添加成功", gin.H{"user_id": p.UserID, "college_id": p.CollegeID})
+}
+
+// RemoveTeachingCollege 删除授课学院关系
+func (h *User) RemoveTeachingCollege(c *gin.Context) {
+	userID, collegeID, ok := userIDExtOf(c, "college_id")
+	if !ok {
+		return
+	}
+	caller := middleware.CurrentUser(c)
+	if err := h.svc.RemoveTeachingCollege(h.db, caller, userID, collegeID); err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	service.LogRecord(h.db, &caller.ID, caller.Username, "update", "user", &userID, "user",
+		map[string]interface{}{"action": "remove_teaching_college", "college_id": collegeID})
+	invalidateAllStats(c)
+	response.OKMsg(c, "删除成功", nil)
+}
+
 // intListJSON 解析 int / []int / null 形态的 JSON 字段；解析失败返回错误（对齐旧端 500）
 func intListJSON(raw json.RawMessage) ([]int, error) {
 	if len(raw) == 0 || string(raw) == "null" {
@@ -453,6 +538,7 @@ func userListItem(u *model.User, includeScope bool) gin.H {
 		"status":             u.Status,
 		"last_login_time":    u.LastLoginTime,
 		"create_time":        u.CreateTime,
+		"teaching_colleges":  teachingCollegeInfos(u),
 	}
 	if includeScope {
 		item["supervisor_college_count"] = len(u.UserColleges)
@@ -467,18 +553,19 @@ func userListItem(u *model.User, includeScope bool) gin.H {
 // includeScope 语义同 userListItem：非系统管理员不返回督导负责范围。
 func userDetailItem(u *model.User, includeScope bool) gin.H {
 	item := gin.H{
-		"id":               u.ID,
-		"user_no":          u.UserNo,
-		"username":         u.Username,
-		"role":             u.Role,
-		"role_name":        model.RoleName(u.Role),
-		"roles":            userRolesInfo(u),
-		"status":           u.Status,
-		"college_id":       u.CollegeID,
-		"research_room_id": u.ResearchRoomID,
-		"last_login_time":  u.LastLoginTime,
-		"create_time":      u.CreateTime,
-		"update_time":      u.UpdateTime,
+		"id":                u.ID,
+		"user_no":           u.UserNo,
+		"username":          u.Username,
+		"role":              u.Role,
+		"role_name":         model.RoleName(u.Role),
+		"roles":             userRolesInfo(u),
+		"status":            u.Status,
+		"college_id":        u.CollegeID,
+		"research_room_id":  u.ResearchRoomID,
+		"last_login_time":   u.LastLoginTime,
+		"create_time":       u.CreateTime,
+		"update_time":       u.UpdateTime,
+		"teaching_colleges": teachingCollegeInfos(u),
 	}
 	if includeScope {
 		item["supervisor_colleges"] = userCollegeInfos(u)
@@ -496,6 +583,15 @@ func userRolesInfo(u *model.User) []model.UserRoleInfo {
 			RoleName:   model.RoleName(ur.Role),
 			AssignTime: ur.AssignTime,
 		})
+	}
+	return out
+}
+
+// teachingCollegeInfos 授课学院 [{college_id, college_name, source, join_time}]
+func teachingCollegeInfos(u *model.User) []model.TeacherTeachingCollegeInfo {
+	out := model.TeachingCollegeInfos(u.TeachingColleges)
+	if out == nil {
+		out = []model.TeacherTeachingCollegeInfo{}
 	}
 	return out
 }

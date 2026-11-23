@@ -112,13 +112,13 @@ func (h *Task) List(c *gin.Context) {
 		}
 	}
 
-	// 被评教师所属学院（口径与任务可见范围、统计报表一致：被评教师主学院）
+	// 任务学院快照（授课学院优先；无快照回退教师人事学院）
+	taskColleges := service.TaskCollegeMap(h.db, tasks)
 	teacherIDSet := map[int]bool{}
 	for _, t := range tasks {
 		teacherIDSet[t.TeacherID] = true
 	}
-	teacherColleges := service.TeacherCollegeMap(h.db, keysOf(teacherIDSet))
-
+	selectableColleges := service.TeacherSelectableCollegeMap(h.db, keysOf(teacherIDSet))
 	list := []gin.H{}
 	for i := range tasks {
 		t := &tasks[i]
@@ -132,11 +132,19 @@ func (h *Task) List(c *gin.Context) {
 				createByName = n
 			}
 		}
-		teacherCollegeID, teacherCollegeName := service.TeacherCollegeDisplay(teacherColleges, t.TeacherID)
+		collegeInfo := taskColleges[t.ID]
+		teacherCollegeID, teacherCollegeName := service.CollegeDisplay(collegeInfo.TeacherCollege)
+		courseCollegeID, courseCollegeName := service.CollegeDisplay(collegeInfo.CourseCollege)
+		selectable := []gin.H{}
+		for _, c := range selectableColleges[t.TeacherID] {
+			selectable = append(selectable, gin.H{"college_id": c.ID, "college_name": c.Name})
+		}
 		item := gin.H{
 			"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
 			"teacher_college_id": teacherCollegeID, "teacher_college_name": teacherCollegeName,
-			"course_name": t.CourseName, "class_time": FTimeMin(t.ClassTime),
+			"course_college_id": courseCollegeID, "course_college_name": courseCollegeName,
+			"teacher_teaching_colleges": selectable,
+			"course_name":               t.CourseName, "class_time": FTimeMin(t.ClassTime),
 			"classroom": t.Classroom, "status": t.Status,
 			"status_name": model.TaskStatusNames[t.Status],
 			"start_time":  FTime(t.StartTime), "end_time": FTime(t.EndTime),
@@ -185,13 +193,12 @@ func (h *Task) Get(c *gin.Context) {
 		summary = []map[string]interface{}{}
 	}
 	teacher, _ := service.LoadTeacherUser(h.db, t.TeacherID)
-	var teacherCollegeID interface{}
-	var teacherCollegeName interface{}
-	if teacher != nil {
-		teacherCollegeID = teacher.CollegeID
-		if teacher.College != nil {
-			teacherCollegeName = teacher.College.Name
-		}
+	collegeInfo := service.TaskCollegeMap(h.db, []model.EvaluationTask{*t})[t.ID]
+	teacherCollegeID, teacherCollegeName := service.CollegeDisplay(collegeInfo.TeacherCollege)
+	courseCollegeID, courseCollegeName := service.CollegeDisplay(collegeInfo.CourseCollege)
+	selectableColleges := []gin.H{}
+	for _, c := range service.TeacherSelectableColleges(h.db, teacher) {
+		selectableColleges = append(selectableColleges, gin.H{"college_id": c.ID, "college_name": c.Name})
 	}
 	var createByName interface{}
 	if t.CreateBy != nil {
@@ -205,12 +212,14 @@ func (h *Task) Get(c *gin.Context) {
 	response.OK(c, gin.H{
 		"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
 		"teacher_college_id": teacherCollegeID, "teacher_college_name": teacherCollegeName,
-		"course_name": t.CourseName, "class_time": FTimeMin(t.ClassTime),
+		"course_college_id": courseCollegeID, "course_college_name": courseCollegeName,
+		"teacher_teaching_colleges": selectableColleges,
+		"course_name":               t.CourseName, "class_time": FTimeMin(t.ClassTime),
 		"classroom": t.Classroom, "schedule": taskScheduleSnapshot(t), "status": t.Status,
 		"status_name":      model.TaskStatusNames[t.Status],
 		"evaluation_count": t.EvaluationCount, "has_supervisor_eval": t.HasSupervisorEval,
 		"participant_count": participantCount, "max_participants": service.TaskMaxParticipants(h.db),
-		"joined": joined,
+		"joined":    joined,
 		"create_by": t.CreateBy, "create_by_name": createByName,
 		"create_time": FTime(t.CreateTime), "update_time": FTime(t.UpdateTime),
 		"evaluation_records": summary,
@@ -226,6 +235,7 @@ type taskReq struct {
 	StartTime   *model.LocalTime          `json:"start_time"`
 	EndTime     *model.LocalTime          `json:"end_time"`
 	Status      *int16                    `json:"status"`
+	CollegeID   *int                      `json:"college_id"`
 	Schedule    *service.ScheduleSnapshot `json:"schedule"`
 }
 
@@ -234,7 +244,7 @@ func toTaskParams(p taskReq) (service.CreateTaskParams, error) {
 		TeacherID: p.TeacherID, TeacherName: p.TeacherName,
 		CourseName: p.CourseName, Classroom: p.Classroom,
 		ClassTime: p.ClassTime, StartTime: p.StartTime, EndTime: p.EndTime,
-		ScheduleSnapshot: p.Schedule,
+		CollegeID: p.CollegeID, ScheduleSnapshot: p.Schedule,
 	}, nil
 }
 
@@ -254,6 +264,7 @@ func taskScheduleSnapshot(t *model.EvaluationTask) interface{} {
 func taskCreatePayload(t *model.EvaluationTask) gin.H {
 	return gin.H{
 		"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
+		"teacher_college_id": t.TeacherCollegeID, "course_college_id": t.CourseCollegeID,
 		"course_name": t.CourseName, "class_time": FTimeMin(t.ClassTime),
 		"classroom": t.Classroom, "schedule": taskScheduleSnapshot(t), "status": t.Status,
 		"status_name":      model.TaskStatusNames[t.Status],
@@ -270,6 +281,7 @@ func taskUpdatePayload(t *model.EvaluationTask, teacher *model.User) gin.H {
 	}
 	return gin.H{
 		"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": teacherName,
+		"teacher_college_id": t.TeacherCollegeID, "course_college_id": t.CourseCollegeID,
 		"course_name": t.CourseName, "class_time": FTimeMin(t.ClassTime),
 		"classroom": t.Classroom, "schedule": taskScheduleSnapshot(t), "status": t.Status,
 		"status_name":      model.TaskStatusNames[t.Status],
@@ -421,7 +433,7 @@ func (h *Task) Update(c *gin.Context) {
 	up := service.UpdateTaskParams{
 		CourseName: &p.CourseName, Classroom: p.Classroom, Status: p.Status,
 		ClassTime: p.ClassTime, StartTime: p.StartTime, EndTime: p.EndTime,
-		ScheduleSnapshot: p.Schedule,
+		CollegeID: p.CollegeID, ScheduleSnapshot: p.Schedule,
 	}
 	// 空字符串表示不修改
 	if p.CourseName == "" {
@@ -455,6 +467,7 @@ func (h *Task) Update(c *gin.Context) {
 func taskAuditSnapshot(t model.EvaluationTask) map[string]interface{} {
 	return map[string]interface{}{
 		"teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
+		"teacher_college_id": t.TeacherCollegeID, "course_college_id": t.CourseCollegeID,
 		"course_name": t.CourseName, "class_time": t.ClassTime,
 		"classroom": t.Classroom, "schedule_snapshot": t.ScheduleSnapshot,
 		"status": t.Status,

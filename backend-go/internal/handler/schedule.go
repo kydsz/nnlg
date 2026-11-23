@@ -35,18 +35,18 @@ func (h *Schedule) List(c *gin.Context) {
 	}
 
 	u := middleware.CurrentUser(c)
-	// 权限控制：普通老师只能查看本学院教师的课表（对齐旧端）
+	// 权限控制：普通老师只能查看本学院教师的课表（对齐旧端）；
+	// 外聘教师通过授课学院关系纳入范围。
 	if u.Role == "teacher" {
-		collegeIDs := h.userCollegeIDs(u.ID)
-		if len(collegeIDs) == 0 && u.CollegeID != nil {
-			collegeIDs = []int{*u.CollegeID}
-		}
+		collegeIDs := service.AccessibleCollegeIDs(u)
 		if len(collegeIDs) == 0 {
 			response.OK(c, gin.H{"list": []gin.H{}})
 			return
 		}
 		var tids []int
-		h.db.Model(&model.User{}).Where("college_id IN ?", collegeIDs).Pluck("id", &tids)
+		h.db.Model(&model.User{}).
+			Where("college_id IN ? OR id IN (SELECT user_id FROM `teacher_teaching_college` WHERE college_id IN ?)", collegeIDs, collegeIDs).
+			Pluck("id", &tids)
 		f.TeacherIDs = tids
 		f.TeacherID = nil // 教师角色下忽略 teacher_id 筛选（对齐旧端分支）
 	}
@@ -66,13 +66,6 @@ func (h *Schedule) List(c *gin.Context) {
 		})
 	}
 	response.OK(c, gin.H{"list": out})
-}
-
-// userCollegeIDs 用户关联的全部学院 ID
-func (h *Schedule) userCollegeIDs(userID int) []int {
-	var ids []int
-	h.db.Model(&model.UserCollege{}).Where("user_id = ?", userID).Pluck("college_id", &ids)
-	return ids
 }
 
 // Detail 课表详情（扁平结构，含明细）
@@ -121,14 +114,21 @@ func (h *Schedule) Teachers(c *gin.Context) {
 	list := []gin.H{}
 	for i := range users {
 		u := &users[i]
+		teaching := model.TeachingCollegeInfos(u.TeachingColleges)
+		names := make([]string, 0, len(teaching))
+		for _, tc := range teaching {
+			names = append(names, tc.CollegeName)
+		}
 		list = append(list, gin.H{
-			"id":                 u.ID,
-			"user_no":            u.UserNo,
-			"username":           u.Username,
-			"college_id":         u.CollegeID,
-			"college_name":       collegeName(u.College),
-			"research_room_id":   u.ResearchRoomID,
-			"research_room_name": roomName(u.ResearchRoom),
+			"id":                     u.ID,
+			"user_no":                u.UserNo,
+			"username":               u.Username,
+			"college_id":             u.CollegeID,
+			"college_name":           collegeName(u.College),
+			"research_room_id":       u.ResearchRoomID,
+			"research_room_name":     roomName(u.ResearchRoom),
+			"teaching_colleges":      teaching,
+			"teaching_college_names": names,
 		})
 	}
 	response.OK(c, gin.H{"list": list, "total": total, "page": page, "page_size": pageSize})

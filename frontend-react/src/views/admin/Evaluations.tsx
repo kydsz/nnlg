@@ -131,7 +131,7 @@ export default function Evaluations() {
       sorter: true,
       sortOrder: sortState.field === 'class_time' ? sortState.order : null,
     },
-    { title: '学院', dataIndex: 'college_name', width: 130, render: (v) => v || '-' },
+    { title: '授课学院', dataIndex: 'college_name', width: 130, render: (v) => v || '-' },
     { title: '评教人', dataIndex: 'evaluator_name', width: 100 },
     {
       title: '匿名',
@@ -341,7 +341,7 @@ export default function Evaluations() {
               <Descriptions.Item label="教师">{detail.teacher_name}</Descriptions.Item>
               <Descriptions.Item label="课程">{detail.course_name}</Descriptions.Item>
               <Descriptions.Item label="上课时间">{formatDate(detail.class_time)}</Descriptions.Item>
-              <Descriptions.Item label="学院">{detail.college_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="授课学院">{detail.college_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="评教人">{detail.evaluator_name}</Descriptions.Item>
               <Descriptions.Item label="评教角色">
                 {detail.evaluator_role_name || detail.evaluator_role || '-'}

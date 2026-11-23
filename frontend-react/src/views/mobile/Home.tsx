@@ -232,7 +232,7 @@ export default function Home() {
                   )}
                 </div>
                 <div style={{ color: '#999', fontSize: 12, marginTop: 2 }}>
-                  {t.teacher_college_name || ''}
+                  {t.course_college_name || t.teacher_college_name || ''}
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
                   <Tag color="primary" fill="outline">{t.teacher_name}</Tag>

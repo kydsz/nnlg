@@ -36,11 +36,23 @@ export interface UserInfo {
   supervisor_college_count?: number
   supervisor_research_room_count?: number
   supervisor_colleges?: unknown[]
+  /** 授课学院（人事学院之外的授课关系） */
+  teaching_colleges?: TeachingCollegeInfo[]
+  teaching_college_names?: string[]
   status: number
   must_change_password?: boolean
   last_login_time: string | null
   create_time?: string
   update_time?: string
+}
+
+/** 教师授课学院关系 */
+export interface TeachingCollegeInfo {
+  college_id: number
+  college_name: string
+  college_code?: string
+  source?: 'manual' | 'jwxt' | string
+  join_time?: string | null
 }
 
 export interface LoginResult {
@@ -152,6 +164,11 @@ export interface Task {
   teacher_name: string
   teacher_college_id?: number | null
   teacher_college_name?: string | null
+  /** 任务授课/开课学院（评教展示与统计口径） */
+  course_college_id?: number | null
+  course_college_name?: string | null
+  /** 被评教师可选授课学院（主学院 + 授课学院），供编辑任务时选择 */
+  teacher_teaching_colleges?: { college_id: number; college_name: string }[]
   course_name: string
   class_time: string | null
   classroom: string | null
@@ -324,6 +341,7 @@ export interface TeacherStat {
   teacher_id: number
   teacher_name: string
   college_name?: string | null
+  teaching_college_names?: string[]
   total_tasks: number
   evaluated_tasks: number
   pending_tasks: number
@@ -357,6 +375,7 @@ export interface TeacherEvaluationSummary {
   teacher_name: string
   user_no?: string
   college_name?: string | null
+  teaching_college_names?: string[]
   role_names?: string[]
   given_count?: number
   given_avg_score?: number

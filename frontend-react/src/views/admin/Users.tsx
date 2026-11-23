@@ -21,10 +21,11 @@ import type { ColumnsType } from 'antd/es/table'
 import { userApi, type UserListParams } from '@/api/modules/users'
 import { orgApi } from '@/api/modules/org'
 import { roleApi } from '@/api/modules/roles'
-import type { User } from '@/api/types'
+import type { TeachingCollegeInfo, User } from '@/api/types'
 import { ROLE_NAMES } from '@/utils/roleNames'
 import { formatDate } from '@/utils/format'
 import { useAuthStore } from '@/stores/auth'
+import { useDebounce } from '@/hooks/useDebounce'
 
 // 督导角色才允许配置督导负责范围
 const SUPERVISOR_ROLES = ['school_supervisor', 'college_supervisor', 'supervisor']
@@ -44,6 +45,15 @@ export default function Users() {
   const [scopeUser, setScopeUser] = useState<User | null>(null)
   const [selectedIds, setSelectedIds] = useState<React.Key[]>([])
   const [form] = Form.useForm()
+  // 授课学院管理
+  const canManageTeaching = useAuthStore((s) => s.hasPermission('user:update'))
+  const [teachingOpen, setTeachingOpen] = useState(false)
+  const [teachingKeyword, setTeachingKeyword] = useState('')
+  const [teachingCollegeId, setTeachingCollegeId] = useState<number | undefined>()
+  const [candidateKeyword, setCandidateKeyword] = useState('')
+  const [candidateUserId, setCandidateUserId] = useState<number | undefined>()
+  const [candidateCollegeId, setCandidateCollegeId] = useState<number | undefined>()
+  const debouncedCandidateKeyword = useDebounce(candidateKeyword, 300)
 
   const { data, isLoading } = useQuery({
     queryKey: ['users', params],
@@ -72,6 +82,46 @@ export default function Users() {
     .map((r) => ({ label: r.name, value: r.code }))
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['users'] })
+  const invalidateTeaching = () => qc.invalidateQueries({ queryKey: ['teaching-colleges'] })
+
+  const { data: teachingList, isLoading: teachingLoading } = useQuery({
+    queryKey: ['teaching-colleges', teachingKeyword, teachingCollegeId],
+    queryFn: () =>
+      userApi.listTeachingColleges({
+        page: 1,
+        page_size: 100,
+        keyword: teachingKeyword || undefined,
+        college_id: teachingCollegeId,
+      }),
+    enabled: teachingOpen,
+  })
+  const { data: candidates } = useQuery({
+    queryKey: ['teaching-candidates', debouncedCandidateKeyword],
+    queryFn: () => userApi.teachingCollegeCandidates(debouncedCandidateKeyword),
+    enabled: teachingOpen && canManageTeaching,
+  })
+
+  const addTeachingMut = useMutation({
+    mutationFn: ({ userId, collegeId }: { userId: number; collegeId: number }) =>
+      userApi.addTeachingCollege(userId, collegeId),
+    onSuccess: () => {
+      message.success('授课学院已添加')
+      setCandidateUserId(undefined)
+      invalidateTeaching()
+      invalidate()
+    },
+    onError: (e) => message.error(e.message),
+  })
+  const removeTeachingMut = useMutation({
+    mutationFn: ({ userId, collegeId }: { userId: number; collegeId: number }) =>
+      userApi.removeTeachingCollege(userId, collegeId),
+    onSuccess: () => {
+      message.success('授课学院已移除')
+      invalidateTeaching()
+      invalidate()
+    },
+    onError: (e) => message.error(e.message),
+  })
 
   const saveMut = useMutation({
     mutationFn: (values: {
@@ -164,6 +214,23 @@ export default function Users() {
       sorter: true,
       sortOrder: sortState.field === 'college_name' ? sortState.order : null,
       render: (v) => v || '-',
+    },
+    {
+      title: '授课学院',
+      dataIndex: 'teaching_colleges',
+      width: 160,
+      render: (v: TeachingCollegeInfo[] | undefined) =>
+        v && v.length ? (
+          <Space size={4} wrap>
+            {v.map((tc) => (
+              <Tag key={tc.college_id} color="green">
+                {tc.college_name}
+              </Tag>
+            ))}
+          </Space>
+        ) : (
+          '-'
+        ),
     },
     {
       title: '角色',
@@ -285,6 +352,16 @@ export default function Users() {
         >
           新增用户
         </Button>
+        {canManageTeaching && (
+          <Button
+            onClick={() => {
+              setCandidateCollegeId(authUser?.college_id ?? undefined)
+              setTeachingOpen(true)
+            }}
+          >
+            授课学院管理
+          </Button>
+        )}
         {selectedIds.length > 0 && (
           <Space>
             <span style={{ color: '#999' }}>已选 {selectedIds.length} 项</span>
@@ -366,10 +443,125 @@ export default function Users() {
           <Form.Item name="research_room_id" label="所属教研室">
             <Select allowClear options={roomOptions} />
           </Form.Item>
+          {editing && editing.teaching_colleges && editing.teaching_colleges.length > 0 && (
+            <Form.Item label="授课学院（只读）">
+              <Space size={4} wrap>
+                {editing.teaching_colleges.map((tc) => (
+                  <Tag key={tc.college_id} color="green">
+                    {tc.college_name}
+                  </Tag>
+                ))}
+              </Space>
+            </Form.Item>
+          )}
           <Form.Item name="status" label="状态" valuePropName="checked">
             <Switch checkedChildren="启用" unCheckedChildren="禁用" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="授课学院管理"
+        open={teachingOpen}
+        onCancel={() => setTeachingOpen(false)}
+        footer={null}
+        width={860}
+      >
+        <div className="filter-bar">
+          <Input.Search
+            allowClear
+            placeholder="教师工号/姓名"
+            style={{ width: 200 }}
+            onSearch={setTeachingKeyword}
+          />
+          {canManageScope && (
+            <Select
+              allowClear
+              placeholder="授课学院"
+              style={{ width: 180 }}
+              options={collegeOptions}
+              onChange={setTeachingCollegeId}
+            />
+          )}
+        </div>
+        <Card size="small" title="添加授课教师" style={{ marginBottom: 12 }}>
+          <Space wrap>
+            <Select
+              showSearch
+              allowClear
+              filterOption={false}
+              placeholder="搜索教师（工号/姓名）"
+              style={{ width: 280 }}
+              value={candidateUserId}
+              onSearch={setCandidateKeyword}
+              onChange={setCandidateUserId}
+              options={(candidates?.list || []).map((u) => ({
+                label: `${u.username}（${u.user_no}）${u.college_name ? ` · ${u.college_name}` : ''}`,
+                value: u.id,
+              }))}
+            />
+            <Select
+              allowClear
+              placeholder="授课学院"
+              style={{ width: 180 }}
+              value={candidateCollegeId}
+              onChange={setCandidateCollegeId}
+              options={collegeOptions}
+            />
+            <Button
+              type="primary"
+              loading={addTeachingMut.isPending}
+              disabled={!candidateUserId || !candidateCollegeId}
+              onClick={() => {
+                if (!candidateUserId || !candidateCollegeId) return
+                addTeachingMut.mutate({ userId: candidateUserId, collegeId: candidateCollegeId })
+              }}
+            >
+              添加
+            </Button>
+          </Space>
+        </Card>
+        <Table
+          rowKey={(r) => `${r.user_id}-${r.college_id}`}
+          size="small"
+          loading={teachingLoading}
+          dataSource={teachingList?.list || []}
+          pagination={false}
+          scroll={{ y: 360 }}
+          columns={[
+            { title: '工号', dataIndex: 'user_no', width: 110 },
+            { title: '姓名', dataIndex: 'username', width: 110 },
+            {
+              title: '人事学院',
+              dataIndex: 'teacher_college_name',
+              width: 160,
+              render: (v: string) => v || '-',
+            },
+            { title: '授课学院', dataIndex: 'college_name', width: 160 },
+            {
+              title: '来源',
+              dataIndex: 'source',
+              width: 90,
+              render: (v: string) => (v === 'jwxt' ? '教务识别' : '手工'),
+            },
+            {
+              title: '操作',
+              width: 90,
+              render: (_, r) => (
+                <Popconfirm
+                  title="确认移除该授课学院？"
+                  onConfirm={() =>
+                    removeTeachingMut.mutate({ userId: r.user_id, collegeId: r.college_id })
+                  }
+                >
+                  <Button size="small" danger>
+                    移除
+                  </Button>
+                </Popconfirm>
+              ),
+            },
+          ]}
+        />
       </Modal>
 
       <SupervisorScopeDrawer user={scopeUser} onClose={() => setScopeUser(null)} />

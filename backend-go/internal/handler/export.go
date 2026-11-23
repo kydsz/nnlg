@@ -435,18 +435,13 @@ func (h *Task) Export(c *gin.Context) {
 		return
 	}
 
-	// 教师所属学院名称
-	tids := make([]int, 0, len(tasks))
-	seen := map[int]bool{}
-	for _, t := range tasks {
-		if !seen[t.TeacherID] {
-			seen[t.TeacherID] = true
-			tids = append(tids, t.TeacherID)
-		}
-	}
+	// 任务授课学院名称（快照优先）
+	taskColleges := service.TaskCollegeMap(h.db, tasks)
 	collegeNames := map[int]string{}
-	for id, c := range service.TeacherCollegeMap(h.db, tids) {
-		collegeNames[id] = c.Name
+	for tid, info := range taskColleges {
+		if info.CourseCollege != nil {
+			collegeNames[tid] = info.CourseCollege.Name
+		}
 	}
 
 	rows := make([]map[string]interface{}, 0, len(tasks))
@@ -461,7 +456,7 @@ func (h *Task) Export(c *gin.Context) {
 		rows = append(rows, map[string]interface{}{
 			"task_id": t.ID, "teacher_name": t.TeacherName, "course_name": t.CourseName,
 			"class_time": classTime, "classroom": t.Classroom,
-			"college_name":        collegeNames[t.TeacherID],
+			"college_name":        collegeNames[t.ID],
 			"status_name":         model.TaskStatusNames[t.Status],
 			"evaluation_count":    t.EvaluationCount,
 			"has_supervisor_eval": map[bool]string{true: "是", false: "否"}[t.HasSupervisorEval],
@@ -471,7 +466,7 @@ func (h *Task) Export(c *gin.Context) {
 
 	cols := colsByFields(p.Fields, map[string]string{
 		"task_id": "任务ID", "teacher_name": "教师姓名", "course_name": "课程名称",
-		"class_time": "上课时间", "classroom": "教室", "college_name": "学院",
+		"class_time": "上课时间", "classroom": "教室", "college_name": "授课学院",
 		"status_name": "状态", "evaluation_count": "评教次数",
 		"has_supervisor_eval": "督导已评", "create_time": "创建时间",
 	}, []string{"teacher_name", "course_name", "class_time", "classroom", "college_name", "status_name", "evaluation_count"})
@@ -738,6 +733,9 @@ func (h *Stats) ExportTeacherSummary(c *gin.Context) {
 			row[k] = v
 		}
 		row["role_names"] = strings.Join(roleNames, ",")
+		if teaching, ok := item["teaching_college_names"].([]string); ok {
+			row["teaching_college_names"] = strings.Join(teaching, ",")
+		}
 		if with, _ := item["has_courses"].(bool); with {
 			row["has_courses"] = "有课"
 		} else {
@@ -746,7 +744,8 @@ func (h *Stats) ExportTeacherSummary(c *gin.Context) {
 		rows = append(rows, row)
 	}
 	cols, ok := exportFields(c, []xlsxCol{
-		{"teacher_name", "教师姓名"}, {"user_no", "工号"}, {"college_name", "学院"},
+		{"teacher_name", "教师姓名"}, {"user_no", "工号"}, {"college_name", "人事学院"},
+		{"teaching_college_names", "授课学院"},
 		{"role_names", "角色"}, {"has_courses", "是否有课"}, {"given_count", "评教次数"}, {"given_avg_score", "评教平均给分"},
 		{"given_teacher_count", "评教教师数"}, {"received_count", "被评教次数"},
 		{"received_avg_score", "被评教平均得分"}, {"received_evaluator_count", "评教人数"},

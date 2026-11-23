@@ -19,19 +19,23 @@ var TaskStatusNames = map[int16]string{
 // EvaluationTask 评教任务表
 type EvaluationTask struct {
 	Model
-	TeacherID         int        `gorm:"column:teacher_id" json:"teacher_id"`
-	TeacherName       string     `gorm:"column:teacher_name;size:64" json:"teacher_name"`
-	CourseName        string     `gorm:"column:course_name;size:128" json:"course_name"`
-	ClassTime         *LocalTime `gorm:"column:class_time" json:"class_time"`
-	Classroom         *string    `gorm:"column:classroom;size:64" json:"classroom"`
+	TeacherID   int    `gorm:"column:teacher_id" json:"teacher_id"`
+	TeacherName string `gorm:"column:teacher_name;size:64" json:"teacher_name"`
+	// 学院快照：TeacherCollegeID 为建任务时被评教师的人事学院，
+	// CourseCollegeID 为本次评教的授课/开课学院（读路径优先使用）。
+	TeacherCollegeID  *int            `gorm:"column:teacher_college_id" json:"teacher_college_id"`
+	CourseCollegeID   *int            `gorm:"column:course_college_id" json:"course_college_id"`
+	CourseName        string          `gorm:"column:course_name;size:128" json:"course_name"`
+	ClassTime         *LocalTime      `gorm:"column:class_time" json:"class_time"`
+	Classroom         *string         `gorm:"column:classroom;size:64" json:"classroom"`
 	ScheduleSnapshot  json.RawMessage `gorm:"column:schedule_snapshot;type:json" json:"schedule_snapshot"`
-	Status            int16      `gorm:"column:status" json:"status"`
-	StartTime         *LocalTime `gorm:"column:start_time" json:"start_time"`
-	EndTime           *LocalTime `gorm:"column:end_time" json:"end_time"`
-	EvaluationCount   int        `gorm:"column:evaluation_count" json:"evaluation_count"`
-	HasSupervisorEval bool       `gorm:"column:has_supervisor_eval" json:"has_supervisor_eval"`
-	CreateBy          *int       `gorm:"column:create_by" json:"create_by"`
-	IsDeleted         bool       `gorm:"column:is_deleted" json:"is_deleted"`
+	Status            int16           `gorm:"column:status" json:"status"`
+	StartTime         *LocalTime      `gorm:"column:start_time" json:"start_time"`
+	EndTime           *LocalTime      `gorm:"column:end_time" json:"end_time"`
+	EvaluationCount   int             `gorm:"column:evaluation_count" json:"evaluation_count"`
+	HasSupervisorEval bool            `gorm:"column:has_supervisor_eval" json:"has_supervisor_eval"`
+	CreateBy          *int            `gorm:"column:create_by" json:"create_by"`
+	IsDeleted         bool            `gorm:"column:is_deleted" json:"is_deleted"`
 }
 
 func (EvaluationTask) TableName() string { return "evaluation_task" }

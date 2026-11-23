@@ -25,6 +25,7 @@ import {
 } from '@ant-design/icons'
 import { syncApi } from '@/api/modules/sync'
 import { scheduleApi } from '@/api/modules/schedule'
+import { taskApi } from '@/api/modules/tasks'
 import { userApi } from '@/api/modules/users'
 import { orgApi } from '@/api/modules/org'
 import { formatSemester } from '@/utils/format'
@@ -35,6 +36,7 @@ export default function DataSync() {
   const [crawlOpen, setCrawlOpen] = useState(false)
   const [llsykbOpen, setLlsykbOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
+  const [teachingOpen, setTeachingOpen] = useState(false)
 
   // 批量同步任务（提升到父级：弹窗隐藏后仍持续轮询，完成/失败会回写同步历史并展示进度条）
   const batchTask = useLlsykbTask('按学院批量同步课表', addSyncHistory)
@@ -173,6 +175,11 @@ export default function DataSync() {
               选择教师同步课表（推荐）
             </Button>
           </Tooltip>
+          <Tooltip title="从教务按学院课表识别该学院的授课教师，只写授课学院关系，不改课表">
+            <Button icon={<TeamOutlined />} onClick={() => setTeachingOpen(true)}>
+              识别授课学院
+            </Button>
+          </Tooltip>
           <Popconfirm title="确认同步单位+教师？" onConfirm={() => unitsTeachersMut.mutate()}>
             <Button type="primary" loading={unitsTeachersMut.isPending}>
               同步单位+教师
@@ -281,6 +288,7 @@ export default function DataSync() {
       <CrawlModal open={crawlOpen} onClose={() => setCrawlOpen(false)} />
       <LlsykbSelectModal open={llsykbOpen} onClose={() => setLlsykbOpen(false)} task={selectTask} />
       <LlsykbBatchModal open={batchOpen} onClose={() => setBatchOpen(false)} task={batchTask} />
+      <TeachingCollegeSyncModal open={teachingOpen} onClose={() => setTeachingOpen(false)} />
     </div>
   )
 }
@@ -449,7 +457,7 @@ function LlsykbSelectModal({
   const { data: teachers } = useQuery({
     queryKey: ['llsykb-teachers', keyword],
     queryFn: () =>
-      userApi.list({ page: 1, page_size: 50, role: 'teacher', keyword: keyword || undefined }),
+      taskApi.teacherOptions({ page: 1, page_size: 50, keyword: keyword || undefined }),
     enabled: open,
   })
 
@@ -652,6 +660,75 @@ function LlsykbBatchModal({
           </div>
         </div>
       )}
+    </Modal>
+  )
+}
+
+/** 从教务按学院识别授课教师（只写授课学院关系，不改课表） */
+function TeachingCollegeSyncModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { message } = App.useApp()
+  const [form] = Form.useForm()
+
+  const { data: semesters } = useQuery({
+    queryKey: ['semesters'],
+    queryFn: () => scheduleApi.semesters(),
+    enabled: open,
+  })
+  const { data: currentSemester } = useQuery({
+    queryKey: ['current-semester'],
+    queryFn: () => scheduleApi.currentSemester(),
+    enabled: open,
+  })
+  const { data: colleges } = useQuery({
+    queryKey: ['colleges', 'teaching-sync'],
+    queryFn: () => orgApi.collegeList(),
+    enabled: open,
+  })
+
+  useEffect(() => {
+    if (open && currentSemester) form.setFieldValue('semester', currentSemester.semester)
+  }, [open, currentSemester])
+
+  const mut = useMutation({
+    mutationFn: (v: { semester: string; college_id: number }) =>
+      syncApi.syncTeachingColleges(v.semester, v.college_id),
+    onSuccess: (res) => {
+      const d = res as Record<string, number>
+      message.success(
+        `识别完成：教师 ${d.teachers ?? 0}，新增 ${d.added ?? 0}，已存在 ${d.existing ?? 0}，未匹配 ${d.unmatched ?? 0}，歧义 ${d.ambiguous ?? 0}`,
+      )
+      onClose()
+    },
+    onError: (e) => message.error(e.message),
+  })
+
+  return (
+    <Modal
+      title="识别授课学院"
+      open={open}
+      onCancel={onClose}
+      onOk={() => form.submit()}
+      confirmLoading={mut.isPending}
+    >
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="按教务该学院课表识别授课教师，只写入授课学院关系，不改课表；同名歧义会跳过，可在用户管理中手工补录。"
+      />
+      <Form form={form} layout="vertical" onFinish={(v) => mut.mutate(v)}>
+        <Form.Item name="semester" label="学期" rules={[{ required: true, message: '请选择学期' }]}>
+          <Select
+            options={(semesters || []).map((s) => ({ label: formatSemester(s), value: s }))}
+          />
+        </Form.Item>
+        <Form.Item name="college_id" label="学院" rules={[{ required: true, message: '请选择学院' }]}>
+          <Select
+            placeholder="选择要识别的学院"
+            options={(colleges?.list || []).map((c) => ({ label: c.name, value: c.id }))}
+          />
+        </Form.Item>
+      </Form>
     </Modal>
   )
 }

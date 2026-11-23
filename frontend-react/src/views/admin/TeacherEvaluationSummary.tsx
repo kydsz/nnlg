@@ -202,6 +202,7 @@ export default function TeacherEvaluationSummary() {
           'teacher_name',
           'user_no',
           'college_name',
+          'teaching_college_names',
           'role_names',
           'has_courses',
           'given_count',
@@ -245,7 +246,10 @@ function TeacherCard({
         <Space>
           <strong>{item.teacher_name}</strong>
           <span style={{ color: '#999' }}>{item.user_no}</span>
-          <span>{item.college_name}</span>
+          <span>人事：{item.college_name || '-'}</span>
+          {(item.teaching_college_names || []).length > 0 && (
+            <span>授课：{(item.teaching_college_names || []).join('、')}</span>
+          )}
           {item.has_courses ? (
             <Tag color="green">有课</Tag>
           ) : (

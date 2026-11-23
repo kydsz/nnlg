@@ -221,6 +221,26 @@ func (h *Sync) doSync(c *gin.Context, module string, run func(*jwxt.BaseSync) (m
 	response.OKMsg(c, "同步成功", result)
 }
 
+// SyncTeachingColleges 从教务按学院识别授课教师（只写授课学院关系，不改课表）
+func (h *Sync) SyncTeachingColleges(c *gin.Context) {
+	var p struct {
+		Semester  string `json:"semester"`
+		CollegeID int    `json:"college_id"`
+	}
+	if err := c.ShouldBindJSON(&p); err != nil || p.CollegeID == 0 {
+		badReq(c, "请求参数错误")
+		return
+	}
+	var college model.College
+	if err := h.db.First(&college, p.CollegeID).Error; err != nil {
+		badReq(c, "学院不存在")
+		return
+	}
+	h.doSync(c, "teaching_college", func(sp *jwxt.BaseSync) (map[string]interface{}, error) {
+		return sp.SyncTeachingColleges(h.db, p.Semester, college)
+	})
+}
+
 // SyncTeachers 从教务系统同步教师
 func (h *Sync) SyncTeachers(c *gin.Context) {
 	h.doSync(c, "teacher", func(sp *jwxt.BaseSync) (map[string]interface{}, error) {
@@ -468,7 +488,9 @@ func (h *Sync) SyncLlsykbBatch(c *gin.Context) {
 	} else {
 		q := h.db.Model(&model.User{}).Where("status = 1")
 		if p.CollegeID != nil {
-			q = q.Where("college_id = ?", *p.CollegeID)
+			// 本学院教师 + 挂在本院授课的外聘教师
+			q = q.Where("college_id = ? OR id IN (SELECT user_id FROM `teacher_teaching_college` WHERE college_id = ?)",
+				*p.CollegeID, *p.CollegeID)
 		}
 		var users []model.User
 		q.Select("id, user_no, username").Find(&users)

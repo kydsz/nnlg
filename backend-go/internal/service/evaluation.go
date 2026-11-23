@@ -189,9 +189,10 @@ func checkEvaluationScope(db *gorm.DB, viewer *model.User, task *model.Evaluatio
 	if err != nil {
 		return nil, err
 	}
+	taskCollege := TaskCollegeID(db, task)
 	switch {
 	case IsAdminRole(viewer) || IsSupervisor(viewer):
-		if !CollegeInScope(viewer, teacher.CollegeID) {
+		if !CollegeInScope(viewer, taskCollege) {
 			if IsSupervisor(viewer) && !IsAdminRole(viewer) {
 				return nil, errors.New("您只能评自己负责学院的教师")
 			}
@@ -201,7 +202,7 @@ func checkEvaluationScope(db *gorm.DB, viewer *model.User, task *model.Evaluatio
 		if task.TeacherID == viewer.ID {
 			return nil, errors.New("不能评自己")
 		}
-		if teacher.CollegeID == nil || viewer.CollegeID == nil || *teacher.CollegeID != *viewer.CollegeID {
+		if taskCollege == nil || viewer.CollegeID == nil || *taskCollege != *viewer.CollegeID {
 			return nil, errForbidden("只能评同学院的教师")
 		}
 	}
@@ -442,7 +443,7 @@ func evaluatorNameCond(viewer *model.User, viewAll bool) (string, []interface{})
 	var cond string
 	var args []interface{}
 	if viewAll {
-		cond = "r.evaluator_id = ? OR t.teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)"
+		cond = "r.evaluator_id = ? OR " + TaskCollegeExpr("t") + " IN ?"
 		args = []interface{}{viewer.ID, ids}
 	} else {
 		cond = "r.evaluator_id = ?"
@@ -493,7 +494,7 @@ func (s *Evaluation) buildRecordQuery(db *gorm.DB, viewer *model.User, f Evaluat
 				if len(ids) == 0 {
 					return nil, errors.New("无数据权限")
 				}
-				q = q.Where("t.teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)", ids)
+				q = q.Where(TaskCollegeExpr("t")+" IN ?", ids)
 			}
 		default:
 			// 其余角色（含督导）：仅自己评的 + 评给自己的，不能看别人的评教
@@ -543,7 +544,7 @@ func (s *Evaluation) buildRecordQuery(db *gorm.DB, viewer *model.User, f Evaluat
 		q = q.Where("r.evaluator_role = ?", f.EvaluatorRole)
 	}
 	if f.CollegeID != "" {
-		q = q.Where("t.teacher_id IN (SELECT id FROM `user` WHERE college_id IN ?)", splitInts(f.CollegeID))
+		q = q.Where(TaskCollegeExpr("t")+" IN ?", splitInts(f.CollegeID))
 	}
 	if f.TeacherName != "" {
 		q = q.Where("t.teacher_name LIKE ?", "%"+f.TeacherName+"%")
@@ -604,13 +605,11 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 	var tasks []model.EvaluationTask
 	db.Where("id IN ?", keysOf(taskIDs)).Find(&tasks)
 	taskMap := map[int]model.EvaluationTask{}
-	teacherIDs := map[int]bool{}
 	for _, t := range tasks {
 		taskMap[t.ID] = t
-		teacherIDs[t.TeacherID] = true
 	}
-	// 被评教师所在学院：列表展示（college_id/college_name）与匿名可见性判定共用同一口径
-	colleges := TeacherCollegeMap(db, keysOf(teacherIDs))
+	// 任务学院快照：列表展示（college_id/college_name）与匿名可见性判定共用同一口径
+	taskColleges := TaskCollegeMap(db, tasks)
 	scoreCodes := scoreDimCodeSet(db)
 	maxTotal := totalMaxScoreOfSchema(db)
 	viewAll := CanViewOthersEvaluation(db, viewer)
@@ -624,7 +623,9 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 	for i := range recs {
 		r := &recs[i]
 		task, ok := taskMap[r.TaskID]
-		teacherCollegeID, teacherCollegeName := TeacherCollegeDisplay(colleges, task.TeacherID)
+		collegeInfo := taskColleges[task.ID]
+		courseCollegeID, courseCollegeName := CollegeDisplay(collegeInfo.CourseCollege)
+		teacherCollegeID, teacherCollegeName := CollegeDisplay(collegeInfo.TeacherCollege)
 		item := map[string]interface{}{
 			"id": r.ID, "task_id": r.TaskID, "is_anonymous": r.IsAnonymous,
 			"evaluator_role": r.EvaluatorRole, "evaluator_role_name": model.RoleName(r.EvaluatorRole),
@@ -639,10 +640,19 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 		if ok {
 			item["teacher_id"] = task.TeacherID
 			item["teacher_name"] = task.TeacherName
-			item["college_id"] = teacherCollegeID
-			item["college_name"] = teacherCollegeName
+			item["college_id"] = courseCollegeID
+			item["college_name"] = courseCollegeName
+			item["teacher_college_id"] = teacherCollegeID
+			item["teacher_college_name"] = teacherCollegeName
 			item["course_name"] = task.CourseName
 			item["class_time"] = task.ClassTime
+		}
+		if canSeeIdentity(viewer, r, &task, courseCollegeID, viewAll) {
+			item["evaluator_id"] = r.EvaluatorID
+			item["evaluator_name"] = r.EvaluatorName
+		} else {
+			item["evaluator_id"] = nil
+			item["evaluator_name"] = "匿名"
 		}
 		if withValues {
 			if r.DimensionValues == nil {
@@ -650,13 +660,6 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 			} else {
 				item["dimension_values"] = r.DimensionValues
 			}
-		}
-		if canSeeIdentity(viewer, r, &task, teacherCollegeID, viewAll) {
-			item["evaluator_id"] = r.EvaluatorID
-			item["evaluator_name"] = r.EvaluatorName
-		} else {
-			item["evaluator_id"] = nil
-			item["evaluator_name"] = "匿名"
 		}
 		out = append(out, item)
 	}
@@ -806,12 +809,8 @@ func (s *Evaluation) GetDetail(db *gorm.DB, viewer *model.User, id int) (map[str
 	// 或被分配 evaluation:view_all 权限的角色（按学院数据范围）
 	isEvaluator := rec.EvaluatorID != nil && *rec.EvaluatorID == viewer.ID
 	isSubject := task.TeacherID == viewer.ID
-	teacher, _ := LoadTeacherUser(db, task.TeacherID)
-	var collegeID *int
-	if teacher != nil {
-		collegeID = teacher.CollegeID
-	}
-	if !isEvaluator && !isSubject && !(CanViewOthersEvaluation(db, viewer) && CollegeInScope(viewer, collegeID)) {
+	taskCollege := TaskCollegeID(db, &task)
+	if !isEvaluator && !isSubject && !(CanViewOthersEvaluation(db, viewer) && CollegeInScope(viewer, taskCollege)) {
 		return nil, errors.New("您没有权限查看该评教记录")
 	}
 
@@ -823,13 +822,9 @@ func (s *Evaluation) GetDetail(db *gorm.DB, viewer *model.User, id int) (map[str
 
 	// 展示友好字段：满分合计、学院名、提交时间（空格分隔，对齐导出格式）
 	item["max_total_score"] = totalMaxScoreOfSchema(db)
-	if teacher != nil {
-		if teacher.College != nil {
-			item["college_name"] = teacher.College.Name
-		} else {
-			item["college_name"] = nil
-		}
-	}
+	collegeInfo := TaskCollegeMap(db, []model.EvaluationTask{task})[task.ID]
+	_, courseCollegeName := CollegeDisplay(collegeInfo.CourseCollege)
+	item["college_name"] = courseCollegeName
 	if rec.SubmitTime != nil {
 		item["submit_time"] = rec.SubmitTime.ToTime().Format("2006-01-02 15:04")
 	} else {
@@ -867,11 +862,7 @@ func (s *Evaluation) SummariesForTasks(db *gorm.DB, viewer *model.User, tasks []
 	var recs []model.EvaluationRecord
 	db.Where("task_id IN ? AND is_deleted = 0", ids).Order("submit_time ASC").Find(&recs)
 
-	teacherIDs := map[int]bool{}
-	for _, t := range tasks {
-		teacherIDs[t.TeacherID] = true
-	}
-	colleges := TeacherCollegeMap(db, keysOf(teacherIDs))
+	taskColleges := TaskCollegeMap(db, tasks)
 
 	summaries := map[int][]map[string]interface{}{}
 	evaluated := map[int]bool{}
@@ -889,13 +880,13 @@ func (s *Evaluation) SummariesForTasks(db *gorm.DB, viewer *model.User, tasks []
 		if !isEvaluator && task.TeacherID != viewer.ID && !viewAll {
 			continue // 不可见他人评教，仅保留任务状态
 		}
-		teacherCollegeID, _ := TeacherCollegeDisplay(colleges, task.TeacherID)
+		courseCollegeID, _ := CollegeDisplay(taskColleges[task.ID].CourseCollege)
 		item := map[string]interface{}{
 			"id": r.ID, "evaluator_role": r.EvaluatorRole,
 			"evaluator_role_name": model.RoleName(r.EvaluatorRole),
 			"total_score":         totalScoreOfValues(r.DimensionValues, scoreCodes), "submit_time": r.SubmitTime,
 		}
-		if canSeeIdentity(viewer, r, &task, teacherCollegeID, viewAll) {
+		if canSeeIdentity(viewer, r, &task, courseCollegeID, viewAll) {
 			item["evaluator_id"] = r.EvaluatorID
 			item["evaluator_name"] = r.EvaluatorName
 		} else {
@@ -1057,12 +1048,13 @@ type UpdateParams struct {
 	Task            *TaskCourseUpdate      `json:"task"`
 }
 
-// TaskCourseUpdate 记录编辑附带的课堂课程信息（教师/课程/上课时间/教室/课表快照）
+// TaskCourseUpdate 记录编辑附带的课堂课程信息（教师/课程/上课时间/教室/授课学院/课表快照）
 type TaskCourseUpdate struct {
 	TeacherID        *int              `json:"teacher_id"`
 	CourseName       *string           `json:"course_name"`
 	ClassTime        *model.LocalTime  `json:"class_time"`
 	Classroom        *string           `json:"classroom"`
+	CollegeID        *int              `json:"college_id"`
 	ScheduleSnapshot *ScheduleSnapshot `json:"schedule"`
 }
 
@@ -1081,12 +1073,8 @@ func (s *Evaluation) Update(db *gorm.DB, viewer *model.User, id int, p UpdatePar
 	if err := db.First(&task, rec.TaskID).Error; err != nil {
 		return nil, errors.New("关联任务不存在")
 	}
-	// 数据范围：按被评教师主学院收敛（系统管理员不受限）
-	teacher, err := LoadTeacherUser(db, task.TeacherID)
-	if err != nil {
-		return nil, err
-	}
-	if !CollegeInScope(viewer, teacher.CollegeID) {
+	// 数据范围：按任务授课学院收敛（系统管理员不受限）
+	if !CollegeInScope(viewer, TaskCollegeID(db, &task)) {
 		return nil, errors.New("您只能修改本学院的评教记录")
 	}
 
@@ -1095,6 +1083,7 @@ func (s *Evaluation) Update(db *gorm.DB, viewer *model.User, id int, p UpdatePar
 	}
 
 	// 维度先同步校验（无写入）
+	var err error
 	var raw json.RawMessage
 	if len(p.DimensionValues) > 0 {
 		if _, err := validateDimensionValues(db, p.DimensionValues); err != nil {
@@ -1127,7 +1116,7 @@ func (s *Evaluation) Update(db *gorm.DB, viewer *model.User, id int, p UpdatePar
 			up := UpdateTaskParams{
 				TeacherID: p.Task.TeacherID, CourseName: p.Task.CourseName,
 				ClassTime: p.Task.ClassTime, Classroom: p.Task.Classroom,
-				ScheduleSnapshot: p.Task.ScheduleSnapshot,
+				CollegeID: p.Task.CollegeID, ScheduleSnapshot: p.Task.ScheduleSnapshot,
 			}
 			if _, err := NewTask().Update(tx, viewer, task.ID, up); err != nil {
 				return err
@@ -1210,15 +1199,11 @@ func (s *Evaluation) ExportData(db *gorm.DB, viewer *model.User, id int) (map[st
 
 	// 访问权限：仅"自己评的"、"评给自己的"（被评教师）、系统管理员，
 	// 或被分配 evaluation:view_all 权限的角色（按学院数据范围）
-	teacher, _ := LoadTeacherUser(db, task.TeacherID)
-	var teacherCollegeID *int
-	if teacher != nil {
-		teacherCollegeID = teacher.CollegeID
-	}
+	taskCollegeID := TaskCollegeID(db, &task)
 	isEvaluator := rec.EvaluatorID != nil && *rec.EvaluatorID == viewer.ID
 	isSubject := task.TeacherID == viewer.ID
 	viewAll := CanViewOthersEvaluation(db, viewer)
-	if !isEvaluator && !isSubject && !(viewAll && CollegeInScope(viewer, teacherCollegeID)) {
+	if !isEvaluator && !isSubject && !(viewAll && CollegeInScope(viewer, taskCollegeID)) {
 		return nil, errors.New("无权导出此评教记录")
 	}
 
@@ -1330,12 +1315,10 @@ func (s *Evaluation) ExportData(db *gorm.DB, viewer *model.User, id int) (map[st
 	}
 
 	// 评教人显示（脱敏）
-	collegeName := interface{}(nil)
-	if teacher != nil && teacher.College != nil {
-		collegeName = teacher.College.Name
-	}
+	collegeInfo := TaskCollegeMap(db, []model.EvaluationTask{task})[task.ID]
+	_, collegeName := CollegeDisplay(collegeInfo.CourseCollege)
 	evaluatorName := interface{}(nil)
-	if canSeeIdentity(viewer, &rec, &task, teacherCollegeID, viewAll) || (!rec.IsAnonymous && !viewer.HasRole(model.RoleTeacher)) || isEvaluator {
+	if canSeeIdentity(viewer, &rec, &task, taskCollegeID, viewAll) || (!rec.IsAnonymous && !viewer.HasRole(model.RoleTeacher)) || isEvaluator {
 		evaluatorName = rec.EvaluatorName
 	} else {
 		evaluatorName = "匿名"

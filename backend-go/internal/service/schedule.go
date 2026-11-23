@@ -169,8 +169,11 @@ func applyTeacherScope(q *gorm.DB, s *TeacherScope) *gorm.DB {
 	var conds []string
 	var args []interface{}
 	if hasCollege {
-		conds = append(conds, "`user`.`college_id` IN ?")
-		args = append(args, s.CollegeIDs)
+		// 教师归属：人事学院 或 授课学院（外聘教师挂在授课学院下也能被选择）
+		conds = append(conds,
+			"`user`.`college_id` IN ?",
+			"`user`.`id` IN (SELECT user_id FROM `teacher_teaching_college` WHERE college_id IN ?)")
+		args = append(args, s.CollegeIDs, s.CollegeIDs)
 	}
 	if hasRoom {
 		conds = append(conds,
@@ -260,8 +263,8 @@ func (s *Schedule) ListTeachers(db *gorm.DB, f TeacherFilter) ([]model.User, int
 	}
 	if f.CollegeID != "" {
 		ids := splitInts(f.CollegeID)
-		// 学院筛选只匹配主学院，与 applyTeacherScope 保持一致（user_college 是督导负责学院，不用于匹配教师归属）
-		q = q.Where("`user`.`college_id` IN ?", ids)
+		// 学院筛选匹配人事学院或授课学院（user_college 是督导负责学院，不用于匹配教师归属）
+		q = q.Where("(`user`.`college_id` IN ? OR `user`.`id` IN (SELECT user_id FROM `teacher_teaching_college` WHERE college_id IN ?))", ids, ids)
 	}
 	if f.ResearchRoomID != "" {
 		q = q.Where("`user`.`research_room_id` = ? OR `user`.`id` IN (SELECT user_id FROM user_research_room WHERE research_room_id = ?)", f.ResearchRoomID, f.ResearchRoomID)
@@ -274,6 +277,7 @@ func (s *Schedule) ListTeachers(db *gorm.DB, f TeacherFilter) ([]model.User, int
 	err := q.Session(&gorm.Session{}).
 		Preload("College").
 		Preload("ResearchRoom").
+		Preload("TeachingColleges.College").
 		Order("username ASC, id ASC").
 		Offset((f.Page - 1) * f.PageSize).Limit(f.PageSize).
 		Find(&users).Error

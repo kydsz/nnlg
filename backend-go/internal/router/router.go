@@ -71,6 +71,16 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		users.PUT("/:id/supervisor-scope", middleware.RequirePermission(db, "user:update"), userH.UpdateSupervisorScope)
 	}
 
+	// 授课学院管理（系统管理员全校；学院管理员本学院；目标教师可跨人事学院）
+	teachingColleges := api.Group("/teaching-colleges", authMW,
+		middleware.RequirePermission(db, "user:update"))
+	{
+		teachingColleges.GET("", userH.ListTeachingColleges)
+		teachingColleges.GET("/candidates", userH.TeachingCollegeCandidates)
+		teachingColleges.POST("", userH.AddTeachingCollege)
+		teachingColleges.DELETE("/:user_id/:college_id", userH.RemoveTeachingCollege)
+	}
+
 	// 角色管理
 	roleH := handler.NewRoleHandler(db, service.NewRole())
 	roles := api.Group("/roles", authMW)
@@ -189,6 +199,8 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	// 课表查询
 	schH := handler.NewSchedule(db)
+	// 教师选择器：任务创建/同步课表共用；走 task:create 避免学院管理员缺少 schedule:view
+	api.GET("/teacher-options", authMW, middleware.RequirePermission(db, "task:create"), schH.Teachers)
 	schedules := api.Group("/course-schedules", authMW, middleware.RequirePermission(db, "schedule:view"))
 	{
 		schedules.GET("/list", schH.List)
@@ -221,6 +233,7 @@ func Setup(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	api.POST("/sync/llsykb", authMW, middleware.RequirePermission(db, "sync:execute"), syncH.SyncLlsykb)
 	api.POST("/sync/llsykb/preview", authMW, middleware.RequirePermission(db, "role:manage"), syncH.SyncLlsykbPreview)
 	api.POST("/sync/llsykb/batch", authMW, middleware.RequirePermission(db, "sync:execute"), syncH.SyncLlsykbBatch)
+	api.POST("/sync/teaching-colleges", authMW, middleware.RequirePermission(db, "sync:execute"), syncH.SyncTeachingColleges)
 	api.GET("/sync/llsykb/progress/:taskId", authMW, middleware.RequirePermission(db, "sync:execute"), syncH.GetLlsykbProgress)
 	api.GET("/sync/scan-invalid-users", authMW, middleware.RequirePermission(db, "sync:execute"), syncH.ScanInvalidUsers)
 	api.DELETE("/sync/cleanup-user/:userId", authMW, middleware.RequirePermission(db, "sync:execute"), syncH.CleanupInvalidUser)

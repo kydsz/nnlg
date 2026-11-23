@@ -147,11 +147,7 @@ func CanViewAllTasks(db *gorm.DB, u *model.User) bool {
 //     含「教师未绑定学院则不在任何人的范围内」这一点）；
 //  2. 是否与我相关——我创建的、我被评的、我评过的、我加入的；否则需要 task:view_all。
 func CanViewTask(db *gorm.DB, caller *model.User, t *model.EvaluationTask) bool {
-	teacher, err := LoadTeacherUser(db, t.TeacherID)
-	if err != nil {
-		return false
-	}
-	if !CollegeInScope(caller, teacher.CollegeID) {
+	if !CollegeInScope(caller, TaskCollegeID(db, t)) {
 		return false
 	}
 	if t.CreateBy != nil && *t.CreateBy == caller.ID {
