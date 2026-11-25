@@ -6,6 +6,8 @@ export interface TaskListParams {
   page_size?: number
   keyword?: string
   status?: number
+  /** 评价模板：theory/practice，缺省=全部 */
+  template?: string
   teacher_id?: number
   has_supervisor_eval?: boolean
   create_by?: number
@@ -23,6 +25,8 @@ export interface TaskListParams {
 export interface TaskPayload {
   course_name: string
   teacher_id: number
+  /** 评价模板：theory=理论课 / practice=实践教学（仅创建时生效） */
+  template_code?: string
   classroom?: string
   class_time?: string
   /** 显式指定授课学院（可选；为空时后端按教师授课学院与调用者范围自动解析） */

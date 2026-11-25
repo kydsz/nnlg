@@ -371,6 +371,7 @@ func (h *Task) Export(c *gin.Context) {
 		Status    *int16   `json:"status"`
 		CollegeID *int     `json:"college_id"`
 		Keyword   string   `json:"keyword"`
+		Template  string   `json:"template"`
 		Fields    []string `json:"fields"`
 		StartDate string   `json:"start_date"`
 		EndDate   string   `json:"end_date"`
@@ -427,7 +428,7 @@ func (h *Task) Export(c *gin.Context) {
 		scope = []int{*p.CollegeID}
 	}
 
-	f := service.TaskFilters{Status: p.Status, Keyword: p.Keyword, CollegeIDs: scope, Start: start, End: end}
+	f := service.TaskFilters{Status: p.Status, Keyword: p.Keyword, Template: p.Template, CollegeIDs: scope, Start: start, End: end}
 	f.Page, f.PageSize = 1, 10000
 	tasks, _, err := h.svc.List(h.db, u, f)
 	if err != nil {
@@ -455,7 +456,8 @@ func (h *Task) Export(c *gin.Context) {
 		}
 		rows = append(rows, map[string]interface{}{
 			"task_id": t.ID, "teacher_name": t.TeacherName, "course_name": t.CourseName,
-			"class_time": classTime, "classroom": t.Classroom,
+			"template_name": model.TemplateName(t.TemplateCode),
+			"class_time":    classTime, "classroom": t.Classroom,
 			"college_name":        collegeNames[t.ID],
 			"status_name":         model.TaskStatusNames[t.Status],
 			"evaluation_count":    t.EvaluationCount,
@@ -466,7 +468,7 @@ func (h *Task) Export(c *gin.Context) {
 
 	cols := colsByFields(p.Fields, map[string]string{
 		"task_id": "任务ID", "teacher_name": "教师姓名", "course_name": "课程名称",
-		"class_time": "上课时间", "classroom": "教室", "college_name": "授课学院",
+		"template_name": "评价模板", "class_time": "上课时间", "classroom": "教室", "college_name": "授课学院",
 		"status_name": "状态", "evaluation_count": "评教次数",
 		"has_supervisor_eval": "督导已评", "create_time": "创建时间",
 	}, []string{"teacher_name", "course_name", "class_time", "classroom", "college_name", "status_name", "evaluation_count"})

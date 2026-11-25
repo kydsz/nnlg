@@ -159,6 +159,8 @@
 /* ═══ Main Wrapper ═══ */
 .main-wrapper {
   flex: 1;
+  /* 允许收缩到视口内：避免宽表格/多标签把整页撑出横向滚动 */
+  min-width: 0;
   margin-left: 220px;
   transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;

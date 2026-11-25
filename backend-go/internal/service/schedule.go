@@ -310,28 +310,91 @@ func (s *Schedule) Detail(db *gorm.DB, id int) (map[string]interface{}, error) {
 	return scheduleDetailPayload(&sc), nil
 }
 
-// scheduleDetailPayload 课表 + 明细的扁平响应体；schedule.student_count 取明细中的最大值
-func scheduleDetailPayload(sc *model.CourseSchedule) map[string]interface{} {
-	details := []map[string]interface{}{}
-	var maxCount *int
-	for _, d := range sc.Details {
+// mergeScheduleDetails 把课表明细按「同一堂课」合并后转成扁平结构。
+// 合班课程在教务课表里是「一个班一行」（同课程+周次模式+星期+节次+教室多行），
+// 必须合并为一条：班级串逗号连接、人数累加，才是这一堂课真正的应到人数——
+// 只取单行会让应到只剩一个班的人数，实到÷应到 虚高出勤率。
+// 任一行解析不出人数（无半角括号数字）时合并行 student_count 置 nil，不臆造总和。
+func mergeScheduleDetails(details []model.CourseScheduleDetail) []map[string]interface{} {
+	type mergeKey struct {
+		course, pattern, section, classroom string
+		weekDay                             int8
+	}
+	type mergeAgg struct {
+		first      *model.CourseScheduleDetail
+		classInfos []string
+		seen       map[string]bool
+		sum        int
+		counted    int
+		rows       int
+	}
+	groups := map[mergeKey]*mergeAgg{}
+	order := make([]mergeKey, 0, len(details))
+	for i := range details {
+		d := &details[i]
+		var wd int8
+		if d.WeekDay != nil {
+			wd = *d.WeekDay
+		}
+		k := mergeKey{d.CourseName, d.WeekPattern, d.Section, d.Classroom, wd}
+		agg, ok := groups[k]
+		if !ok {
+			agg = &mergeAgg{first: d, seen: map[string]bool{}}
+			groups[k] = agg
+			order = append(order, k)
+		}
+		agg.rows++
+		if !agg.seen[d.ClassInfo] {
+			agg.seen[d.ClassInfo] = true
+			agg.classInfos = append(agg.classInfos, d.ClassInfo)
+		}
+		if n, ok := ParseStudentCount(d.ClassInfo); ok {
+			agg.sum += n
+			agg.counted++
+		}
+	}
+	out := make([]map[string]interface{}, 0, len(order))
+	for _, k := range order {
+		agg := groups[k]
+		d := agg.first
 		item := map[string]interface{}{
 			"id": d.ID, "schedule_id": d.ScheduleID,
-			"course_name": d.CourseName, "class_info": d.ClassInfo,
+			"course_name": d.CourseName, "class_info": strings.Join(agg.classInfos, ","),
 			"week_pattern": d.WeekPattern, "week_day": d.WeekDay,
 			"section": d.Section, "classroom": d.Classroom,
 			"raw_data": d.RawData, "create_time": d.CreateTime, "update_time": d.UpdateTime,
 		}
-		if n, ok := ParseStudentCount(d.ClassInfo); ok {
-			cnt := n
-			item["student_count"] = &cnt
-			if maxCount == nil || cnt > *maxCount {
-				maxCount = &cnt
+		switch {
+		case agg.rows == 1:
+			if n, ok := ParseStudentCount(d.ClassInfo); ok {
+				cnt := n
+				item["student_count"] = &cnt
+			} else {
+				item["student_count"] = nil
 			}
-		} else {
+		case agg.counted == agg.rows:
+			cnt := agg.sum
+			item["student_count"] = &cnt
+		default:
 			item["student_count"] = nil
 		}
-		details = append(details, item)
+		out = append(out, item)
+	}
+	return out
+}
+
+// scheduleDetailPayload 课表 + 明细的扁平响应体；明细已按「同一堂课」合并，
+// schedule.student_count 取合并后明细中的最大值
+func scheduleDetailPayload(sc *model.CourseSchedule) map[string]interface{} {
+	details := mergeScheduleDetails(sc.Details)
+	var maxCount *int
+	for _, item := range details {
+		if cnt, ok := item["student_count"].(*int); ok && cnt != nil {
+			if maxCount == nil || *cnt > *maxCount {
+				v := *cnt
+				maxCount = &v
+			}
+		}
 	}
 	return map[string]interface{}{
 		"id": sc.ID, "teacher_id": sc.TeacherID, "teacher_name": sc.TeacherName,
@@ -340,6 +403,89 @@ func scheduleDetailPayload(sc *model.CourseSchedule) map[string]interface{} {
 		"create_time": sc.CreateTime, "update_time": sc.UpdateTime,
 		"student_count": maxCount, "details": details,
 	}
+}
+
+// sectionSlots 节次时间表（对齐前端 TIME_SLOTS）：上课时间 -> 该时段的节次编号
+var sectionSlots = []struct{ start, end string; secs []int }{
+	{"08:30", "10:05", []int{1, 2}},
+	{"10:25", "12:00", []int{3, 4}},
+	{"14:00", "15:35", []int{5, 6}},
+	{"15:45", "17:20", []int{7, 8}},
+	{"18:20", "19:55", []int{9, 10}},
+	{"20:05", "21:40", []int{11, 12}},
+}
+
+// slotSectionsOf 上课时间推算节次集合（对齐前端 formatClassPeriod 的时段表）；无法匹配返回 nil
+func slotSectionsOf(t time.Time) []int {
+	hm := t.Format("15:04")
+	for _, s := range sectionSlots {
+		if hm >= s.start && hm <= s.end {
+			return s.secs
+		}
+	}
+	return nil
+}
+
+// weekDayOf 时间对应的星期编号（周一=1 .. 周日=7，对齐课表 week_day 取值）
+func weekDayOf(t time.Time) int8 {
+	wd := int8(t.Weekday())
+	if wd == 0 {
+		wd = 7
+	}
+	return wd
+}
+
+// sectionOverlap 明细节次串（如 "0506"）与目标节次集合是否有交集（对齐前端 cellCourses 的两两解析）
+func sectionOverlap(section string, secs []int) bool {
+	if len(secs) == 0 {
+		return false
+	}
+	re := regexp.MustCompile(`(\d{2})`)
+	for _, m := range re.FindAllStringSubmatch(section, -1) {
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+		for _, s := range secs {
+			if n == s {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// PickDetailForClassTime 从同课程的候选明细（已合并合班）中挑出与任务上课时间对应的那一堂：
+// 星期+节次匹配 > 仅星期匹配 > 首条。classTime 为空或无法推算节次时按星期匹配，全不匹配退回首条。
+// 用途：无快照的历史任务回退现查课表时，避免同课程多开课次只取首条。
+func PickDetailForClassTime(items []map[string]interface{}, classTime *model.LocalTime) map[string]interface{} {
+	if len(items) == 0 {
+		return nil
+	}
+	if classTime == nil {
+		return items[0]
+	}
+	t := classTime.ToTime()
+	wd := weekDayOf(t)
+	secs := slotSectionsOf(t)
+	var dayMatch map[string]interface{}
+	for _, it := range items {
+		wdPtr, _ := it["week_day"].(*int8)
+		if wdPtr == nil || *wdPtr != wd {
+			continue
+		}
+		if dayMatch == nil {
+			dayMatch = it
+		}
+		sec, _ := it["section"].(string)
+		if len(secs) == 0 || sectionOverlap(sec, secs) {
+			return it
+		}
+	}
+	if dayMatch != nil {
+		return dayMatch
+	}
+	return items[0]
 }
 
 // emptyScheduleShell 无课表数据的空壳响应（对齐旧端）

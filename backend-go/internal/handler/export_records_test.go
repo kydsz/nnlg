@@ -216,6 +216,60 @@ func TestExportEvaluationRecordsAttendanceColumns(t *testing.T) {
 	}
 }
 
+// TestExportEvaluationRecordsUsesSnapshotStudentCount 导出的「上课人数」与出勤率分母
+// 必须优先取任务快照（评教人当时看到的合班总人数），不能按课程名去课表里取单班明细。
+// 回归背景：合班课程在课表里拆成多条单班明细，按课程名取首条会把 83 人的合班算成 46 人，
+// 导致实到 81 ≤ 应到 83 却导出 176.1% 的出勤率。
+func TestExportEvaluationRecordsUsesSnapshotStudentCount(t *testing.T) {
+	env := newTestServer(t)
+	if err := env.db.AutoMigrate(
+		&model.EvaluationTask{}, &model.EvaluationRecord{}, &model.EvaluationDimension{},
+	); err != nil {
+		t.Fatalf("补齐评教相关表失败: %v", err)
+	}
+	admin := systemAdminUser()
+	env.seedUser(t, admin)
+	teacher := &model.User{UserNo: "T301", Username: "邓老师", Role: model.RoleTeacher, Status: 1}
+	env.seedUser(t, teacher)
+	classTime := model.LocalTime(time.Now())
+	task := model.EvaluationTask{
+		TeacherID: teacher.ID, TeacherName: "邓老师", CourseName: "Python数据分析基础",
+		ClassTime: &classTime, Status: model.TaskStatusPending,
+		ScheduleSnapshot: json.RawMessage(`{"class_info":"2401班,2402班(83)","student_count":83}`),
+	}
+	if err := env.db.Create(&task).Error; err != nil {
+		t.Fatalf("灌入任务失败: %v", err)
+	}
+	rec := model.EvaluationRecord{
+		TaskID: task.ID, EvaluatorRole: model.RoleSupervisor,
+		DimensionValues: json.RawMessage(`{"actual_count":81}`),
+	}
+	if err := env.db.Create(&rec).Error; err != nil {
+		t.Fatalf("灌入评教记录失败: %v", err)
+	}
+
+	w := env.do(t, http.MethodPost, "/api/v1/stats/evaluation-records/export",
+		`{"fields":["record_id","student_count","attendance_count","attendance_rate"]}`,
+		env.authHeader(t, int64(admin.ID)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("导出状态码=%d, body=%s", w.Code, w.Body.String())
+	}
+	rows := parseXlsxRows(t, w.Body.Bytes())
+	if len(rows) != 3 {
+		t.Fatalf("应有 1 条数据行, 得到 %d 行", len(rows)-2)
+	}
+	data := rows[2]
+	if got := xlsxCell(data, 1); got != "83" {
+		t.Fatalf("上课人数应取快照 83, 得到 %q", got)
+	}
+	if got := xlsxCell(data, 2); got != "81" {
+		t.Fatalf("出勤人数应为 81, 得到 %q", got)
+	}
+	if got := xlsxCell(data, 3); got != "97.6" {
+		t.Fatalf("出勤率应为 81/83=97.6, 得到 %q", got)
+	}
+}
+
 // TestExportEvaluationRecordsWithoutTEI 不勾选 TEI 时，导出列集合与改动前一致（不含意见与建议）。
 func TestExportEvaluationRecordsWithoutTEI(t *testing.T) {
 	env, adminID := seedTEIExportEnv(t)

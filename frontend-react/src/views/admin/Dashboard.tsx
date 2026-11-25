@@ -14,7 +14,6 @@ import {
 import dayjs from 'dayjs'
 import { useNavigate } from 'react-router-dom'
 import { statsApi } from '@/api/modules/stats'
-import { scheduleApi } from '@/api/modules/schedule'
 import { useAuthStore } from '@/stores/auth'
 import { roleNamesStr } from '@/utils/roleNames'
 import { formatSemester } from '@/utils/format'
@@ -57,14 +56,10 @@ export default function Dashboard() {
   const donutRef = useRef<HTMLDivElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
 
-  const { effective: dates, onRange } = useSemesterRangePicker()
+  const { effective: dates, onRange, currentSemester } = useSemesterRangePicker()
   const { data, isLoading } = useQuery({
     queryKey: ['stats', 'overview', dates],
     queryFn: () => statsApi.overview({ start_date: dates[0], end_date: dates[1] }),
-  })
-  const { data: currentSemester } = useQuery({
-    queryKey: ['current-semester'],
-    queryFn: () => scheduleApi.currentSemester(),
   })
 
   useEffect(() => {

@@ -18,10 +18,28 @@ import { PlusOutlined, ArrowUpOutlined, ArrowDownOutlined, SettingOutlined } fro
 import type { ColumnsType } from 'antd/es/table'
 import { dimensionApi, type DimPayload } from '@/api/modules/dimensions'
 import type { Dimension, DimensionGroup, FieldType } from '@/api/types'
+import {
+  TEMPLATE_INFO,
+  TEMPLATE_FILTER_OPTIONS,
+  GROUP_TEMPLATE_OPTIONS,
+  templateLabel,
+} from '@/constants/templates'
 
 interface DimOption {
   label: string
   value: string
+}
+
+/** 分组名称：未按模板过滤时追加模板后缀，避免理论/实践同名分组混淆 */
+function groupLabel(g: DimensionGroup, withTemplate: boolean) {
+  const code = g.template_code
+  if (!withTemplate || !code || code === 'common') return g.name
+  return `${g.name}（${templateLabel(code)}）`
+}
+
+/** 分组的模板标签元数据：common/未知值按「通用」展示 */
+function groupTemplateMeta(code?: string | null) {
+  return TEMPLATE_INFO[code === 'practice' ? 'practice' : code === 'theory' ? 'theory' : 'common']
 }
 
 /** 选项值归一化为 {label, value} 数组（兼容历史上被存成 JSON 字符串的情况） */
@@ -95,18 +113,20 @@ export default function Dimensions() {
   const [dimModal, setDimModal] = useState(false)
   const [groupModal, setGroupModal] = useState(false)
   const [groupManageOpen, setGroupManageOpen] = useState(false)
+  const [groupTemplate, setGroupTemplate] = useState<string>('')
   const [editingDim, setEditingDim] = useState<Dimension | null>(null)
   const [editingGroup, setEditingGroup] = useState<DimensionGroup | null>(null)
   const [dimForm] = Form.useForm()
   const [groupForm] = Form.useForm()
 
   const { data: groups } = useQuery({
-    queryKey: ['dimension-groups'],
-    queryFn: () => dimensionApi.groupList(),
+    queryKey: ['dimension-groups', groupTemplate],
+    queryFn: () => dimensionApi.groupList({ template: groupTemplate || undefined }),
   })
   const { data: dims, isLoading } = useQuery({
-    queryKey: ['dimensions', activeGroup],
-    queryFn: () => dimensionApi.list({ group_id: activeGroup }),
+    queryKey: ['dimensions', activeGroup, groupTemplate],
+    queryFn: () =>
+      dimensionApi.list({ group_id: activeGroup, template: groupTemplate || undefined }),
   })
 
   const invalidate = () => {
@@ -115,7 +135,12 @@ export default function Dimensions() {
   }
 
   const saveGroupMut = useMutation({
-    mutationFn: (values: { code: string; name: string; sort_order?: number }) =>
+    mutationFn: (values: {
+      code: string
+      name: string
+      template_code?: string
+      sort_order?: number
+    }) =>
       editingGroup
         ? dimensionApi.groupUpdate(editingGroup.id, values)
         : dimensionApi.groupCreate(values),
@@ -205,8 +230,22 @@ export default function Dimensions() {
 
   const columns: ColumnsType<Dimension> = [
     { title: '排序', dataIndex: 'sort_order', width: 70 },
-    { title: '名称', dataIndex: 'name', width: 180 },
-    { title: '编码', dataIndex: 'code', width: 200 },
+    { title: '名称', dataIndex: 'name', width: 220 },
+    ...(groupTemplate
+      ? []
+      : [
+          {
+            title: '模板',
+            dataIndex: 'template_code',
+            width: 90,
+            render: (v?: string | null) => {
+              // 通用模板不传 color，避免 antd 把非法色名 'default' 当成普通颜色处理
+              const info = groupTemplateMeta(v)
+              return <Tag color={info.color}>{info.label}</Tag>
+            },
+          },
+        ]),
+    { title: '编码', dataIndex: 'code', width: 160 },
     {
       title: '类型',
       dataIndex: 'field_type',
@@ -227,7 +266,13 @@ export default function Dimensions() {
       width: 70,
       render: (v: number) => (v === 1 ? '启用' : '禁用'),
     },
-    { title: '配置', dataIndex: 'field_config', ellipsis: true, render: (v: unknown) => configSummary(v) },
+    {
+      title: '配置',
+      dataIndex: 'field_config',
+      width: 180,
+      ellipsis: true,
+      render: (v: unknown) => configSummary(v),
+    },
     {
       title: '操作',
       width: 190,
@@ -271,13 +316,24 @@ export default function Dimensions() {
 
   const groupItems = [
     { key: 'all', label: '全部' },
-    ...groupList.map((g) => ({ key: String(g.id), label: g.name })),
+    ...groupList.map((g) => ({ key: String(g.id), label: groupLabel(g, !groupTemplate) })),
   ]
 
   return (
     <div>
       <h3 className="page-title">评教维度</h3>
       <div className="filter-bar">
+        <Select
+          style={{ width: 150 }}
+          value={groupTemplate}
+          onChange={(v) => {
+            setGroupTemplate(v)
+            // 切模板后，原选中的分组可能不属于新模板（后端按模板 JOIN 过滤会返回空表），
+            // 必须回到「全部」，否则出现空表且 Tab 无高亮。
+            setActiveGroup(undefined)
+          }}
+          options={TEMPLATE_FILTER_OPTIONS}
+        />
         <Button icon={<SettingOutlined />} onClick={() => setGroupManageOpen(true)}>
           分组管理
         </Button>
@@ -305,6 +361,7 @@ export default function Dimensions() {
         columns={columns}
         dataSource={dims?.list}
         pagination={false}
+        scroll={{ x: 1160 }}
       />
 
       {/* 分组管理弹窗 */}
@@ -313,7 +370,7 @@ export default function Dimensions() {
         open={groupManageOpen}
         footer={null}
         onCancel={() => setGroupManageOpen(false)}
-        width={560}
+        width={700}
       >
         <div style={{ marginBottom: 12, textAlign: 'right' }}>
           <Button
@@ -321,6 +378,7 @@ export default function Dimensions() {
             onClick={() => {
               setEditingGroup(null)
               groupForm.resetFields()
+              groupForm.setFieldsValue({ template_code: groupTemplate || 'theory' })
               setGroupModal(true)
             }}
           >
@@ -334,6 +392,15 @@ export default function Dimensions() {
           pagination={false}
           columns={[
             { title: '分组名称', dataIndex: 'name' },
+            {
+              title: '模板',
+              dataIndex: 'template_code',
+              width: 100,
+              render: (v?: string) => {
+                const info = groupTemplateMeta(v)
+                return <Tag color={info.color}>{info.label}</Tag>
+              },
+            },
             { title: '排序', dataIndex: 'sort_order', width: 70 },
             {
               title: '操作',
@@ -386,6 +453,14 @@ export default function Dimensions() {
           <Form.Item name="name" label="分组名称" rules={[{ required: true, message: '请输入名称' }]}>
             <Input />
           </Form.Item>
+          <Form.Item
+            name="template_code"
+            label="所属模板"
+            initialValue="theory"
+            tooltip="通用分组会在所有模板的评教表中出现"
+          >
+            <Select options={GROUP_TEMPLATE_OPTIONS} />
+          </Form.Item>
           <Form.Item name="code" label="分组编码" rules={[{ required: true, message: '请输入编码' }]}>
             <Input />
           </Form.Item>
@@ -408,7 +483,10 @@ export default function Dimensions() {
           <Form.Item name="group_id" label="所属分组">
             <Select
               allowClear
-              options={(groups?.list || []).map((g) => ({ label: g.name, value: g.id }))}
+              options={(groups?.list || []).map((g) => ({
+                label: groupLabel(g, !groupTemplate),
+                value: g.id,
+              }))}
             />
           </Form.Item>
           <Form.Item name="name" label="维度名称" rules={[{ required: true, message: '请输入名称' }]}>

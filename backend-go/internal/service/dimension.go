@@ -14,16 +14,72 @@ type Dimension struct{}
 
 func NewDimension() *Dimension { return &Dimension{} }
 
+// ---------- 模板口径 ----------
+
+// templateGroupCond 返回“分组属于指定模板（含 common 通用分组）”的 SQL 条件（含两个占位符）。
+// column 为分组表 template_code 的列名：单表查询传 "template_code"，JOIN 后传 "g.template_code"。
+// 评教表单、提交校验、满分合计、维度管理统一走此条件，避免多处手写导致口径漂移。
+func templateGroupCond(column string) string {
+	return "(" + column + " = ? OR " + column + " = ?)"
+}
+
+// activeDimensionsOfTemplate 取指定模板的启用分组与启用维度。
+// 分组按 sort_order 排序；维度已按「分组排序 + 维度排序」排列（与评教表单展示顺序一致）。
+// 未分组维度视为存量理论课维度，仅理论课模板返回。
+func activeDimensionsOfTemplate(db *gorm.DB, template string) ([]model.DimensionGroup, []model.EvaluationDimension, error) {
+	template = model.NormalizeTemplate(template)
+	var groups []model.DimensionGroup
+	if err := db.Where("status = 1 AND "+templateGroupCond("template_code"), template, model.TemplateCommon).
+		Order("sort_order ASC, id ASC").Find(&groups).Error; err != nil {
+		return nil, nil, err
+	}
+
+	byGroup := make(map[int][]model.EvaluationDimension, len(groups))
+	ids := make([]int, 0, len(groups))
+	for _, g := range groups {
+		ids = append(ids, g.ID)
+	}
+	if len(ids) > 0 {
+		var dims []model.EvaluationDimension
+		if err := db.Preload("Group").
+			Where("status = 1 AND group_id IN ?", ids).
+			Order("sort_order ASC, id ASC").Find(&dims).Error; err != nil {
+			return nil, nil, err
+		}
+		for _, d := range dims {
+			byGroup[*d.GroupID] = append(byGroup[*d.GroupID], d)
+		}
+	}
+
+	var orphan []model.EvaluationDimension
+	if template == model.TemplateTheory {
+		if err := db.Where("status = 1 AND group_id IS NULL").
+			Order("sort_order ASC, id ASC").Find(&orphan).Error; err != nil {
+			return nil, nil, err
+		}
+	}
+
+	out := make([]model.EvaluationDimension, 0, len(orphan))
+	for _, g := range groups {
+		out = append(out, byGroup[g.ID]...)
+	}
+	return groups, append(out, orphan...), nil
+}
+
 // ---------- 分组 ----------
 
 // GroupList 分组列表（附带启用维度数）；status 为 nil 时默认仅返回启用（对齐旧端语义）
-func (s *Dimension) GroupList(db *gorm.DB, status *int16) ([]map[string]interface{}, error) {
+// template 非空时按模板过滤（含 common 通用分组）。
+func (s *Dimension) GroupList(db *gorm.DB, status *int16, template string) ([]map[string]interface{}, error) {
 	var groups []model.DimensionGroup
 	q := db.Model(&model.DimensionGroup{})
 	if status != nil {
 		q = q.Where("status = ?", *status)
 	} else {
 		q = q.Where("status = 1")
+	}
+	if template != "" {
+		q = q.Where(templateGroupCond("template_code"), template, model.TemplateCommon)
 	}
 	if err := q.Order("sort_order ASC, id ASC").Find(&groups).Error; err != nil {
 		return nil, err
@@ -43,7 +99,7 @@ func (s *Dimension) GroupList(db *gorm.DB, status *int16) ([]map[string]interfac
 	out := make([]map[string]interface{}, 0, len(groups))
 	for _, g := range groups {
 		out = append(out, map[string]interface{}{
-			"id": g.ID, "code": g.Code, "name": g.Name,
+			"id": g.ID, "code": g.Code, "name": g.Name, "template_code": g.TemplateCode,
 			"sort_order": g.SortOrder, "status": g.Status,
 			"dimension_count": counts[g.ID], "create_time": g.CreateTime,
 		})
@@ -53,10 +109,11 @@ func (s *Dimension) GroupList(db *gorm.DB, status *int16) ([]map[string]interfac
 
 // GroupParams 分组参数
 type GroupParams struct {
-	Code      string `json:"code"`
-	Name      string `json:"name"`
-	SortOrder *int   `json:"sort_order"`
-	Status    *int16 `json:"status"`
+	Code         string `json:"code"`
+	Name         string `json:"name"`
+	TemplateCode string `json:"template_code"`
+	SortOrder    *int   `json:"sort_order"`
+	Status       *int16 `json:"status"`
 }
 
 // GroupCreate 新建分组
@@ -73,6 +130,13 @@ func (s *Dimension) GroupCreate(db *gorm.DB, p GroupParams) (*model.DimensionGro
 		return nil, errors.New("分组编码已存在")
 	}
 	g := model.DimensionGroup{Code: p.Code, Name: p.Name, SortOrder: derefInt(p.SortOrder), Status: 1}
+	if p.TemplateCode == "" {
+		g.TemplateCode = model.TemplateTheory
+	} else if !model.ValidGroupTemplate(p.TemplateCode) {
+		return nil, errors.New("非法评价模板: " + p.TemplateCode)
+	} else {
+		g.TemplateCode = p.TemplateCode
+	}
 	if p.Status != nil {
 		g.Status = *p.Status
 	}
@@ -118,6 +182,12 @@ func (s *Dimension) GroupUpdate(db *gorm.DB, id int, p GroupParams) (*model.Dime
 	if p.Name != "" {
 		updates["name"] = p.Name
 	}
+	if p.TemplateCode != "" {
+		if !model.ValidGroupTemplate(p.TemplateCode) {
+			return nil, errors.New("非法评价模板: " + p.TemplateCode)
+		}
+		updates["template_code"] = p.TemplateCode
+	}
 	if p.SortOrder != nil {
 		updates["sort_order"] = *p.SortOrder
 	}
@@ -150,6 +220,7 @@ type DimParams struct {
 	GroupID   string
 	FieldType string
 	Status    *int16
+	Template  string
 }
 
 // FieldTypeNames 字段类型中文名（对齐旧端 FIELD_TYPE_NAMES）
@@ -179,13 +250,15 @@ func FieldTypeName(ft string) string {
 
 // dimItem 维度输出（对齐旧端列表/详情字段）
 func dimItem(d *model.EvaluationDimension) map[string]interface{} {
-	var groupName interface{}
+	var groupName, templateCode interface{}
 	if d.Group != nil {
 		groupName = d.Group.Name
+		templateCode = d.Group.TemplateCode
 	}
 	return map[string]interface{}{
 		"id": d.ID, "group_id": d.GroupID, "group_name": groupName,
-		"code": d.Code, "name": d.Name,
+		"template_code": templateCode,
+		"code":          d.Code, "name": d.Name,
 		"field_type": d.FieldType, "field_type_name": FieldTypeName(d.FieldType),
 		"field_config": d.FieldConfig, "description": d.Description,
 		"sort_order": d.SortOrder, "is_required": d.IsRequired, "status": d.Status,
@@ -196,18 +269,28 @@ func dimItem(d *model.EvaluationDimension) map[string]interface{} {
 // DimList 维度列表（分页）
 func (s *Dimension) DimList(db *gorm.DB, p DimParams, page, pageSize int) ([]map[string]interface{}, int64, error) {
 	q := db.Model(&model.EvaluationDimension{})
+	if p.Template != "" {
+		// 子查询代替 JOIN，避免分页/计数时列名歧义；未分组维度按存量理论课维度处理，与评教表单口径一致。
+		sub := db.Model(&model.DimensionGroup{}).Select("id").
+			Where(templateGroupCond("template_code"), p.Template, model.TemplateCommon)
+		if p.Template == model.TemplateTheory {
+			q = q.Where("(group_id IN (?) OR group_id IS NULL)", sub)
+		} else {
+			q = q.Where("group_id IN (?)", sub)
+		}
+	}
 	if p.Keyword != "" {
 		kw := "%" + p.Keyword + "%"
-		q = q.Where("code LIKE ? OR name LIKE ?", kw, kw)
+		q = q.Where("evaluation_dimension.code LIKE ? OR evaluation_dimension.name LIKE ?", kw, kw)
 	}
 	if p.GroupID != "" {
-		q = q.Where("group_id = ?", p.GroupID)
+		q = q.Where("evaluation_dimension.group_id = ?", p.GroupID)
 	}
 	if p.FieldType != "" {
-		q = q.Where("field_type = ?", p.FieldType)
+		q = q.Where("evaluation_dimension.field_type = ?", p.FieldType)
 	}
 	if p.Status != nil {
-		q = q.Where("status = ?", *p.Status)
+		q = q.Where("evaluation_dimension.status = ?", *p.Status)
 	}
 	var total int64
 	if err := q.Session(&gorm.Session{}).Count(&total).Error; err != nil {
@@ -215,7 +298,7 @@ func (s *Dimension) DimList(db *gorm.DB, p DimParams, page, pageSize int) ([]map
 	}
 	var list []model.EvaluationDimension
 	err := q.Session(&gorm.Session{}).Preload("Group").
-		Order("sort_order ASC, id ASC").
+		Order("evaluation_dimension.sort_order ASC, evaluation_dimension.id ASC").
 		Offset((page - 1) * pageSize).Limit(pageSize).Find(&list).Error
 	if err != nil {
 		return nil, 0, err
@@ -238,14 +321,11 @@ func (s *Dimension) DimGet(db *gorm.DB, id int) (map[string]interface{}, error) 
 	return item, nil
 }
 
-// DimActive 启用维度列表（评教表单用；对齐旧端：join 分组，先按分组 sort_order 再按维度 sort_order）
-func (s *Dimension) DimActive(db *gorm.DB) ([]map[string]interface{}, error) {
-	var dims []model.EvaluationDimension
-	if err := db.Preload("Group").
-		Joins("JOIN dimension_group g ON g.id = evaluation_dimension.group_id").
-		Where("evaluation_dimension.status = 1").
-		Order("g.sort_order ASC, evaluation_dimension.sort_order ASC").
-		Find(&dims).Error; err != nil {
+// DimActive 启用维度列表（评教表单用；按「分组排序 + 维度排序」输出）
+// template 指定评价模板，返回该模板维度 + common 通用维度。
+func (s *Dimension) DimActive(db *gorm.DB, template string) ([]map[string]interface{}, error) {
+	_, dims, err := activeDimensionsOfTemplate(db, template)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]map[string]interface{}, 0, len(dims))
@@ -386,14 +466,10 @@ func (s *Dimension) DimDelete(db *gorm.DB, id int) error {
 	return db.Delete(&model.EvaluationDimension{}, id).Error
 }
 
-// SchemaForEvaluation 评教用维度结构（仅启用项，按分组聚合）
-func (s *Dimension) SchemaForEvaluation(db *gorm.DB) ([]map[string]interface{}, error) {
-	var groups []model.DimensionGroup
-	if err := db.Where("status = 1").Order("sort_order ASC, id ASC").Find(&groups).Error; err != nil {
-		return nil, err
-	}
-	var dims []model.EvaluationDimension
-	if err := db.Where("status = 1").Order("sort_order ASC, id ASC").Find(&dims).Error; err != nil {
+// SchemaForEvaluation 评教用维度结构（仅启用项，按分组聚合；按模板过滤）
+func (s *Dimension) SchemaForEvaluation(db *gorm.DB, template string) ([]map[string]interface{}, error) {
+	groups, dims, err := activeDimensionsOfTemplate(db, template)
+	if err != nil {
 		return nil, err
 	}
 	byGroup := map[int][]map[string]interface{}{}

@@ -48,7 +48,7 @@ var zipMagic = []byte{'P', 'K', 0x03, 0x04}
 var ooxmlPartDir = map[string]string{".docx": "word/", ".xlsx": "xl/", ".pptx": "ppt/"}
 
 const (
-	maxImageSize = 10 << 20 // 10MB
+	maxImageSize = 20 << 20 // 20MB（手机原图常见 10MB+，前端上传前会先压缩）
 	maxFileSize  = 20 << 20 // 20MB
 )
 

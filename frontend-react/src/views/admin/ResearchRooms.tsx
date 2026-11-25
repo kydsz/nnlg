@@ -4,6 +4,7 @@ import { Table, Button, Modal, Form, Input, Select, Space, App, Popconfirm } fro
 import { PlusOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { orgApi } from '@/api/modules/org'
+import { useCollegeOptions } from '@/hooks/useCollegeOptions'
 import type { ResearchRoom } from '@/api/types'
 
 export default function ResearchRooms() {
@@ -18,12 +19,7 @@ export default function ResearchRooms() {
     queryKey: ['research-rooms', collegeFilter],
     queryFn: () => orgApi.roomList({ college_id: collegeFilter }),
   })
-  const { data: colleges } = useQuery({
-    queryKey: ['colleges', undefined],
-    queryFn: () => orgApi.collegeList(),
-  })
-
-  const collegeOptions = (colleges?.list || []).map((c) => ({ label: c.name, value: c.id }))
+  const collegeOptions = useCollegeOptions()
 
   const saveMut = useMutation({
     mutationFn: (values: { name: string; college_id: number }) =>
@@ -85,14 +81,16 @@ export default function ResearchRooms() {
     <div>
       <h3 className="page-title">教研室管理</h3>
       <div className="filter-bar">
-        <Select
-          allowClear
-          placeholder="按学院筛选"
-          style={{ width: 200 }}
-          options={collegeOptions}
-          value={collegeFilter}
-          onChange={setCollegeFilter}
-        />
+        {collegeOptions.length > 1 && (
+          <Select
+            allowClear
+            placeholder="按学院筛选"
+            style={{ width: 200 }}
+            options={collegeOptions}
+            value={collegeFilter}
+            onChange={setCollegeFilter}
+          />
+        )}
         <Button
           type="primary"
           icon={<PlusOutlined />}

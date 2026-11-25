@@ -23,7 +23,7 @@ func NewDimension(db *gorm.DB, svc *service.Dimension) *Dimension {
 
 // GroupList 分组列表
 func (h *Dimension) GroupList(c *gin.Context) {
-	out, err := h.svc.GroupList(h.db, qInt16(c, "status"))
+	out, err := h.svc.GroupList(h.db, qInt16(c, "status"), c.Query("template"))
 	if err != nil {
 		serverErr(c, "查询失败")
 		return
@@ -110,6 +110,7 @@ func (h *Dimension) DimList(c *gin.Context) {
 		GroupID:   c.Query("group_id"),
 		FieldType: c.Query("field_type"),
 		Status:    qInt16(c, "status"),
+		Template:  c.Query("template"),
 	}, page, size)
 	if err != nil {
 		serverErr(c, "查询失败")
@@ -118,9 +119,17 @@ func (h *Dimension) DimList(c *gin.Context) {
 	response.OK(c, pageData(c, list, total, size))
 }
 
-// DimActive 启用维度列表（评教表单用）
+// DimActive 启用维度列表（评教表单用）。优先按 task_id 解析任务模板，其次 template 参数，缺省理论课。
 func (h *Dimension) DimActive(c *gin.Context) {
-	out, err := h.svc.DimActive(h.db)
+	template := c.Query("template")
+	if tid := c.Query("task_id"); tid != "" {
+		if id, err := strconv.Atoi(tid); err == nil {
+			if code := service.TemplateCodeOfTask(h.db, id); code != "" {
+				template = code
+			}
+		}
+	}
+	out, err := h.svc.DimActive(h.db, template)
 	if err != nil {
 		serverErr(c, "查询失败")
 		return

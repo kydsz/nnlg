@@ -20,6 +20,7 @@ import { MinusOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { userApi, type UserListParams } from '@/api/modules/users'
 import { orgApi } from '@/api/modules/org'
+import { useCollegeOptions } from '@/hooks/useCollegeOptions'
 import { roleApi } from '@/api/modules/roles'
 import type { TeachingCollegeInfo, User } from '@/api/types'
 import { ROLE_NAMES } from '@/utils/roleNames'
@@ -59,10 +60,6 @@ export default function Users() {
     queryKey: ['users', params],
     queryFn: () => userApi.list(params),
   })
-  const { data: colleges } = useQuery({
-    queryKey: ['colleges', undefined],
-    queryFn: () => orgApi.collegeList(),
-  })
   const { data: rooms } = useQuery({
     queryKey: ['research-rooms', undefined],
     queryFn: () => orgApi.roomList(),
@@ -72,7 +69,7 @@ export default function Users() {
     queryFn: () => roleApi.list(),
   })
 
-  const collegeOptions = (colleges?.list || []).map((c) => ({ label: c.name, value: c.id }))
+  const collegeOptions = useCollegeOptions()
   const roomOptions = (rooms?.list || []).map((r) => ({ label: r.name, value: r.id }))
   const roleOptions = (roles?.list || []).map((r) => ({ label: r.name, value: r.code }))
   // 新增/编辑用户的角色下拉只展示当前账号可分配的角色（与服务端 checkRoleAssignable 同一口径），
@@ -578,10 +575,7 @@ function SupervisorScopeDrawer({ user, onClose }: { user: User | null; onClose: 
   const [collegeCollapsed, setCollegeCollapsed] = useState(false)
   const [roomCollapsed, setRoomCollapsed] = useState(false)
 
-  const { data: colleges } = useQuery({
-    queryKey: ['colleges', undefined],
-    queryFn: () => orgApi.collegeList(),
-  })
+  const collegeOptions = useCollegeOptions()
   const { data: rooms } = useQuery({
     queryKey: ['research-rooms', undefined],
     queryFn: () => orgApi.roomList(),
@@ -641,7 +635,7 @@ function SupervisorScopeDrawer({ user, onClose }: { user: User | null; onClose: 
           <Checkbox.Group
             value={collegeIds}
             onChange={(v) => setCollegeIds(v as number[])}
-            options={(colleges?.list || []).map((c) => ({ label: c.name, value: c.id }))}
+            options={collegeOptions}
             style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}
           />
         )}

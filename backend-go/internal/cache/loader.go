@@ -107,38 +107,47 @@ func IncrSessionEpoch(ctx context.Context, db *gorm.DB, uid int) (int64, error) 
 // dimCacheTTL 启用维度缓存时长。
 const dimCacheTTL = 60 * time.Second
 
-// DimCacheKey 启用维度缓存 key：tev:dim:active
-func (c *Client) DimCacheKey() string { return c.key("dim", "active") }
+// DimCacheKey 启用维度缓存 key：tev:dim:active[:template]（template 为空表示全量）
+func (c *Client) DimCacheKey(template string) string {
+	if template == "" {
+		return c.key("dim", "active")
+	}
+	return c.key("dim", "active", template)
+}
 
 // GetActiveDimensions 读启用维度缓存（evaluation_dimension where status=1）。
-func (c *Client) GetActiveDimensions(ctx context.Context) ([]model.EvaluationDimension, bool) {
+// template 非空时读对应模板（含 common 通用维度）的缓存。
+func (c *Client) GetActiveDimensions(ctx context.Context, template string) ([]model.EvaluationDimension, bool) {
 	if c == nil || !c.Enabled {
 		return nil, false
 	}
 	var dims []model.EvaluationDimension
-	if !c.GetJSON(ctx, c.DimCacheKey(), &dims) {
+	if !c.GetJSON(ctx, c.DimCacheKey(template), &dims) {
 		return nil, false
 	}
 	return dims, true
 }
 
 // SetActiveDimensions 写启用维度缓存。
-func (c *Client) SetActiveDimensions(ctx context.Context, dims []model.EvaluationDimension) {
+func (c *Client) SetActiveDimensions(ctx context.Context, dims []model.EvaluationDimension, template string) {
 	if c == nil || !c.Enabled {
 		return
 	}
 	if dims == nil {
 		dims = []model.EvaluationDimension{}
 	}
-	c.SetJSON(ctx, c.DimCacheKey(), dims, dimCacheTTL)
+	c.SetJSON(ctx, c.DimCacheKey(template), dims, dimCacheTTL)
 }
 
 // DelActiveDimensions 主动失效启用维度缓存（维度管理增删改时调用）。
+// 同时清理全量与各模板的 key，避免模板维度继续命中旧缓存。
 func (c *Client) DelActiveDimensions(ctx context.Context) {
 	if c == nil || !c.Enabled {
 		return
 	}
-	c.Del(ctx, c.DimCacheKey())
+	c.Del(ctx, c.DimCacheKey(""))
+	c.Del(ctx, c.DimCacheKey(model.TemplateTheory))
+	c.Del(ctx, c.DimCacheKey(model.TemplatePractice))
 }
 
 // InvalidateDimensionCache 主动失效启用维度缓存（包级便利）。

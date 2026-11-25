@@ -4,6 +4,8 @@ import type { Dimension, DimensionGroup } from '../types'
 export interface GroupPayload {
   code: string
   name: string
+  /** 所属评价模板：theory/practice/common，缺省 theory */
+  template_code?: string
   sort_order?: number
   status?: number
 }
@@ -27,7 +29,7 @@ export interface DimPayload {
 }
 
 export const dimensionApi = {
-  groupList: (params?: { page?: number; page_size?: number; status?: number }) =>
+  groupList: (params?: { page?: number; page_size?: number; status?: number; template?: string }) =>
     request<{ list: DimensionGroup[]; total: number }>({
       url: '/dimensions/groups',
       method: 'GET',
@@ -48,6 +50,7 @@ export const dimensionApi = {
     group_id?: number
     field_type?: string
     status?: number
+    template?: string
   }) =>
     request<{ list: Dimension[]; total: number }>({
       url: '/dimensions',
@@ -55,7 +58,12 @@ export const dimensionApi = {
       params: { page: 1, page_size: 500, ...params },
     }),
 
-  active: () => request<Dimension[]>({ url: '/dimensions/active', method: 'GET' }),
+  active: (taskId?: number) =>
+    request<Dimension[]>({
+      url: '/dimensions/active',
+      method: 'GET',
+      params: taskId ? { task_id: taskId } : undefined,
+    }),
 
   get: (id: number) => request<Dimension>({ url: `/dimensions/${id}`, method: 'GET' }),
 

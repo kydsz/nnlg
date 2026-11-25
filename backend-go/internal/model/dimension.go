@@ -5,11 +5,12 @@ import "encoding/json"
 // DimensionGroup 维度分组表
 type DimensionGroup struct {
 	Model
-	Code       string                `gorm:"column:code;size:32" json:"code"`
-	Name       string                `gorm:"column:name;size:64" json:"name"`
-	SortOrder  int                   `gorm:"column:sort_order" json:"sort_order"`
-	Status     int16                 `gorm:"column:status" json:"status"`
-	Dimensions []EvaluationDimension `gorm:"foreignKey:GroupID" json:"-"`
+	Code         string                `gorm:"column:code;size:32" json:"code"`
+	Name         string                `gorm:"column:name;size:64" json:"name"`
+	TemplateCode string                `gorm:"column:template_code;size:32" json:"template_code"`
+	SortOrder    int                   `gorm:"column:sort_order" json:"sort_order"`
+	Status       int16                 `gorm:"column:status" json:"status"`
+	Dimensions   []EvaluationDimension `gorm:"foreignKey:GroupID" json:"-"`
 }
 
 func (DimensionGroup) TableName() string { return "dimension_group" }
@@ -19,7 +20,7 @@ type EvaluationDimension struct {
 	Model
 	GroupID     *int            `gorm:"column:group_id" json:"group_id"`
 	Code        string          `gorm:"column:code;size:32" json:"code"`
-	Name        string          `gorm:"column:name;size:64" json:"name"`
+	Name        string          `gorm:"column:name;size:255" json:"name"`
 	FieldType   string          `gorm:"column:field_type;size:32" json:"field_type"`
 	FieldConfig json.RawMessage `gorm:"column:field_config;type:json" json:"field_config"`
 	Description *string         `gorm:"column:description;type:text" json:"description"`

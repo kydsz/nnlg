@@ -17,9 +17,9 @@ import {
 import { DownloadOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { statsApi, type RecordQuery } from '@/api/modules/stats'
-import { orgApi } from '@/api/modules/org'
 import { roleApi } from '@/api/modules/roles'
 import ExportFieldSelector from '@/components/ExportFieldSelector'
+import { useCollegeOptions } from '@/hooks/useCollegeOptions'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
 import { downloadBlob, exportFilename } from '@/utils/download'
@@ -49,10 +49,7 @@ export default function TeacherEvaluationSummary() {
   const [page, setPage] = useState(1)
   const [exportOpen, setExportOpen] = useState(false)
 
-  const { data: colleges } = useQuery({
-    queryKey: ['colleges', undefined],
-    queryFn: () => orgApi.collegeList(),
-  })
+  const collegeOptions = useCollegeOptions()
   const { data: roleListRes } = useQuery({
     queryKey: ['roles'],
     queryFn: () => roleApi.list(),
@@ -100,16 +97,18 @@ export default function TeacherEvaluationSummary() {
       {/* 筛选区 */}
       <Card size="small" style={{ marginBottom: 16 }}>
         <div className="filter-bar">
-          <Select
-            mode="multiple"
-            allowClear
-            maxTagCount={2}
-            placeholder="学院"
-            style={{ minWidth: 200 }}
-            options={(colleges?.list || []).map((c) => ({ label: c.name, value: String(c.id) }))}
-            value={collegeIds}
-            onChange={setCollegeIds}
-          />
+          {collegeOptions.length > 1 && (
+            <Select
+              mode="multiple"
+              allowClear
+              maxTagCount={2}
+              placeholder="学院"
+              style={{ minWidth: 200 }}
+              options={collegeOptions.map((c) => ({ label: c.label, value: String(c.value) }))}
+              value={collegeIds}
+              onChange={setCollegeIds}
+            />
+          )}
           <Select
             mode="multiple"
             allowClear
@@ -253,7 +252,7 @@ function TeacherCard({
           {item.has_courses ? (
             <Tag color="green">有课</Tag>
           ) : (
-            <Tag color="default">无课</Tag>
+            <Tag>无课</Tag>
           )}
           <Tag>{roleNamesStr(item.role_names)}</Tag>
         </Space>

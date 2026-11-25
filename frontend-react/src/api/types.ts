@@ -125,6 +125,8 @@ export interface DimensionGroup {
   id: number
   code: string
   name: string
+  /** 所属评价模板：common=通用 / theory=理论课 / practice=实践教学 */
+  template_code?: string
   sort_order: number
   status: number
   dimension_count?: number
@@ -146,6 +148,8 @@ export interface Dimension {
   id: number
   group_id: number | null
   group_name?: string | null
+  /** 所属分组的评价模板（common/theory/practice） */
+  template_code?: string | null
   code: string
   name: string
   field_type: FieldType
@@ -170,6 +174,8 @@ export interface Task {
   /** 被评教师可选授课学院（主学院 + 授课学院），供编辑任务时选择 */
   teacher_teaching_colleges?: { college_id: number; college_name: string }[]
   course_name: string
+  /** 评价模板：theory=理论课 / practice=实践教学 */
+  template_code?: string
   class_time: string | null
   classroom: string | null
   status: number

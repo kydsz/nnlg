@@ -171,8 +171,9 @@ function RecordList({
             onClick={() => openDetail(r.id)}
             description={
               <span style={{ fontSize: 12, color: '#999' }}>
-                {type === 'received' ? `评教人: ${r.evaluator_name}` : `教师: ${r.teacher_name}`} ·{' '}
-                {formatDate(r.submit_time)}
+                {type === 'received' ? `评教人: ${r.evaluator_name}` : `教师: ${r.teacher_name}`}
+                {' · '}听课 {formatDate(r.class_time, false)}
+                {' · '}提交 {formatDate(r.submit_time)}
               </span>
             }
           >
@@ -233,6 +234,7 @@ function RecordList({
               <List.Item extra={detail.evaluator_role_name || detail.evaluator_role || '-'}>
                 评教角色
               </List.Item>
+              <List.Item extra={formatDate(detail.class_time, false)}>听课日期</List.Item>
               <List.Item extra={formatDate(detail.submit_time)}>评教时间</List.Item>
               <List.Item extra={detail.is_anonymous ? '是' : '否'}>是否匿名</List.Item>
             </List>

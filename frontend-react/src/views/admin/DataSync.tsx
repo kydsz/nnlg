@@ -27,7 +27,7 @@ import { syncApi } from '@/api/modules/sync'
 import { scheduleApi } from '@/api/modules/schedule'
 import { taskApi } from '@/api/modules/tasks'
 import { userApi } from '@/api/modules/users'
-import { orgApi } from '@/api/modules/org'
+import { useCollegeOptions } from '@/hooks/useCollegeOptions'
 import { formatSemester } from '@/utils/format'
 
 export default function DataSync() {
@@ -579,11 +579,8 @@ function LlsykbBatchModal({
     queryFn: () => scheduleApi.semesters(),
     enabled: open,
   })
-  const { data: colleges } = useQuery({
-    queryKey: ['colleges', undefined],
-    queryFn: () => orgApi.collegeList(),
-    enabled: open,
-  })
+  // 学院选项：有 org:view 取全量；学院管理员回退为本人学院（不请求 /colleges，避免 403）
+  const collegeOptions = useCollegeOptions()
 
   useEffect(() => {
     if (open && currentSemester) setSemester(currentSemester.semester)
@@ -643,14 +640,16 @@ function LlsykbBatchModal({
             options={(semesters || []).map((s) => ({ label: formatSemester(s), value: s }))}
           />
         </Form.Item>
-        <Form.Item label="学院（不选则同步全部）">
-          <Select
-            allowClear
-            value={collegeId}
-            onChange={setCollegeId}
-            options={(colleges?.list || []).map((c) => ({ label: c.name, value: c.id }))}
-          />
-        </Form.Item>
+        {collegeOptions.length > 1 && (
+          <Form.Item label="学院（不选则同步全部）">
+            <Select
+              allowClear
+              value={collegeId}
+              onChange={setCollegeId}
+              options={collegeOptions}
+            />
+          </Form.Item>
+        )}
       </Form>
       {running && (
         <div style={{ marginTop: 8 }}>
@@ -679,15 +678,18 @@ function TeachingCollegeSyncModal({ open, onClose }: { open: boolean; onClose: (
     queryFn: () => scheduleApi.currentSemester(),
     enabled: open,
   })
-  const { data: colleges } = useQuery({
-    queryKey: ['colleges', 'teaching-sync'],
-    queryFn: () => orgApi.collegeList(),
-    enabled: open,
-  })
+  // 学院选项：有 org:view 取全量；学院管理员回退为本人学院（不请求 /colleges，避免 403）
+  const collegeOptions = useCollegeOptions()
+  const onlyCollegeId = collegeOptions.length === 1 ? collegeOptions[0].value : undefined
 
   useEffect(() => {
     if (open && currentSemester) form.setFieldValue('semester', currentSemester.semester)
   }, [open, currentSemester])
+
+  // 单学院时隐藏选择框并自动填入，保证必填校验仍可通过
+  useEffect(() => {
+    if (open && onlyCollegeId != null) form.setFieldValue('college_id', onlyCollegeId)
+  }, [open, onlyCollegeId, form])
 
   const mut = useMutation({
     mutationFn: (v: { semester: string; college_id: number }) =>
@@ -722,12 +724,18 @@ function TeachingCollegeSyncModal({ open, onClose }: { open: boolean; onClose: (
             options={(semesters || []).map((s) => ({ label: formatSemester(s), value: s }))}
           />
         </Form.Item>
-        <Form.Item name="college_id" label="学院" rules={[{ required: true, message: '请选择学院' }]}>
-          <Select
-            placeholder="选择要识别的学院"
-            options={(colleges?.list || []).map((c) => ({ label: c.name, value: c.id }))}
-          />
-        </Form.Item>
+        {onlyCollegeId == null && (
+          <Form.Item
+            name="college_id"
+            label="学院"
+            rules={[{ required: true, message: '请选择学院' }]}
+          >
+            <Select
+              placeholder="选择要识别的学院"
+              options={collegeOptions}
+            />
+          </Form.Item>
+        )}
       </Form>
     </Modal>
   )

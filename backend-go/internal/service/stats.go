@@ -1466,16 +1466,17 @@ type RecordStatsFilters struct {
 
 // studentCountIndex 课表学生人数索引：当前学期课表与明细各一次 IN 查询，
 // 供列表逐条查「教师+课程名 -> 学生人数」，替代每条记录 4 次查询的 N+1。
+// 明细在构建时按「同一堂课」合并（合班一班一行 -> 一条，人数累加）。
 type studentCountIndex struct {
 	schedulesByTeacher map[int][]model.CourseSchedule
-	detailsBySchedule  map[int][]model.CourseScheduleDetail
+	mergedBySchedule   map[int][]map[string]interface{}
 }
 
 // buildStudentCountIndex 按教师 ID 集合预取当前学期课表
 func buildStudentCountIndex(db *gorm.DB, teacherIDs []int) *studentCountIndex {
 	idx := &studentCountIndex{
 		schedulesByTeacher: map[int][]model.CourseSchedule{},
-		detailsBySchedule:  map[int][]model.CourseScheduleDetail{},
+		mergedBySchedule:   map[int][]map[string]interface{}{},
 	}
 	if len(teacherIDs) == 0 {
 		return idx
@@ -1501,15 +1502,20 @@ func buildStudentCountIndex(db *gorm.DB, teacherIDs []int) *studentCountIndex {
 	}
 	var details []model.CourseScheduleDetail
 	db.Where("schedule_id IN ?", scheduleIDs).Order("id ASC").Find(&details)
+	bySchedule := map[int][]model.CourseScheduleDetail{}
 	for _, d := range details {
-		idx.detailsBySchedule[d.ScheduleID] = append(idx.detailsBySchedule[d.ScheduleID], d)
+		bySchedule[d.ScheduleID] = append(bySchedule[d.ScheduleID], d)
+	}
+	for sid, ds := range bySchedule {
+		idx.mergedBySchedule[sid] = mergeScheduleDetails(ds)
 	}
 	return idx
 }
 
 // lookup 查学生人数（先模糊匹配课程名）。匹配不上时返回 false，
 // 不再回退该教师课表首条明细——那可能是另一门课，宁可在导出中留空也不臆造人数。
-func (idx *studentCountIndex) lookup(teacherID int, courseName string) (int, bool) {
+// 同课程多开课次/合班拆行时按任务上课时间定位到对应「堂次」（合并后的人数即该堂应到）。
+func (idx *studentCountIndex) lookup(teacherID int, courseName string, classTime *model.LocalTime) (int, bool) {
 	if idx == nil || teacherID == 0 || courseName == "" {
 		return 0, false
 	}
@@ -1517,19 +1523,22 @@ func (idx *studentCountIndex) lookup(teacherID int, courseName string) (int, boo
 	if len(schedules) == 0 {
 		return 0, false
 	}
-	details := idx.detailsBySchedule[schedules[0].ID]
-	var matched *model.CourseScheduleDetail
-	for i := range details {
-		cn := details[i].CourseName
+	var candidates []map[string]interface{}
+	for _, it := range idx.mergedBySchedule[schedules[0].ID] {
+		cn, _ := it["course_name"].(string)
 		if cn == courseName || strings.Contains(cn, courseName) || strings.Contains(courseName, cn) {
-			matched = &details[i]
-			break
+			candidates = append(candidates, it)
 		}
 	}
+	matched := PickDetailForClassTime(candidates, classTime)
 	if matched == nil {
 		return 0, false
 	}
-	return ParseStudentCount(matched.ClassInfo)
+	cnt, ok := matched["student_count"].(*int)
+	if !ok || cnt == nil {
+		return 0, false
+	}
+	return *cnt, true
 }
 
 // taskStudentCount 导出取「应到人数」：优先任务快照（与提交页/详情一致），
@@ -1545,7 +1554,7 @@ func taskStudentCount(task *model.EvaluationTask, idx *studentCountIndex) (int, 
 			return *snap.StudentCount, true
 		}
 	}
-	return idx.lookup(task.TeacherID, task.CourseName)
+	return idx.lookup(task.TeacherID, task.CourseName, task.ClassTime)
 }
 
 // textValue 取文本维度作答（缺失或空返回空串）

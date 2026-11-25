@@ -33,8 +33,9 @@ func (h *Task) List(c *gin.Context) {
 		Keyword: c.Query("keyword"), Status: qInt16(c, "status"), TeacherID: qInt(c, "teacher_id"),
 		HasSupervisorEval: qBool(c, "has_supervisor_eval"), CreateBy: qInt(c, "create_by"),
 		CreateByNot: qInt(c, "create_by_not"), JoinedBy: qInt(c, "joined_by"), Page: page, PageSize: pageSize,
-		Deleted: c.Query("deleted"),
-		OrderBy: c.Query("order_by"), OrderDir: c.Query("order"),
+		Template: c.Query("template"),
+		Deleted:  c.Query("deleted"),
+		OrderBy:  c.Query("order_by"), OrderDir: c.Query("order"),
 	}
 	if v := c.Query("college_id"); v != "" {
 		f.CollegeIDs = splitIntsHandler(v)
@@ -144,7 +145,7 @@ func (h *Task) List(c *gin.Context) {
 			"teacher_college_id": teacherCollegeID, "teacher_college_name": teacherCollegeName,
 			"course_college_id": courseCollegeID, "course_college_name": courseCollegeName,
 			"teacher_teaching_colleges": selectable,
-			"course_name":               t.CourseName, "class_time": FTimeMin(t.ClassTime),
+			"course_name":               t.CourseName, "template_code": t.TemplateCode, "class_time": FTimeMin(t.ClassTime),
 			"classroom": t.Classroom, "status": t.Status,
 			"status_name": model.TaskStatusNames[t.Status],
 			"start_time":  FTime(t.StartTime), "end_time": FTime(t.EndTime),
@@ -209,40 +210,42 @@ func (h *Task) Get(c *gin.Context) {
 	}
 	participantCount, _ := service.TaskParticipantCount(h.db, t.ID)
 	joined, _ := service.IsTaskParticipant(h.db, t.ID, u.ID)
-	response.OK(c, gin.H{
-		"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
-		"teacher_college_id": teacherCollegeID, "teacher_college_name": teacherCollegeName,
-		"course_college_id": courseCollegeID, "course_college_name": courseCollegeName,
-		"teacher_teaching_colleges": selectableColleges,
-		"course_name":               t.CourseName, "class_time": FTimeMin(t.ClassTime),
-		"classroom": t.Classroom, "schedule": taskScheduleSnapshot(t), "status": t.Status,
-		"status_name":      model.TaskStatusNames[t.Status],
-		"evaluation_count": t.EvaluationCount, "has_supervisor_eval": t.HasSupervisorEval,
-		"participant_count": participantCount, "max_participants": service.TaskMaxParticipants(h.db),
-		"joined":    joined,
-		"create_by": t.CreateBy, "create_by_name": createByName,
-		"create_time": FTime(t.CreateTime), "update_time": FTime(t.UpdateTime),
-		"evaluation_records": summary,
-	})
+	payload := taskBasicPayload(t)
+	// 详情页学院按 TaskCollegeMap 的兜底口径（无快照的历史任务回退教师当前学院），覆盖快照原始值
+	payload["teacher_college_id"] = teacherCollegeID
+	payload["course_college_id"] = courseCollegeID
+	payload["teacher_college_name"] = teacherCollegeName
+	payload["course_college_name"] = courseCollegeName
+	payload["teacher_teaching_colleges"] = selectableColleges
+	payload["participant_count"] = participantCount
+	payload["max_participants"] = service.TaskMaxParticipants(h.db)
+	payload["joined"] = joined
+	payload["create_by"] = t.CreateBy
+	payload["create_by_name"] = createByName
+	payload["create_time"] = FTime(t.CreateTime)
+	payload["update_time"] = FTime(t.UpdateTime)
+	payload["evaluation_records"] = summary
+	response.OK(c, payload)
 }
 
 type taskReq struct {
-	TeacherID   int                       `json:"teacher_id"`
-	TeacherName string                    `json:"teacher_name"`
-	CourseName  string                    `json:"course_name"`
-	ClassTime   *model.LocalTime          `json:"class_time"`
-	Classroom   *string                   `json:"classroom"`
-	StartTime   *model.LocalTime          `json:"start_time"`
-	EndTime     *model.LocalTime          `json:"end_time"`
-	Status      *int16                    `json:"status"`
-	CollegeID   *int                      `json:"college_id"`
-	Schedule    *service.ScheduleSnapshot `json:"schedule"`
+	TeacherID    int                       `json:"teacher_id"`
+	TeacherName  string                    `json:"teacher_name"`
+	CourseName   string                    `json:"course_name"`
+	TemplateCode string                    `json:"template_code"`
+	ClassTime    *model.LocalTime          `json:"class_time"`
+	Classroom    *string                   `json:"classroom"`
+	StartTime    *model.LocalTime          `json:"start_time"`
+	EndTime      *model.LocalTime          `json:"end_time"`
+	Status       *int16                    `json:"status"`
+	CollegeID    *int                      `json:"college_id"`
+	Schedule     *service.ScheduleSnapshot `json:"schedule"`
 }
 
 func toTaskParams(p taskReq) (service.CreateTaskParams, error) {
 	return service.CreateTaskParams{
 		TeacherID: p.TeacherID, TeacherName: p.TeacherName,
-		CourseName: p.CourseName, Classroom: p.Classroom,
+		CourseName: p.CourseName, TemplateCode: p.TemplateCode, Classroom: p.Classroom,
 		ClassTime: p.ClassTime, StartTime: p.StartTime, EndTime: p.EndTime,
 		CollegeID: p.CollegeID, ScheduleSnapshot: p.Schedule,
 	}, nil
@@ -260,34 +263,34 @@ func taskScheduleSnapshot(t *model.EvaluationTask) interface{} {
 	return m
 }
 
-// taskCreatePayload 创建响应体（对齐旧端 create/batch 返回结构）
-func taskCreatePayload(t *model.EvaluationTask) gin.H {
+// taskBasicPayload 任务响应公共字段（创建/更新/详情共用），新增字段只改这里。
+func taskBasicPayload(t *model.EvaluationTask) gin.H {
 	return gin.H{
 		"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": t.TeacherName,
 		"teacher_college_id": t.TeacherCollegeID, "course_college_id": t.CourseCollegeID,
-		"course_name": t.CourseName, "class_time": FTimeMin(t.ClassTime),
+		"course_name": t.CourseName, "template_code": t.TemplateCode, "class_time": FTimeMin(t.ClassTime),
 		"classroom": t.Classroom, "schedule": taskScheduleSnapshot(t), "status": t.Status,
 		"status_name":      model.TaskStatusNames[t.Status],
 		"evaluation_count": t.EvaluationCount, "has_supervisor_eval": t.HasSupervisorEval,
-		"create_by": t.CreateBy, "create_time": FTime(t.CreateTime),
 	}
+}
+
+// taskCreatePayload 创建响应体（对齐旧端 create/batch 返回结构）
+func taskCreatePayload(t *model.EvaluationTask) gin.H {
+	p := taskBasicPayload(t)
+	p["create_by"] = t.CreateBy
+	p["create_time"] = FTime(t.CreateTime)
+	return p
 }
 
 // taskUpdatePayload 更新响应体（对齐旧端 update 返回结构）
 func taskUpdatePayload(t *model.EvaluationTask, teacher *model.User) gin.H {
-	teacherName := t.TeacherName
+	p := taskBasicPayload(t)
 	if teacher != nil {
-		teacherName = teacher.Username
+		p["teacher_name"] = teacher.Username
 	}
-	return gin.H{
-		"id": t.ID, "teacher_id": t.TeacherID, "teacher_name": teacherName,
-		"teacher_college_id": t.TeacherCollegeID, "course_college_id": t.CourseCollegeID,
-		"course_name": t.CourseName, "class_time": FTimeMin(t.ClassTime),
-		"classroom": t.Classroom, "schedule": taskScheduleSnapshot(t), "status": t.Status,
-		"status_name":      model.TaskStatusNames[t.Status],
-		"evaluation_count": t.EvaluationCount, "has_supervisor_eval": t.HasSupervisorEval,
-		"update_time": FTime(t.UpdateTime),
-	}
+	p["update_time"] = FTime(t.UpdateTime)
+	return p
 }
 
 // Create 创建任务
@@ -447,6 +450,11 @@ func (h *Task) Update(c *gin.Context) {
 	u := middleware.CurrentUser(c)
 	var before model.EvaluationTask
 	beforeOK := h.db.First(&before, id).Error == nil
+	// 评价模板创建后不可修改：前端编辑态已禁用该字段，此处显式拒绝不一致的入参，避免静默丢弃
+	if p.TemplateCode != "" && beforeOK && model.NormalizeTemplate(p.TemplateCode) != model.NormalizeTemplate(before.TemplateCode) {
+		badReq(c, "评价模板创建后不可修改")
+		return
+	}
 	t, err := h.svc.Update(h.db, u, id, up)
 	if err != nil {
 		badReq(c, err.Error())

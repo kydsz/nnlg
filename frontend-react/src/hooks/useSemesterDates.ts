@@ -21,9 +21,9 @@ export function useSemesterDates() {
  * 未手动修改时始终跟随当前学期（整学期区间）；用户手动选择后以手动值为准；清空后回落学期默认。
  */
 export function useSemesterRangePicker() {
-  const { dates } = useSemesterDates()
+  const { currentSemester, dates } = useSemesterDates()
   const [override, setOverride] = useState<[string, string] | null>(null)
   const effective: [string?, string?] = override ?? (dates.length === 2 ? dates : [])
   const onRange = (v: [string, string] | null) => setOverride(v)
-  return { effective, onRange }
+  return { effective, onRange, currentSemester }
 }

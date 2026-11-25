@@ -6,7 +6,7 @@ import dayjs from 'dayjs'
 import type { ColumnsType } from 'antd/es/table'
 import { evaluationApi, type UpdatePayload } from '@/api/modules/evaluations'
 import { statsApi } from '@/api/modules/stats'
-import { orgApi } from '@/api/modules/org'
+import { useCollegeOptions } from '@/hooks/useCollegeOptions'
 import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
 import { downloadAttachment, downloadBlob, exportFilename } from '@/utils/download'
 import ExportFieldSelector from '@/components/ExportFieldSelector'
@@ -47,12 +47,8 @@ export default function Evaluations() {
   // 默认日期区间：当前学期（开学日 ~ 开学日+20周）
   const { effective: dates, onRange } = useSemesterRangePicker()
 
-  // 学院选项：复用组织机构的学院列表（与用户管理页同源）
-  const { data: colleges } = useQuery({
-    queryKey: ['colleges', undefined],
-    queryFn: () => orgApi.collegeList(),
-  })
-  const collegeOptions = (colleges?.list || []).map((c) => ({ label: c.name, value: c.id }))
+  // 学院选项：有 org:view 取全量；学院管理员回退为本人学院（不请求 /colleges，避免 403）
+  const collegeOptions = useCollegeOptions()
 
   const { data, isLoading } = useQuery({
     queryKey: ['evaluations', params, dates],
@@ -215,14 +211,16 @@ export default function Evaluations() {
             onRange(v ? [v[0]!.format('YYYY-MM-DD'), v[1]!.format('YYYY-MM-DD')] : null)
           }
         />
-        <Select
-          allowClear
-          placeholder="学院"
-          style={{ width: 180 }}
-          options={collegeOptions}
-          value={params.college_id}
-          onChange={(v) => setParams((p) => ({ ...p, page: 1, college_id: v }))}
-        />
+        {collegeOptions.length > 1 && (
+          <Select
+            allowClear
+            placeholder="学院"
+            style={{ width: 180 }}
+            options={collegeOptions}
+            value={params.college_id}
+            onChange={(v) => setParams((p) => ({ ...p, page: 1, college_id: v }))}
+          />
+        )}
         {(canRestoreAny || canRestoreOwn) && (
           <Select
             style={{ width: 130 }}

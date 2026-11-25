@@ -49,7 +49,7 @@ export default function Login() {
       <div className="login-container">
         <div className="login-header">
           <img src="/nnlg_logo.ico" alt="南理教评系统" className="login-logo" />
-          <h1>南理教评系统v2</h1>
+          <h1>南理教评系统</h1>
           <p>Teaching Evaluation System</p>
         </div>
         <Form onFinish={onFinish} className="login-form" requiredMark={false}>

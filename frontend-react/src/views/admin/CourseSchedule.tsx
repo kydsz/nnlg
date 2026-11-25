@@ -17,10 +17,10 @@ import {
 import type { GetProp } from 'antd'
 import { PlusOutlined, DeleteOutlined, LoadingOutlined } from '@ant-design/icons'
 import { scheduleApi } from '@/api/modules/schedule'
-import { orgApi } from '@/api/modules/org'
 import ScheduleGrid from '@/components/ScheduleGrid'
 import { formatSemester, generateSemesters } from '@/utils/format'
 import { useDebounce } from '@/hooks/useDebounce'
+import { useCollegeOptions } from '@/hooks/useCollegeOptions'
 import type { SemesterConfig, User } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 
@@ -30,6 +30,8 @@ export default function CourseSchedule() {
   const [selectedSemester, setSelectedSemester] = useState<string | undefined>(undefined)
   const [selectedTeacher, setSelectedTeacher] = useState<number | undefined>(undefined)
   const [selectedCollege, setSelectedCollege] = useState<number | undefined>(undefined)
+  // 学院选项：有 org:view 取全量；学院管理员回退为本人学院（不请求 /colleges，避免 403）
+  const collegeOptions = useCollegeOptions()
 
   const { data: configs } = useQuery({
     queryKey: ['semester-configs'],
@@ -38,10 +40,6 @@ export default function CourseSchedule() {
   const { data: dynamicSemesters } = useQuery({
     queryKey: ['semesters'],
     queryFn: () => scheduleApi.semesters(),
-  })
-  const { data: colleges } = useQuery({
-    queryKey: ['colleges', undefined],
-    queryFn: () => orgApi.collegeList(),
   })
 
   const effectiveSemester =
@@ -206,17 +204,19 @@ export default function CourseSchedule() {
             value={effectiveSemester}
             onChange={setSelectedSemester}
           />
-          <Select
-            allowClear
-            placeholder="按学院筛选教师"
-            style={{ width: 200 }}
-            options={(colleges?.list || []).map((c) => ({ label: c.name, value: c.id }))}
-            value={selectedCollege}
-            onChange={(v) => {
-              setSelectedCollege(v)
-              setSelectedTeacher(undefined)
-            }}
-          />
+          {collegeOptions.length > 1 && (
+            <Select
+              allowClear
+              placeholder="按学院筛选教师"
+              style={{ width: 200 }}
+              options={collegeOptions}
+              value={selectedCollege}
+              onChange={(v) => {
+                setSelectedCollege(v)
+                setSelectedTeacher(undefined)
+              }}
+            />
+          )}
           <TeacherSelect
             collegeId={selectedCollege}
             value={selectedTeacher}

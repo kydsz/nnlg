@@ -23,6 +23,7 @@ import type { Task, User } from '@/api/types'
 import { taskStatusInfo, formatDate } from '@/utils/format'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSemesterRangePicker } from '@/hooks/useSemesterDates'
+import { TEMPLATE_OPTIONS, templateInfo } from '@/constants/templates'
 import { useAuthStore } from '@/stores/auth'
 import TeacherSelect from '@/components/TeacherSelect'
 
@@ -44,6 +45,7 @@ export default function Tasks() {
     page_size: number
     keyword?: string
     status?: number
+    template?: string
     start_date?: string
     end_date?: string
     order_by?: string
@@ -67,6 +69,7 @@ export default function Tasks() {
   >([])
   const [form] = Form.useForm()
   const [batchForm] = Form.useForm()
+  const formTemplate = Form.useWatch('template_code', form)
   // 默认日期区间：当前学期（开学日 ~ 开学日+weeks×7天），手动选择后以手动值为准
   const { effective: dates, onRange } = useSemesterRangePicker()
 
@@ -109,6 +112,7 @@ export default function Tasks() {
     mutationFn: (values: {
       course_name: string
       teacher_id: number
+      template_code?: string
       classroom?: string
       class_time?: string
       college_id?: number
@@ -161,19 +165,28 @@ export default function Tasks() {
       sorter: true,
       sortOrder: sortState.field === 'id' ? sortState.order : null,
     },
-    { title: '课程', dataIndex: 'course_name' },
-    { title: '教师', dataIndex: 'teacher_name', width: 110 },
+    { title: '课程', dataIndex: 'course_name', width: 200, ellipsis: true },
+    {
+      title: '模板',
+      dataIndex: 'template_code',
+      width: 90,
+      render: (v: string) => {
+        const info = templateInfo(v)
+        return <Tag color={info.color}>{info.label}</Tag>
+      },
+    },
+    { title: '教师', dataIndex: 'teacher_name', width: 100 },
     {
       title: '授课学院',
       dataIndex: 'course_college_name',
-      width: 150,
+      width: 140,
       render: (v, r) => v || r.teacher_college_name || '-',
     },
     { title: '教室', dataIndex: 'classroom', width: 100, render: (v) => v || '-' },
     {
       title: '上课时间',
       dataIndex: 'class_time',
-      width: 160,
+      width: 150,
       render: (v: string) => formatDate(v),
       sorter: true,
       sortOrder: sortState.field === 'class_time' ? sortState.order : null,
@@ -181,17 +194,17 @@ export default function Tasks() {
     {
       title: '状态',
       dataIndex: 'status',
-      width: 90,
+      width: 80,
       render: (v: number) => {
         const info = taskStatusInfo(v)
         return <Tag color={info.color}>{info.text}</Tag>
       },
     },
-    { title: '评教数', dataIndex: 'evaluation_count', width: 80 },
+    { title: '评教数', dataIndex: 'evaluation_count', width: 70 },
     {
       title: '参与人',
       dataIndex: 'participant_count',
-      width: 90,
+      width: 80,
       render: (v: number | undefined, r: Task) => (
         <Tooltip title="含创建人；满员后普通评教人不可加入">
           <span>
@@ -203,7 +216,7 @@ export default function Tasks() {
     {
       title: '督导已评',
       dataIndex: 'course_supervisor_evaluated',
-      width: 90,
+      width: 80,
       // 字段缺省=无法统计（任务无学期归属或查询降级），呈现「-」而非「未评」
       render: (v: boolean | undefined) =>
         v === undefined ? '-' : <Tag color={v ? 'success' : 'default'}>{v ? '已评' : '未评'}</Tag>,
@@ -211,13 +224,13 @@ export default function Tasks() {
     {
       title: '课程评教人数',
       dataIndex: 'course_evaluator_count',
-      width: 110,
+      width: 100,
       render: (v: number | undefined) => v ?? '-',
     },
-    { title: '创建人', dataIndex: 'create_by_name', width: 100, render: (v: string) => v || '-' },
+    { title: '创建人', dataIndex: 'create_by_name', width: 90, render: (v: string) => v || '-' },
     {
       title: '操作',
-      width: 200,
+      width: 180,
       render: (_, record) =>
         params.deleted === 1 ? (
           <Space>
@@ -255,6 +268,7 @@ export default function Tasks() {
                 form.setFieldsValue({
                   course_name: record.course_name,
                   teacher_id: record.teacher_id,
+                  template_code: record.template_code || 'theory',
                   classroom: record.classroom,
                   class_time: record.class_time ? dayjs(record.class_time) : undefined,
                   college_id: record.course_college_id ?? undefined,
@@ -319,6 +333,17 @@ export default function Tasks() {
               // status 存入 params；清空时置 undefined 以生效 allowClear/X
               status: v ?? undefined,
             }))
+          }
+        />
+        <Select
+          allowClear
+          placeholder="评价模板"
+          style={{ width: 130 }}
+          value={params.template}
+          disabled={params.deleted === 1}
+          options={TEMPLATE_OPTIONS}
+          onChange={(v) =>
+            setParams((p) => ({ ...p, page: 1, template: v ?? undefined }))
           }
         />
         {(canRestoreAny || canRestoreOwn) && (
@@ -397,6 +422,7 @@ export default function Tasks() {
         loading={isLoading}
         columns={columns}
         dataSource={data?.list}
+        scroll={{ x: 1530 }}
         onChange={(_p, _f, sorter, extra) => {
           // 仅排序触发时处理排序；换页由 pagination.onChange 单独处理，避免把页码重置回 1
           if (extra?.action !== 'sort') return
@@ -436,6 +462,14 @@ export default function Tasks() {
             })
           }
         >
+          <Form.Item
+            name="template_code"
+            label="评价模板"
+            initialValue="theory"
+            extra={editing ? '模板在创建后不可修改' : templateInfo(formTemplate).hint}
+          >
+            <Select disabled={!!editing} options={TEMPLATE_OPTIONS} />
+          </Form.Item>
           <Form.Item
             name="course_name"
             label="课程名称"
@@ -477,7 +511,11 @@ export default function Tasks() {
           <Form.Item name="classroom" label="教室">
             <Input />
           </Form.Item>
-          <Form.Item name="class_time" label="上课时间">
+          <Form.Item
+            name="class_time"
+            label="上课时间"
+            extra="任务列表默认按当前学期时间筛选，未填写上课时间将不在列表中显示"
+          >
             <DatePicker showTime style={{ width: '100%' }} />
           </Form.Item>
         </Form>
@@ -523,6 +561,7 @@ function BatchCreateModal({
     mutationFn: (v: {
       teacher_id: number
       course_names: string
+      template_code?: string
       classroom?: string
       college_id?: number
     }) => {
@@ -534,6 +573,7 @@ function BatchCreateModal({
         names.map((course_name) => ({
           course_name,
           teacher_id: v.teacher_id,
+          template_code: v.template_code,
           classroom: v.classroom,
           college_id: v.college_id,
         }))
@@ -556,6 +596,9 @@ function BatchCreateModal({
       confirmLoading={batchMut.isPending}
     >
       <Form form={form} layout="vertical" onFinish={(v) => batchMut.mutate(v)}>
+        <Form.Item name="template_code" label="评价模板" initialValue="theory">
+          <Select options={TEMPLATE_OPTIONS} />
+        </Form.Item>
         <Form.Item
           name="teacher_id"
           label="被评教师"

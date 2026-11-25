@@ -1,4 +1,5 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
+import { Result } from 'antd'
 import { useAuthStore } from '@/stores/auth'
 import { isMobileDevice } from '@/hooks/useIsMobile'
 import type { ReactNode } from 'react'
@@ -45,5 +46,6 @@ export function AdminGate() {
 /** 按权限码渲染 */
 export function PermissionGate({ perm, children }: { perm: string; children: ReactNode }) {
   const hasPermission = useAuthStore((s) => s.hasPermission)
-  return hasPermission(perm) ? <>{children}</> : null
+  if (hasPermission(perm)) return <>{children}</>
+  return <Result status="403" title="无权访问" subTitle="您没有访问该页面的权限，请联系系统管理员。" />
 }

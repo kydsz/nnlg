@@ -20,6 +20,7 @@ import { evaluationApi, type SubmitPayload, type DraftPayload } from '@/api/modu
 import { taskApi } from '@/api/modules/tasks'
 import { dimensionApi } from '@/api/modules/dimensions'
 import { uploadApi } from '@/api/modules/upload'
+import { compressImage } from '@/utils/imageCompress'
 import { scheduleApi } from '@/api/modules/schedule'
 import FormulaEditor from '@/components/FormulaEditor'
 import type { Dimension, CourseItem } from '@/api/types'
@@ -64,10 +65,11 @@ export default function Evaluation() {
     Toast.show({ content: '已恢复上次暂存内容' })
   }, [draftData])
 
-  // 维度
+  // 维度（按任务绑定的评价模板加载）
   const { data: dims } = useQuery({
-    queryKey: ['dimensions', 'active'],
-    queryFn: () => dimensionApi.active(),
+    queryKey: ['dimensions', 'active', taskId],
+    queryFn: () => dimensionApi.active(taskId),
+    enabled: !!taskId,
   })
 
   // 维度加载后，将 score 类维度默认初始化为满分，保证 UI 与统计一致
@@ -216,8 +218,8 @@ export default function Evaluation() {
     let latest: Dimension[] | undefined
     try {
       latest = await qc.fetchQuery({
-        queryKey: ['dimensions', 'active'],
-        queryFn: () => dimensionApi.active(),
+        queryKey: ['dimensions', 'active', taskId],
+        queryFn: () => dimensionApi.active(taskId),
         staleTime: 0,
       })
     } catch {
@@ -535,7 +537,7 @@ function DimensionInput({
             dimCode={dim.code}
             accept={dim.field_type === 'image' ? 'image/*' : undefined}
             maxCount={Number(cfg.max_count ?? (dim.field_type === 'image' ? 9 : 5))}
-            maxSizeMb={Number(cfg.max_file_size ?? (dim.field_type === 'image' ? 10 : 20))}
+            maxSizeMb={Number(cfg.max_file_size ?? 20)}
             description={cfg.file_type_description ? String(cfg.file_type_description) : undefined}
             urls={Array.isArray(value) ? (value as string[]) : []}
             onChange={(urls) => onChange(urls.length > 0 ? urls : undefined)}
@@ -608,7 +610,9 @@ function DimensionUpload({
       return
     }
     const list = Array.from(files).slice(0, room)
-    for (const f of list) {
+    for (const raw of list) {
+      // 大图先压缩再校验体积：手机原图常在 10MB 以上，压缩后多数可直接上传
+      const f = raw.type.startsWith('image/') ? await compressImage(raw) : raw
       if (f.size > maxSizeMb * 1024 * 1024) {
         Toast.show({ content: `${f.name} 超过 ${maxSizeMb}MB 限制`, icon: 'fail' })
         continue

@@ -26,6 +26,7 @@ type EvaluationTask struct {
 	TeacherCollegeID  *int            `gorm:"column:teacher_college_id" json:"teacher_college_id"`
 	CourseCollegeID   *int            `gorm:"column:course_college_id" json:"course_college_id"`
 	CourseName        string          `gorm:"column:course_name;size:128" json:"course_name"`
+	TemplateCode      string          `gorm:"column:template_code;size:32" json:"template_code"`
 	ClassTime         *LocalTime      `gorm:"column:class_time" json:"class_time"`
 	Classroom         *string         `gorm:"column:classroom;size:64" json:"classroom"`
 	ScheduleSnapshot  json.RawMessage `gorm:"column:schedule_snapshot;type:json" json:"schedule_snapshot"`

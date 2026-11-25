@@ -83,6 +83,60 @@ func TestScheduleDetailPayload(t *testing.T) {
 		}
 	})
 
+	t.Run("合班多行合并为一堂课", func(t *testing.T) {
+		wd := int8(1)
+		sc := &model.CourseSchedule{
+			Model:     model.Model{ID: 3},
+			TeacherID: intPtr(7),
+			Details: []model.CourseScheduleDetail{
+				// 同课程+周次+星期+节次+教室，一个班一行（合班拆行）
+				{Model: model.Model{ID: 11}, CourseName: "大学英语1", ClassInfo: "2606会计(46)",
+					WeekPattern: "2-12周", WeekDay: &wd, Section: "0506", Classroom: "A3112"},
+				{Model: model.Model{ID: 12}, CourseName: "大学英语1", ClassInfo: "2605会计(45)",
+					WeekPattern: "2-12周", WeekDay: &wd, Section: "0506", Classroom: "A3112"},
+				// 不同时段的同名课程不参与合并
+				{Model: model.Model{ID: 13}, CourseName: "大学英语1", ClassInfo: "2602电信(43)",
+					WeekPattern: "2-12周", WeekDay: int8Ptr(3), Section: "0102", Classroom: "A3219"},
+			},
+		}
+		out := scheduleDetailPayload(sc)
+		details, _ := out["details"].([]map[string]interface{})
+		if len(details) != 2 {
+			t.Fatalf("合班两行应合并为 1 条（共 2 条明细）, 得到 %d 条", len(details))
+		}
+		if got := details[0]["class_info"]; got != "2606会计(46),2605会计(45)" {
+			t.Fatalf("合并班级串不对, 得到 %v", got)
+		}
+		if cnt, ok := details[0]["student_count"].(*int); !ok || cnt == nil || *cnt != 91 {
+			t.Fatalf("合并应到人数应为 91, 得到 %v", details[0]["student_count"])
+		}
+		if cnt, ok := details[1]["student_count"].(*int); !ok || cnt == nil || *cnt != 43 {
+			t.Fatalf("未合并明细人数应为 43, 得到 %v", details[1]["student_count"])
+		}
+	})
+
+	t.Run("合班行有班级解析不出人数时置nil", func(t *testing.T) {
+		wd := int8(2)
+		sc := &model.CourseSchedule{
+			Model:     model.Model{ID: 4},
+			TeacherID: intPtr(7),
+			Details: []model.CourseScheduleDetail{
+				{Model: model.Model{ID: 21}, CourseName: "网页设计", ClassInfo: "2301视传(38)",
+					WeekPattern: "1-8周", WeekDay: &wd, Section: "0304", Classroom: "B101"},
+				{Model: model.Model{ID: 22}, CourseName: "网页设计", ClassInfo: "2302视传",
+					WeekPattern: "1-8周", WeekDay: &wd, Section: "0304", Classroom: "B101"},
+			},
+		}
+		out := scheduleDetailPayload(sc)
+		details, _ := out["details"].([]map[string]interface{})
+		if len(details) != 1 {
+			t.Fatalf("应合并为 1 条, 得到 %d 条", len(details))
+		}
+		if got := details[0]["student_count"]; got != nil {
+			t.Fatalf("存在无人数班级时应到人数应置 nil, 得到 %v", got)
+		}
+	})
+
 	t.Run("无明细返回空壳", func(t *testing.T) {
 		sc := &model.CourseSchedule{Model: model.Model{ID: 2}}
 		out := scheduleDetailPayload(sc)
@@ -98,6 +152,8 @@ func TestScheduleDetailPayload(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+func int8Ptr(v int8) *int8 { return &v }
 
 func TestTeacherScopeOf(t *testing.T) {
 	cases := []struct {

@@ -28,6 +28,7 @@ type TaskFilters struct {
 	CreateBy          *int
 	CreateByNot       *int
 	JoinedBy          *int       // 只看我加入的（参与人关系）
+	Template          string     // 评价模板：theory/practice，空=全部
 	Deleted           string     // "1" 只看已删除（仅持 task:restore / task:restore_own 者生效）
 	Start, End        *time.Time // 按上课时间（class_time）筛选学期区间
 	OrderBy, OrderDir string     // 排序字段白名单（id/class_time）与方向（asc/desc）
@@ -77,6 +78,9 @@ func (s *Task) buildQuery(db *gorm.DB, f TaskFilters, caller *model.User) (*gorm
 	}
 	if f.Status != nil {
 		q = q.Where("status = ?", *f.Status)
+	}
+	if f.Template == model.TemplateTheory || f.Template == model.TemplatePractice {
+		q = q.Where("template_code = ?", f.Template)
 	}
 	if f.Start != nil {
 		q = q.Where("class_time >= ?", *f.Start)
@@ -168,6 +172,16 @@ func (s *Task) Get(db *gorm.DB, id int) (*model.EvaluationTask, error) {
 	return &t, nil
 }
 
+// TemplateCodeOfTask 读取任务绑定的评价模板编码；任务不存在或查询失败时返回空串。
+// 供评教表单按 task_id 解析模板使用，避免 handler 层直接查库。
+func TemplateCodeOfTask(db *gorm.DB, id int) string {
+	var t struct{ TemplateCode string }
+	if err := db.Model(&model.EvaluationTask{}).Select("template_code").Where("id = ?", id).Scan(&t).Error; err != nil {
+		return ""
+	}
+	return t.TemplateCode
+}
+
 // LoadTeacherUser 加载被评教师（含学院）
 func LoadTeacherUser(db *gorm.DB, id int) (*model.User, error) {
 	u, err := cache.LoadUser(context.Background(), db, id)
@@ -229,13 +243,14 @@ func checkTaskTargetScope(db *gorm.DB, caller *model.User, teacher *model.User) 
 
 // CreateTaskParams 创建参数
 type CreateTaskParams struct {
-	TeacherID   int              `json:"teacher_id"`
-	TeacherName string           `json:"teacher_name"`
-	CourseName  string           `json:"course_name"`
-	ClassTime   *model.LocalTime `json:"class_time"`
-	Classroom   *string          `json:"classroom"`
-	StartTime   *model.LocalTime `json:"start_time"`
-	EndTime     *model.LocalTime `json:"end_time"`
+	TeacherID    int              `json:"teacher_id"`
+	TeacherName  string           `json:"teacher_name"`
+	CourseName   string           `json:"course_name"`
+	TemplateCode string           `json:"template_code"` // 评价模板：theory/practice，缺省 theory
+	ClassTime    *model.LocalTime `json:"class_time"`
+	Classroom    *string          `json:"classroom"`
+	StartTime    *model.LocalTime `json:"start_time"`
+	EndTime      *model.LocalTime `json:"end_time"`
 	// CollegeID 显式指定授课学院（可选）；为空时按教师授课学院与调用者范围自动解析
 	CollegeID *int `json:"college_id"`
 	// 课表信息快照（加入待评时固化：上课时间/教室/班级/应到人数/周次）
@@ -300,6 +315,7 @@ func (s *Task) buildTask(db *gorm.DB, caller *model.User, p CreateTaskParams) (*
 	}
 	t := model.EvaluationTask{
 		TeacherID: p.TeacherID, TeacherName: name, CourseName: p.CourseName,
+		TemplateCode:     model.NormalizeTemplate(p.TemplateCode),
 		TeacherCollegeID: teacherCollege, CourseCollegeID: courseCollege,
 		ClassTime: p.ClassTime, Classroom: p.Classroom,
 		Status: model.TaskStatusPending, StartTime: p.StartTime, EndTime: p.EndTime,

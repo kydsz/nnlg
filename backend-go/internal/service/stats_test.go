@@ -94,10 +94,11 @@ func TestRecordsAvgScore(t *testing.T) {
 }
 
 // TestAttendanceRateOf 锁定评教记录批量导出的「出勤率」取值口径：
-// 记录里存了 attendance_rate 就以记录为准（显式 0 也算填过，不被现算覆盖）；
-// 没存则按「实到 ÷ 应到 × 100」现算并保留一位小数；两边都拿不到时留空，不臆造 0%。
+// 记录里存了 0-100 内的 attendance_rate 就以记录为准（显式 0 也算填过，不被现算覆盖）；
+// 缺失或越界（>100、<0）则按「实到 ÷ 应到 × 100」现算并保留一位小数；
+// 两边都拿不到时留空，不臆造 0%。
 // 背景：历史记录/PC 端/督导端提交的作答里往往没有 attendance_rate 键，
-// 只看记录里存的值会让导出整列恒空。
+// 只看记录里存的值会让导出整列恒空；旧端存下的越界值则会直接造成 >100% 的导出结果。
 func TestAttendanceRateOf(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -115,6 +116,26 @@ func TestAttendanceRateOf(t *testing.T) {
 			"显式的0不被现算覆盖",
 			map[string]interface{}{"attendance_rate": 0.0, "actual_count": 40.0, "expected_count": 50.0},
 			0, false, 0.0,
+		},
+		{
+			"存量超100改为按实到÷应到重算",
+			map[string]interface{}{"attendance_rate": 120.0, "actual_count": 81.0, "expected_count": 83.0},
+			0, false, 97.6,
+		},
+		{
+			"存量负数改为按实到÷应到重算",
+			map[string]interface{}{"attendance_rate": -5.0, "actual_count": 40.0, "expected_count": 50.0},
+			0, false, 80.0,
+		},
+		{
+			"存量超100且无应到时回退快照人数",
+			map[string]interface{}{"attendance_rate": 176.1, "actual_count": 81.0},
+			83, true, 97.6,
+		},
+		{
+			"存量超100且无法重算时留空",
+			map[string]interface{}{"attendance_rate": 120.0},
+			0, false, "",
 		},
 		{
 			"缺记录值按实到÷应到现算",
@@ -158,6 +179,68 @@ func TestAttendanceRateOf(t *testing.T) {
 				t.Fatalf("attendanceRateOf() = %#v, 期望 %#v", got, c.want)
 			}
 		})
+	}
+}
+
+// TestTaskStudentCount 锁定导出「应到人数」取值顺序：
+// 任务快照优先（合班总人数），快照缺失才回退课表匹配；
+// 合班拆行的多条明细在索引里已合并为「一堂课」（人数累加），同课程多开课次按上课时间定位堂次。
+func TestTaskStudentCount(t *testing.T) {
+	wdMon, wdWed := int8(1), int8(3)
+	idx := &studentCountIndex{
+		schedulesByTeacher: map[int][]model.CourseSchedule{
+			89: {{Model: model.Model{ID: 15056}, TeacherID: intPtr(89)}},
+		},
+		mergedBySchedule: map[int][]map[string]interface{}{
+			15056: {
+				// 周一第1-2节的合班课（2401班46人 + 2402班37人），已合并为 83
+				{"course_name": "Python数据分析基础", "class_info": "2401班(46),2402班(37)",
+					"student_count": intPtr(83), "week_day": &wdMon, "section": "0102"},
+				// 同课程另开课次（周三第5-6节）
+				{"course_name": "Python数据分析基础", "class_info": "2403班(40)",
+					"student_count": intPtr(40), "week_day": &wdWed, "section": "0506"},
+			},
+		},
+	}
+
+	withSnapshot := model.EvaluationTask{
+		TeacherID:        89,
+		CourseName:       "Python数据分析基础",
+		ScheduleSnapshot: json.RawMessage(`{"class_info":"2401班,2402班(83)","student_count":83}`),
+	}
+	if got, ok := taskStudentCount(&withSnapshot, idx); !ok || got != 83 {
+		t.Fatalf("有快照时应取快照 83, 得到 %d (ok=%v)", got, ok)
+	}
+
+	// 无快照回退：按上课时间（周三 14:00 -> 第5-6节）定位到对应堂次，而非取首条 83
+	wedClass := model.EvaluationTask{
+		TeacherID: 89, CourseName: "Python数据分析基础",
+		ClassTime: model.LocalTimePtr(time.Date(2026, 11, 4, 14, 0, 0, 0, time.Local)),
+	}
+	if got, ok := taskStudentCount(&wedClass, idx); !ok || got != 40 {
+		t.Fatalf("应回退到上课时间对应堂次 40, 得到 %d (ok=%v)", got, ok)
+	}
+
+	// 无上课时间信息退回首条
+	noSnapshot := model.EvaluationTask{TeacherID: 89, CourseName: "Python数据分析基础"}
+	if got, ok := taskStudentCount(&noSnapshot, idx); !ok || got != 83 {
+		t.Fatalf("无时间信息应回退首条 83, 得到 %d (ok=%v)", got, ok)
+	}
+
+	// 快照 student_count 为空时也回退课表
+	nullSnapshot := model.EvaluationTask{
+		TeacherID:        89,
+		CourseName:       "Python数据分析基础",
+		ScheduleSnapshot: json.RawMessage(`{"student_count":null}`),
+	}
+	if got, ok := taskStudentCount(&nullSnapshot, idx); !ok || got != 83 {
+		t.Fatalf("快照人数为空时应回退课表 83, 得到 %d (ok=%v)", got, ok)
+	}
+
+	// 课表里课程名匹配不上时不再回退首条明细，避免拿到别的课程人数
+	unknown := model.EvaluationTask{TeacherID: 89, CourseName: "不存在的课程"}
+	if got, ok := taskStudentCount(&unknown, idx); ok {
+		t.Fatalf("课程名匹配不上时应返回空, 得到 %d", got)
 	}
 }
 

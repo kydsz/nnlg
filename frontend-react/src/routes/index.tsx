@@ -53,7 +53,14 @@ export const router = createBrowserRouter([
               { path: 'research-rooms', element: <ResearchRooms /> },
               { path: 'users', element: <Users /> },
               { path: 'roles', element: <Roles /> },
-              { path: 'dimensions', element: <Dimensions /> },
+              {
+                path: 'dimensions',
+                element: (
+                  <PermissionGate perm="dimension:manage">
+                    <Dimensions />
+                  </PermissionGate>
+                ),
+              },
               { path: 'tasks', element: <Tasks /> },
               { path: 'evaluations', element: <Evaluations /> },
               { path: 'stats', element: <Stats /> },

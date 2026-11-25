@@ -92,10 +92,10 @@ func totalScoreOfValues(raw json.RawMessage, scoreCodes map[string]bool) *float6
 	return &t
 }
 
-// totalMaxScoreOfSchema 启用 score 维度的满分合计（列表/详情展示"满分"用）
-func totalMaxScoreOfSchema(db *gorm.DB) float64 {
+// totalMaxScoreOfSchema 指定模板下启用 score 维度的满分合计（列表/详情展示"满分"用）
+func totalMaxScoreOfSchema(db *gorm.DB, template string) float64 {
 	total := 0.0
-	for _, d := range loadActiveDimensions(db) {
+	for _, d := range loadActiveDimensionsOfTemplate(db, template) {
 		if d.FieldType != model.FieldScore {
 			continue
 		}
@@ -170,8 +170,8 @@ func (s *Evaluation) ValidateSubmit(db *gorm.DB, viewer *model.User, p SubmitPar
 		}
 	}
 
-	// 维度校验
-	if _, err := validateDimensionValues(db, p.DimensionValues); err != nil {
+	// 维度校验（按任务绑定的评价模板）
+	if _, err := validateDimensionValues(db, p.DimensionValues, task.TemplateCode); err != nil {
 		return task, "", err
 	}
 
@@ -368,8 +368,8 @@ func (s *Evaluation) PersistBatch(db *gorm.DB, items []PendingSubmit) error {
 
 // validateDimensionValues 校验维度值（必填/类型/分值范围），Submit 与 Update 共用
 // 返回 score 维度累计分值
-func validateDimensionValues(db *gorm.DB, values map[string]interface{}) (float64, error) {
-	dims := loadActiveDimensions(db)
+func validateDimensionValues(db *gorm.DB, values map[string]interface{}, template string) (float64, error) {
+	dims := loadActiveDimensionsOfTemplate(db, template)
 	total := 0.0
 	for _, d := range dims {
 		v, ok := values[d.Code]
@@ -611,7 +611,17 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 	// 任务学院快照：列表展示（college_id/college_name）与匿名可见性判定共用同一口径
 	taskColleges := TaskCollegeMap(db, tasks)
 	scoreCodes := scoreDimCodeSet(db)
-	maxTotal := totalMaxScoreOfSchema(db)
+	// 满分按任务模板计算（理论课/实践教学各 100 分），同一模板只算一次
+	maxTotalByTemplate := map[string]float64{}
+	maxTotalOf := func(template string) float64 {
+		template = model.NormalizeTemplate(template)
+		if v, ok := maxTotalByTemplate[template]; ok {
+			return v
+		}
+		v := totalMaxScoreOfSchema(db, template)
+		maxTotalByTemplate[template] = v
+		return v
+	}
 	viewAll := CanViewOthersEvaluation(db, viewer)
 	// 恢复权限：与 service.Restore 同口径（evaluation:restore 可恢复任意，系统管理员恒可；
 	// 仅有 evaluation:restore_own 者只能恢复本人提交的记录）。前端按该标记决定是否
@@ -630,7 +640,7 @@ func (s *Evaluation) decorateRecords(db *gorm.DB, viewer *model.User, recs []mod
 			"id": r.ID, "task_id": r.TaskID, "is_anonymous": r.IsAnonymous,
 			"evaluator_role": r.EvaluatorRole, "evaluator_role_name": model.RoleName(r.EvaluatorRole),
 			"total_score":     totalScoreOfValues(r.DimensionValues, scoreCodes),
-			"max_total_score": maxTotal, "submit_time": r.SubmitTime,
+			"max_total_score": maxTotalOf(task.TemplateCode), "submit_time": r.SubmitTime,
 			// 已作废标记：正常视图恒为 false，已作废视图（deleted=1）恒为 true，
 			// 供前端区分行状态与恢复入口
 			"is_deleted": r.IsDeleted,
@@ -697,15 +707,16 @@ func matchScheduleForTask(db *gorm.DB, task *model.EvaluationTask) map[string]in
 			"student_count": nil, "week_pattern": nil,
 		}
 	}
-	// 与前端一致：仅课程名完全相等才匹配，匹配不上不兜底，返回空课表信息
-	var matched map[string]interface{}
+	// 与前端一致：仅课程名完全相等才匹配，匹配不上不兜底，返回空课表信息；
+	// 同课程多开课次时按任务上课时间定位到对应堂次（合并后的明细即一堂课）
+	var candidates []map[string]interface{}
 	for _, d := range details {
 		cn, _ := d["course_name"].(string)
 		if cn == task.CourseName {
-			matched = d
-			break
+			candidates = append(candidates, d)
 		}
 	}
+	matched := PickDetailForClassTime(candidates, task.ClassTime)
 	if matched == nil {
 		return map[string]interface{}{
 			"class_time_text": nil, "classroom": nil, "class_info": nil,
@@ -821,7 +832,7 @@ func (s *Evaluation) GetDetail(db *gorm.DB, viewer *model.User, id int) (map[str
 	item := items[0]
 
 	// 展示友好字段：满分合计、学院名、提交时间（空格分隔，对齐导出格式）
-	item["max_total_score"] = totalMaxScoreOfSchema(db)
+	item["max_total_score"] = totalMaxScoreOfSchema(db, task.TemplateCode)
 	collegeInfo := TaskCollegeMap(db, []model.EvaluationTask{task})[task.ID]
 	_, courseCollegeName := CollegeDisplay(collegeInfo.CourseCollege)
 	item["college_name"] = courseCollegeName
@@ -832,7 +843,7 @@ func (s *Evaluation) GetDetail(db *gorm.DB, viewer *model.User, id int) (map[str
 	}
 
 	var dimSvc = NewDimension()
-	schema, _ := dimSvc.SchemaForEvaluation(db)
+	schema, _ := dimSvc.SchemaForEvaluation(db, task.TemplateCode)
 	item["dimension_groups"] = schema
 	item["class_time"] = task.ClassTime
 	item["classroom"] = task.Classroom
@@ -1086,7 +1097,7 @@ func (s *Evaluation) Update(db *gorm.DB, viewer *model.User, id int, p UpdatePar
 	var err error
 	var raw json.RawMessage
 	if len(p.DimensionValues) > 0 {
-		if _, err := validateDimensionValues(db, p.DimensionValues); err != nil {
+		if _, err := validateDimensionValues(db, p.DimensionValues, task.TemplateCode); err != nil {
 			return nil, err
 		}
 		raw, err = marshalJSON(p.DimensionValues)
